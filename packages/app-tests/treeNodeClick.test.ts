@@ -1,0 +1,436 @@
+import { afterAll, beforeAll, test, vi } from "vitest";
+import assert from "node:assert/strict";
+import { copyDisplayPathForTreeNode, copyNameForTreeNode, isDocumentBrowserTreeNode, objectSourceKindForTreeNode, shouldRunTreeNodeRowAction, sidebarSelectionCopyAction, treeNodeRowAction, treeNodeRowDoubleClickAction } from "../../apps/desktop/src/lib/sidebar/treeNodeClick.ts";
+
+beforeAll(() => vi.stubGlobal("navigator", { platform: "Linux x86_64" }));
+afterAll(() => vi.unstubAllGlobals());
+
+test("table and view rows open data without toggling structure groups", () => {
+  assert.equal(treeNodeRowAction("table", true), "open-data");
+  assert.equal(treeNodeRowAction("view", true), "open-data");
+});
+
+test("single click navigation mode opens source-capable rows", () => {
+  assert.equal(treeNodeRowAction("procedure", false), "open-source");
+  assert.equal(treeNodeRowAction("trigger", false), "open-source");
+  assert.equal(treeNodeRowAction("sequence", false), "open-source");
+});
+
+test("single click navigation mode opens saved SQL rows", () => {
+  assert.equal(treeNodeRowAction("saved-sql-file", false, "single"), "open-saved-sql");
+});
+
+test("extension rows open their metadata details", () => {
+  assert.equal(treeNodeRowAction("extension", false, "single"), "open-extension-details");
+  assert.equal(treeNodeRowAction("extension", false, "double"), "none");
+  assert.equal(treeNodeRowDoubleClickAction("extension", false, "double"), "open-extension-details");
+});
+
+test("dameng user and role admin rows toggle their tabs", () => {
+  assert.equal(treeNodeRowAction("dameng-users", false), "toggle");
+  assert.equal(treeNodeRowAction("dameng-roles", false), "toggle");
+  assert.equal(treeNodeRowAction("dameng-users", true), "toggle");
+  assert.equal(treeNodeRowAction("dameng-roles", true), "toggle");
+});
+
+test("double click navigation mode selects rows on single click", () => {
+  assert.equal(treeNodeRowAction("table", true, "double"), "none");
+  assert.equal(treeNodeRowAction("view", true, "double"), "none");
+  assert.equal(treeNodeRowAction("procedure", false, "double"), "none");
+  assert.equal(treeNodeRowAction("saved-sql-file", false, "double"), "none");
+});
+
+test("table double click avoids a second action in single activation mode", () => {
+  assert.equal(treeNodeRowDoubleClickAction("table", true, "single"), "none");
+});
+
+test("table double click activates data in double activation mode", () => {
+  assert.equal(treeNodeRowDoubleClickAction("table", true, "double"), "activate-data");
+});
+
+test("double click navigation mode opens other actionable rows on double click", () => {
+  assert.equal(treeNodeRowDoubleClickAction("view", true, "double"), "open-data");
+  assert.equal(treeNodeRowDoubleClickAction("materialized_view", true, "double"), "open-data");
+  assert.equal(treeNodeRowDoubleClickAction("procedure", false, "double"), "open-source");
+  assert.equal(treeNodeRowDoubleClickAction("saved-sql-file", false, "double"), "open-saved-sql");
+});
+
+test("double click navigation mode toggles expandable rows on double click", () => {
+  assert.equal(treeNodeRowDoubleClickAction("connection", false, "double", true), "toggle");
+  assert.equal(treeNodeRowDoubleClickAction("group-columns", false, "double", true), "toggle");
+  assert.equal(treeNodeRowDoubleClickAction("redis-db", false, "double", false), "toggle");
+  assert.equal(treeNodeRowDoubleClickAction("etcd-root", false, "double", false), "toggle");
+  assert.equal(treeNodeRowDoubleClickAction("zookeeper-root", false, "double", false), "toggle");
+});
+
+test("expandable non-table rows still toggle from row clicks", () => {
+  assert.equal(treeNodeRowAction("connection", true), "toggle");
+  assert.equal(treeNodeRowAction("database", true), "toggle");
+  assert.equal(treeNodeRowAction("schema", true), "toggle");
+  assert.equal(treeNodeRowAction("group-columns", true), "toggle");
+});
+
+test("leaf data browser nodes keep their open behavior through toggle handler", () => {
+  assert.equal(treeNodeRowAction("redis-db", false), "toggle");
+  assert.equal(treeNodeRowAction("etcd-root", false), "toggle");
+  assert.equal(treeNodeRowAction("zookeeper-root", false), "toggle");
+  assert.equal(treeNodeRowAction("mongo-gridfs" as never, false), "toggle");
+  assert.equal(treeNodeRowAction("mongo-collection", false), "toggle");
+  assert.equal(treeNodeRowAction("mongo-bucket", false), "toggle");
+});
+
+test("document browser helper covers Mongo collections and GridFS buckets", () => {
+  assert.equal(isDocumentBrowserTreeNode("mongo-collection"), true);
+  assert.equal(isDocumentBrowserTreeNode("mongo-bucket"), true);
+  assert.equal(isDocumentBrowserTreeNode("redis-db"), false);
+});
+
+test("double-click follow-up clicks do not repeat side-effecting row actions", () => {
+  assert.equal(shouldRunTreeNodeRowAction("toggle", 1), true);
+  assert.equal(shouldRunTreeNodeRowAction("toggle", 2), false);
+  assert.equal(shouldRunTreeNodeRowAction("toggle", 3), false);
+  assert.equal(shouldRunTreeNodeRowAction("toggle", 2, true), true);
+  assert.equal(shouldRunTreeNodeRowAction("toggle", 3, true), true);
+  assert.equal(shouldRunTreeNodeRowAction("open-data", 1), true);
+  assert.equal(shouldRunTreeNodeRowAction("open-data", 2), false);
+  assert.equal(shouldRunTreeNodeRowAction("open-source", 1), true);
+  assert.equal(shouldRunTreeNodeRowAction("open-source", 2), false);
+  assert.equal(shouldRunTreeNodeRowAction("none", 1), false);
+});
+
+test("plain metadata leaf rows do nothing on row clicks", () => {
+  assert.equal(treeNodeRowAction("column", false), "none");
+  assert.equal(treeNodeRowAction("index", false), "none");
+});
+
+test("maps source-capable sidebar nodes to object source kinds", () => {
+  assert.equal(objectSourceKindForTreeNode("view"), "VIEW");
+  assert.equal(objectSourceKindForTreeNode("procedure"), "PROCEDURE");
+  assert.equal(objectSourceKindForTreeNode("function"), "FUNCTION");
+  assert.equal(objectSourceKindForTreeNode("trigger"), "TRIGGER");
+  assert.equal(objectSourceKindForTreeNode("sequence"), "SEQUENCE");
+  assert.equal(objectSourceKindForTreeNode("package"), "PACKAGE");
+  assert.equal(objectSourceKindForTreeNode("package-body"), "PACKAGE_BODY");
+  assert.equal(objectSourceKindForTreeNode("table"), null);
+});
+
+test("single-click activation expands database and schema rows without browsing when disabled", () => {
+  assert.equal(treeNodeRowAction("database", true), "toggle");
+  assert.equal(treeNodeRowAction("schema", true), "toggle");
+  assert.equal(treeNodeRowDoubleClickAction("database", true), "none");
+  assert.equal(treeNodeRowDoubleClickAction("schema", true), "none");
+});
+
+test("single-click activation expands and browses database and schema rows when enabled", () => {
+  assert.equal(treeNodeRowAction("database", true, "single", "postgres", true, true), "open-object-browser-and-expand");
+  assert.equal(treeNodeRowAction("schema", false, "single", "postgres", true, true), "open-object-browser");
+  assert.equal(treeNodeRowDoubleClickAction("database", true, "single", true, "postgres", false, true), "none");
+});
+
+test("double-click activation keeps the first click selection-only", () => {
+  assert.equal(treeNodeRowAction("database", true, "double"), "none");
+  assert.equal(treeNodeRowAction("schema", true, "double"), "none");
+  assert.equal(treeNodeRowAction("database", true, "double", "postgres", true, true), "none");
+});
+
+test("double-click activation only expands database and schema rows when browsing is disabled", () => {
+  assert.equal(treeNodeRowDoubleClickAction("database", true, "double", true, "postgres", false, false), "toggle");
+  assert.equal(treeNodeRowDoubleClickAction("schema", true, "double", false, "postgres", false, false), "none");
+});
+
+test("double-click activation expands and browses database and schema rows when enabled", () => {
+  assert.equal(treeNodeRowDoubleClickAction("database", true, "double", true, "postgres", false, true), "open-object-browser-and-expand");
+  assert.equal(treeNodeRowDoubleClickAction("schema", true, "double", false, "postgres", false, true), "open-object-browser");
+});
+
+test("double click does not open object browser for non-browsable rows", () => {
+  assert.equal(treeNodeRowDoubleClickAction("database", false), "none");
+  assert.equal(treeNodeRowDoubleClickAction("view", true), "none");
+  assert.equal(treeNodeRowDoubleClickAction("materialized_view", true), "none");
+  assert.equal(treeNodeRowDoubleClickAction("column", true), "none");
+});
+
+test("double click navigation mode copies the selected sidebar row name", () => {
+  assert.equal(sidebarSelectionCopyAction({ key: "c", metaKey: true }, "MacIntel"), "copy-name");
+  assert.equal(sidebarSelectionCopyAction({ key: "C", ctrlKey: true }, "Win32"), "copy-name");
+});
+
+test("single click navigation mode copies the selected sidebar row name", () => {
+  assert.equal(sidebarSelectionCopyAction({ key: "c", metaKey: true }, "MacIntel"), "copy-name");
+  assert.equal(sidebarSelectionCopyAction({ key: "C", ctrlKey: true }, "Win32"), "copy-name");
+});
+
+test("copying table child group rows uses the parent table name", () => {
+  assert.equal(
+    copyNameForTreeNode({
+      id: "conn:db:public:orders:__columns",
+      label: "tree.columns",
+      type: "group-columns",
+      tableName: "orders",
+    }),
+    "orders",
+  );
+  assert.equal(
+    copyNameForTreeNode({
+      id: "conn:db:public:orders:__indexes",
+      label: "tree.indexes",
+      type: "group-indexes",
+      tableName: "orders",
+    }),
+    "orders",
+  );
+});
+
+test("copying database object group rows uses the parent schema or database name", () => {
+  assert.equal(
+    copyNameForTreeNode({
+      id: "conn:db:public:__tables",
+      label: "tree.tables",
+      type: "group-tables",
+      database: "db",
+      schema: "public",
+    }),
+    "public",
+  );
+  assert.equal(
+    copyNameForTreeNode({
+      id: "conn:db:__views",
+      label: "tree.views",
+      type: "group-views",
+      database: "db",
+    }),
+    "db",
+  );
+});
+
+test("copying a MySQL display path uses connection, database, and object names", () => {
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:app",
+        label: "app",
+        type: "database",
+        connectionId: "conn",
+        database: "app",
+      },
+      "dev-mysql",
+    ),
+    "dev-mysql.app",
+  );
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:app:orders",
+        label: "orders",
+        type: "table",
+        connectionId: "conn",
+        database: "app",
+        tableName: "orders",
+      },
+      "dev-mysql",
+    ),
+    "dev-mysql.app.orders",
+  );
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:app:__views:active_orders",
+        label: "active_orders",
+        type: "view",
+        connectionId: "conn",
+        database: "app",
+        objectName: "active_orders",
+      },
+      "dev-mysql",
+    ),
+    "dev-mysql.app.active_orders",
+  );
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:app:orders:__triggers:audit_orders",
+        label: "audit_orders",
+        type: "trigger",
+        connectionId: "conn",
+        database: "app",
+        tableName: "orders",
+        objectName: "audit_orders",
+      },
+      "dev-mysql",
+    ),
+    "dev-mysql.app.audit_orders",
+  );
+});
+
+test("copying display paths for schema-enabled databases (PostgreSQL, Oracle, SQL Server, SQLite)", () => {
+  // PostgreSQL schema node
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:mydb:public",
+        label: "public",
+        type: "schema",
+        connectionId: "conn",
+        database: "mydb",
+        schema: "public",
+      },
+      "prod-pg",
+    ),
+    "prod-pg.mydb.public",
+  );
+  // PostgreSQL table under schema
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:mydb:public:users",
+        label: "users",
+        type: "table",
+        connectionId: "conn",
+        database: "mydb",
+        schema: "public",
+        tableName: "users",
+      },
+      "prod-pg",
+    ),
+    "prod-pg.mydb.public.users",
+  );
+  // PostgreSQL routine under schema
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:mydb:public:calculate_total",
+        label: "calculate_total",
+        type: "function",
+        connectionId: "conn",
+        database: "mydb",
+        schema: "public",
+        objectName: "calculate_total",
+      },
+      "prod-pg",
+    ),
+    "prod-pg.mydb.public.calculate_total",
+  );
+  // Oracle table (database equals schema or database omitted)
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:HR:EMPLOYEES",
+        label: "EMPLOYEES",
+        type: "table",
+        connectionId: "conn",
+        database: "HR",
+        schema: "HR",
+        tableName: "EMPLOYEES",
+      },
+      "dev-oracle",
+    ),
+    "dev-oracle.HR.EMPLOYEES",
+  );
+  // SQL Server procedure with distinct database and schema
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:master:dbo:sp_audit",
+        label: "sp_audit",
+        type: "procedure",
+        connectionId: "conn",
+        database: "master",
+        schema: "dbo",
+        objectName: "sp_audit",
+      },
+      "dev-mssql",
+    ),
+    "dev-mssql.master.dbo.sp_audit",
+  );
+  // SQLite table (main database)
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:main:items",
+        label: "items",
+        type: "table",
+        connectionId: "conn",
+        database: "main",
+        tableName: "items",
+      },
+      "local-sqlite",
+    ),
+    "local-sqlite.main.items",
+  );
+  // Additional object types: sequence, package
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:mydb:public:user_id_seq",
+        label: "user_id_seq",
+        type: "sequence",
+        connectionId: "conn",
+        database: "mydb",
+        schema: "public",
+        objectName: "user_id_seq",
+      },
+      "prod-pg",
+    ),
+    "prod-pg.mydb.public.user_id_seq",
+  );
+});
+
+test("copying a display path rejects incomplete and synthetic nodes", () => {
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:app:__tables",
+        label: "tree.tables",
+        type: "group-tables",
+        connectionId: "conn",
+        database: "app",
+      },
+      "dev-mysql",
+    ),
+    null,
+  );
+  assert.equal(
+    copyDisplayPathForTreeNode(
+      {
+        id: "conn:app:orders",
+        label: "orders",
+        type: "table",
+        connectionId: "conn",
+        database: "app",
+      },
+      "",
+    ),
+    null,
+  );
+});
+
+test("copying column rows uses the column name without type suffix", () => {
+  assert.equal(
+    copyNameForTreeNode({
+      id: "conn:db:public:orders:__columns:status",
+      label: "status (varchar)",
+      type: "column",
+      meta: {
+        name: "status",
+        data_type: "varchar",
+        is_nullable: true,
+        column_default: null,
+        is_primary_key: false,
+        extra: null,
+        comment: null,
+        numeric_precision: null,
+        numeric_scale: null,
+        character_maximum_length: null,
+      },
+    }),
+    "status",
+  );
+  assert.equal(
+    copyNameForTreeNode({
+      id: "conn:db:public:orders:__columns:status",
+      label: "status (varchar)",
+      type: "column",
+    }),
+    "status",
+  );
+});

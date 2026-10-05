@@ -1,0 +1,275 @@
+import { GENERIC_TRANSPORT_FAILURE_MESSAGE, LEGACY_BACKEND_ERROR_CODE, normalizeBackendError, sanitizeBackendErrorMessage, type BackendError } from "@/lib/backend/errorUtils";
+import { PHOENIX_DRIVER_NOT_INSTALLED_ERROR, PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR } from "@/lib/database/phoenixConnection";
+
+/**
+ * Minimal shape of a translate function, satisfied by both `useI18n().t` inside
+ * components and `i18n.global.t` in stores and composables. Using the full
+ * `ComposerTranslation` type here would reject the latter, because the global
+ * composer is typed against the concrete message schema.
+ */
+export type BackendErrorTranslate = {
+  (key: string): string;
+  (key: string, named: Record<string, unknown>): string;
+};
+
+const taggedAiCliErrorKeys: Record<string, string> = {
+  claudeCodeNotInstalled: "ai.cliErrors.claudeCodeNotInstalled",
+  claudeCodeCliPathInvalid: "ai.cliErrors.claudeCodeCliPathInvalid",
+  claudeCodeEnvInvalid: "ai.cliErrors.claudeCodeEnvInvalid",
+  claudeCodeEnvReserved: "ai.cliErrors.claudeCodeEnvReserved",
+  claudeCodeNotAuthenticated: "ai.cliErrors.claudeCodeNotAuthenticated",
+  claudeCodeMcpConfigInvalid: "ai.cliErrors.claudeCodeMcpConfigInvalid",
+  dbxMcpMissing: "ai.cliErrors.dbxMcpMissing",
+  claudeCodeMcpStartupFailed: "ai.cliErrors.claudeCodeMcpStartupFailed",
+  claudeCodeCommandLineTooLong: "ai.cliErrors.claudeCodeCommandLineTooLong",
+  claudeCodeRunFailed: "ai.cliErrors.claudeCodeRunFailed",
+  piAgentNotInstalled: "ai.cliErrors.piAgentNotInstalled",
+  piAgentCliPathInvalid: "ai.cliErrors.piAgentCliPathInvalid",
+  piAgentEnvInvalid: "ai.cliErrors.piAgentEnvInvalid",
+  piAgentEnvReserved: "ai.cliErrors.piAgentEnvReserved",
+  piAgentNotAuthenticated: "ai.cliErrors.piAgentNotAuthenticated",
+  piAgentMcpStartupFailed: "ai.cliErrors.piAgentMcpStartupFailed",
+  piAgentTimeout: "ai.cliErrors.piAgentTimeout",
+  piAgentProtocolError: "ai.cliErrors.piAgentProtocolError",
+  piAgentModelInvalid: "ai.cliErrors.piAgentModelInvalid",
+  piAgentRunFailed: "ai.cliErrors.piAgentRunFailed",
+  openCodeNotInstalled: "ai.cliErrors.openCodeNotInstalled",
+  openCodeCliPathInvalid: "ai.cliErrors.openCodeCliPathInvalid",
+  openCodeEnvInvalid: "ai.cliErrors.openCodeEnvInvalid",
+  openCodeEnvReserved: "ai.cliErrors.openCodeEnvReserved",
+  openCodeNotAuthenticated: "ai.cliErrors.openCodeNotAuthenticated",
+  openCodeMcpStartupFailed: "ai.cliErrors.openCodeMcpStartupFailed",
+  openCodeTimeout: "ai.cliErrors.openCodeTimeout",
+  openCodeProtocolError: "ai.cliErrors.openCodeProtocolError",
+  openCodeRunFailed: "ai.cliErrors.openCodeRunFailed",
+  cursorNotInstalled: "ai.cliErrors.cursorNotInstalled",
+  cursorCliPathInvalid: "ai.cliErrors.cursorCliPathInvalid",
+  grokCliNotInstalled: "ai.cliErrors.grokCliNotInstalled",
+  grokCliPathInvalid: "ai.cliErrors.grokCliPathInvalid",
+  grokCliEnvInvalid: "ai.cliErrors.grokCliEnvInvalid",
+  grokCliEnvReserved: "ai.cliErrors.grokCliEnvReserved",
+  grokCliNotAuthenticated: "ai.cliErrors.grokCliNotAuthenticated",
+  grokCliMcpStartupFailed: "ai.cliErrors.grokCliMcpStartupFailed",
+  grokCliCommandLineTooLong: "ai.cliErrors.grokCliCommandLineTooLong",
+  grokCliRunFailed: "ai.cliErrors.grokCliRunFailed",
+  codeBuddyNotInstalled: "ai.cliErrors.codeBuddyNotInstalled",
+  codeBuddyCliPathInvalid: "ai.cliErrors.codeBuddyCliPathInvalid",
+  codeBuddyEnvInvalid: "ai.cliErrors.codeBuddyEnvInvalid",
+  codeBuddyEnvReserved: "ai.cliErrors.codeBuddyEnvReserved",
+  codeBuddyNotAuthenticated: "ai.cliErrors.codeBuddyNotAuthenticated",
+  codeBuddyTimeout: "ai.cliErrors.codeBuddyTimeout",
+  codeBuddyMcpConfigInvalid: "ai.cliErrors.codeBuddyMcpConfigInvalid",
+  codeBuddyMcpStartupFailed: "ai.cliErrors.codeBuddyMcpStartupFailed",
+  codeBuddyProtocolError: "ai.cliErrors.codeBuddyProtocolError",
+  codeBuddyRunFailed: "ai.cliErrors.codeBuddyRunFailed",
+  qoderNotInstalled: "ai.cliErrors.qoderNotInstalled",
+  qoderCliPathInvalid: "ai.cliErrors.qoderCliPathInvalid",
+  qoderEnvInvalid: "ai.cliErrors.qoderEnvInvalid",
+  qoderEnvReserved: "ai.cliErrors.qoderEnvReserved",
+  qoderNotAuthenticated: "ai.cliErrors.qoderNotAuthenticated",
+  qoderTimeout: "ai.cliErrors.qoderTimeout",
+  qoderMcpConfigInvalid: "ai.cliErrors.qoderMcpConfigInvalid",
+  qoderMcpStartupFailed: "ai.cliErrors.qoderMcpStartupFailed",
+  qoderProtocolError: "ai.cliErrors.qoderProtocolError",
+  qoderRunFailed: "ai.cliErrors.qoderRunFailed",
+  cursorEnvInvalid: "ai.cliErrors.cursorEnvInvalid",
+  cursorEnvReserved: "ai.cliErrors.cursorEnvReserved",
+  cursorNotAuthenticated: "ai.cliErrors.cursorNotAuthenticated",
+  cursorMcpStartupFailed: "ai.cliErrors.cursorMcpStartupFailed",
+  cursorTimeout: "ai.cliErrors.cursorTimeout",
+  cursorProtocolError: "ai.cliErrors.cursorProtocolError",
+  cursorRunFailed: "ai.cliErrors.cursorRunFailed",
+};
+
+const exactMessageKeys: Record<string, string> = {
+  "Plugin update is in progress. Please try again after it finishes.": "pluginPlatform.updateInProgress",
+  "Plugin update blocked by active operations. Please wait for them to finish.": "pluginPlatform.updateBlockedByOperations",
+  [PHOENIX_DRIVER_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
+  [PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
+};
+
+const patterns: [RegExp, string][] = [
+  [/^Plugin update blocked by active connections: ([\s\S]+)$/, "pluginPlatform.updateBlockedByConnections"],
+  // crates/dbx-plugin-runtime provenance guard (installer.rs / marketplace.rs)
+  [/^Plugin update source change requires confirmation:/, "pluginPlatform.updateSourceChangeRequired"],
+  [/^Plugin downgrade to version .+ is not allowed/, "pluginPlatform.updateDowngradeRejected"],
+  [/^(.+?) driver is not installed\. Please install it from the Driver Manager\.$/, "connection.driverNotInstalled"],
+  [/^JRE (.+?) runtime is not installed\. Please install it from the Driver Manager\.$/, "connection.jreNotInstalled"],
+  [/^System Java runtime was not found:/, "connection.systemJavaNotFound"],
+  [/^Custom Java runtime path is empty\. Please choose a Java executable\.$/, "connection.customJavaPathEmpty"],
+  [/^Agent requires Java 21, but DBX started it with an older Java runtime\. Use DBX managed JRE 21 or select a Java 21 executable in Driver Manager\./, "connection.agentJavaTooOld"],
+  [/^JDBC plugin is not installed\. Install the optional JDBC plugin to use this connection\.$/, "connection.jdbcPluginNotInstalled"],
+  [/GBASEDBTSERVER[\s\S]*DBSERVERNAME[\s\S]*DBSERVERALIASES/, "connection.gbaseServerMismatch"],
+  [/^ai\.configNameExists:(.+)$/, "ai.configNameExists"],
+
+  // Ordinary users may not enumerate namespaces or authorization data through Nacos management APIs.
+  [/NACOS_ERROR\[(?:v3ManagedNamespacesRequired|managedNamespacesRequired)\]:[\s\S]*$/, "nacos.nacosManagedNamespacesRequired"],
+  [/NACOS_ERROR\[managedNamespaceAccessDenied\]: One or more configured namespace IDs are not readable: ([\s\S]+)$/, "nacos.nacosManagedNamespaceAccessDenied"],
+
+  // Tunnel / proxy test messages
+  [/^HTTP CONNECT proxy connection successful \((\d+)\)$/, "settings.tunnelsHttpTestSuccess"],
+  [/^SOCKS5 proxy connection successful$/, "settings.tunnelsSocks5TestSuccess"],
+  [/^SSH tunnel connection successful$/, "settings.tunnelsTestSuccess"],
+  [/^Proxy host is required\.$/, "settings.tunnelsProxyHostRequired"],
+  [/^Proxy port is required\.$/, "settings.tunnelsProxyPortRequired"],
+  [/^SSH host is required\.$/, "settings.tunnelsSshHostRequired"],
+  [/^Tunnel test is not supported for HTTP tunnel profiles\.$/, "settings.tunnelsHttpTunnelUnsupported"],
+  [/^Proxy connection timed out \(([^)]+)\)$/, "settings.tunnelsProxyTimedOut"],
+  [/^Failed to connect to proxy: (.+)$/, "settings.tunnelsProxyConnectFailed"],
+  [/^Proxy handshake failed \([^)]+\): (.+)$/, "settings.tunnelsProxyHandshakeFailed"],
+  [/^Proxy handshake timed out \(([^)]+)\)$/, "settings.tunnelsProxyHandshakeTimedOut"],
+  [/^HTTP proxy CONNECT failed: (.+)$/, "settings.tunnelsHttpConnectFailed"],
+  [/^Invalid SOCKS proxy version: (\d+)$/, "settings.tunnelsSocksInvalidVersion"],
+  [/^SOCKS username or password is too long$/, "settings.tunnelsSocksAuthTooLong"],
+  [/^SOCKS proxy authentication failed$/, "settings.tunnelsSocksAuthFailed"],
+  [/^SOCKS proxy rejected all supported auth methods$/, "settings.tunnelsSocksAuthRejected"],
+  [/^SOCKS proxy selected unsupported auth method: (\d+)$/, "settings.tunnelsSocksUnsupportedAuth"],
+  [/^Proxy host too long for SOCKS5 domain address$/, "settings.tunnelsSocksHostTooLong"],
+  [/^SOCKS proxy connect rejected \(code (\d+)\)$/, "settings.tunnelsSocksConnectRejected"],
+  [/^Unsupported SOCKS bound address type: (\d+)$/, "settings.tunnelsSocksUnsupportedAddrType"],
+
+  // SSH keyboard-interactive prompts (for example JumpServer TOTP).
+  [/^(?:SSH layer \d+ failed:\s*)?SSH keyboard-interactive authentication was cancelled$/, "connection.sshTotpCancelled"],
+
+  // Query result export limits (crates/dbx-core/src/data/query_result_export.rs)
+  [/^Streaming export is unsupported for this query\. Simplify it or use a supported driver\.$/, "exportProgress.streamingUnsupported"],
+  // MongoDB Legacy agent failures: messages raised by the agent arrive wrapped in "Agent RPC
+  // error (<code>): ", and the import path prefixes the row a batch-level failure belongs to.
+  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver$/, "mongo.import.legacyInsertUnsupported"],
+  [/^(?:row \d+: )?MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver$/, "mongo.import.legacyInsertUnsupported"],
+  [/^MongoDB Legacy Agent rejected (\d+) of (\d+) documents: ([\s\S]+)$/, "mongo.insert.partialFailure"],
+  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent returned an invalid find cursor$/, "mongo.import.legacyCursorInvalid"],
+  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent returned an invalid find cursor page$/, "mongo.import.legacyCursorInvalid"],
+  [/^(?:Agent RPC error \(-?\d+\): )?Find cursor not found$/, "mongo.import.legacyCursorInvalid"],
+  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent does not support type-preserving export; upgrade or reinstall the MongoDB Legacy driver$/, "mongo.import.legacyExportUnsupported"],
+  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent returned the same export page twice; upgrade or reinstall the MongoDB Legacy driver$/, "mongo.import.legacyExportStalled"],
+  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent returned a document without _id$/, "mongo.import.legacyExportMissingId"],
+  [/^Streaming export needs a result-set session, but this driver returned no session_id\.$/, "exportProgress.agentSessionMissing"],
+
+  // Legacy bundled DuckDB error kept for compatibility with older backends.
+  [/^The previous DuckDB query is still stopping\. Please try again shortly\.$/, "editor.duckdbDraining"],
+
+  // Driver / JRE management (crates/dbx-driver-agent/src/agent_service.rs, routes/agents.rs)
+  // The Windows variant is multi-line, so it must be tried before the single-line one.
+  [/^Failed to remove the old JRE directory: (.+)\nPossible causes:[\s\S]*\(original error: ([\s\S]+)\)$/, "driverStore.jreDirRemoveFailedWindows"],
+  [/^Failed to remove the old JRE directory: (.+) \(original error: ([\s\S]+)\)$/, "driverStore.jreDirRemoveFailed"],
+  [/^JRE (.+?) is in use by drivers: (.+)\. Uninstall them first\.$/, "driverStore.jreInUseByDrivers"],
+  [/^agent-registry\.json not found in the ZIP; not a valid offline driver package\.$/, "driverStore.offlinePackageRegistryMissing"],
+  [/^Close these database connections before updating drivers: (.+)$/, "driverStore.driverUpdateBlocked"],
+
+  // Message queues (crates/dbx-core/src/admin/mq/adapters/kafka.rs)
+  [/^Kafka does not support unloading topics$/, "mqClients.unloadTopicUnsupportedKafka"],
+
+  // Filesystem (src-tauri/src/commands/fs_open.rs)
+  [/^file does not exist: (.+)$/, "common.fileNotFound"],
+
+  // Web auth rate limiting (crates/dbx-web/src/auth.rs)
+  [/^Please try again in (\d+)s$/, "auth.rateLimited"],
+];
+
+// Named placeholders for each pattern's capture groups, in capture order.
+// A bare string is shorthand for a single capture group.
+const paramNames: Record<string, string | string[]> = {
+  "pluginPlatform.updateBlockedByConnections": "labels",
+  "connection.driverNotInstalled": "driver",
+  "connection.jreNotInstalled": "jre",
+  "ai.configNameExists": "name",
+  "nacos.nacosManagedNamespaceAccessDenied": "detail",
+  "mongo.insert.partialFailure": ["failed", "total", "message"],
+  "settings.tunnelsHttpTestSuccess": "code",
+  "settings.tunnelsProxyTimedOut": "duration",
+  "settings.tunnelsProxyConnectFailed": "error",
+  "settings.tunnelsProxyHandshakeFailed": "error",
+  "settings.tunnelsProxyHandshakeTimedOut": "duration",
+  "settings.tunnelsHttpConnectFailed": "detail",
+  "settings.tunnelsSocksInvalidVersion": "version",
+  "settings.tunnelsSocksUnsupportedAuth": "method",
+  "settings.tunnelsSocksConnectRejected": "code",
+  "settings.tunnelsSocksUnsupportedAddrType": "type",
+  "driverStore.jreDirRemoveFailedWindows": ["path", "error"],
+  "driverStore.jreDirRemoveFailed": ["path", "error"],
+  "driverStore.jreInUseByDrivers": ["jre", "drivers"],
+  "driverStore.driverUpdateBlocked": "labels",
+  "common.fileNotFound": "path",
+  "auth.rateLimited": "seconds",
+};
+
+function backendErrorMessage(error: unknown): string {
+  if (typeof error === "string") return sanitizeBackendErrorMessage(error);
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return sanitizeBackendErrorMessage(error.message);
+  return sanitizeBackendErrorMessage(String(error));
+}
+
+function usableFallbackDetail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const detail = sanitizeBackendErrorMessage(value).trim();
+  if (!detail || detail === GENERIC_TRANSPORT_FAILURE_MESSAGE) return undefined;
+  return detail;
+}
+
+/**
+ * Resolves a raw backend message through the known-message catalog, or `null` when the message is
+ * not one the UI knows how to phrase.
+ */
+function translateKnownMessage(t: BackendErrorTranslate, message: string): string | null {
+  const exactKey = exactMessageKeys[message];
+  if (exactKey) return t(exactKey);
+
+  const tagged = message.match(/^\[([A-Za-z][A-Za-z0-9]+)\]\s*([\s\S]*)$/);
+  if (tagged) {
+    const [, code, rawDetail] = tagged;
+    const key = taggedAiCliErrorKeys[code];
+    if (key) {
+      const detail = rawDetail.trim();
+      return [t(key), t("ai.cliErrors.code", { code }), t("ai.cliErrors.reportHint"), detail ? `${t("ai.cliErrors.details")}\n${detail}` : ""].filter(Boolean).join("\n\n");
+    }
+  }
+
+  for (const [regex, key] of patterns) {
+    const match = message.match(regex);
+    if (match) {
+      const names = paramNames[key];
+      if (names) {
+        const ordered = Array.isArray(names) ? names : [names];
+        const params: Record<string, string> = {};
+        ordered.forEach((name, index) => {
+          const captured = match[index + 1];
+          if (captured !== undefined) params[name] = captured;
+        });
+        if (Object.keys(params).length > 0) return t(key, params);
+      }
+      return t(key);
+    }
+  }
+  return null;
+}
+
+function translateStructuredBackendError(t: BackendErrorTranslate, error: BackendError, fallbackDetail?: unknown): string {
+  const translated = t(error.messageKey, error.messageParams);
+  const summary = translated !== error.messageKey ? translated : t("backendErrors.unknown");
+  let detail = error.detail ? sanitizeBackendErrorMessage(error.detail).trim() : usableFallbackDetail(fallbackDetail);
+  // Callers may pass an already-composited "summary\n\noriginal" cell as the
+  // fallback (query history re-translation of a failed result grid); strip the
+  // repeated summary so the message stays singular.
+  if (detail && detail.startsWith(`${summary}\n\n`)) {
+    detail = detail.slice(summary.length + 2).trim() || undefined;
+  }
+  // An unclassified message still goes through the same catalog the raw transports use, so a
+  // message DBX knows reads the same whether it arrived wrapped or bare.
+  if (error.code === LEGACY_BACKEND_ERROR_CODE && detail) {
+    const known = translateKnownMessage(t, detail);
+    if (known) return known;
+  }
+  const rawAdapterCode = error.diagnostics?.adapterCode;
+  const adapterCode = typeof rawAdapterCode === "string" && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(rawAdapterCode) ? rawAdapterCode : undefined;
+  const diagnosticDetail = detail && adapterCode ? `[${adapterCode}] ${detail}` : (detail ?? adapterCode);
+  return diagnosticDetail && diagnosticDetail !== summary ? `${summary}\n\n${diagnosticDetail}` : summary;
+}
+
+export function translateBackendError(t: BackendErrorTranslate, error: unknown, fallbackDetail?: unknown): string {
+  const structured = normalizeBackendError(error);
+  if (structured) return translateStructuredBackendError(t, structured, fallbackDetail);
+
+  const message = backendErrorMessage(error);
+  return translateKnownMessage(t, message) ?? message;
+}

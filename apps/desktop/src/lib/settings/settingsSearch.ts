@@ -1,0 +1,327 @@
+export type SettingsCategory = "editor" | "formatter" | "appearance" | "navigation" | "data" | "backups" | "tunnels" | "shortcuts" | "snippets" | "sync" | "ai" | "mcp" | "updates" | "security" | "about";
+
+const SETTINGS_CATEGORIES: readonly SettingsCategory[] = ["editor", "formatter", "appearance", "navigation", "data", "backups", "tunnels", "shortcuts", "snippets", "sync", "ai", "mcp", "updates", "security", "about"];
+
+/**
+ * Maps retired settings tabs to their current home so saved links and external
+ * navigation requests continue to open a populated settings page.
+ */
+export function resolveSettingsCategory(initialTab?: string): SettingsCategory {
+  if (initialTab === "sqlFile") return "editor";
+  if (initialTab === "updates") return "about";
+  return SETTINGS_CATEGORIES.includes(initialTab as SettingsCategory) ? (initialTab as SettingsCategory) : "appearance";
+}
+
+export interface SettingsSearchContext {
+  isWeb: boolean;
+  hasSqlServerConnection?: boolean;
+  sqlServerSpaceConfirmsCompletionEnabled?: boolean;
+  visibleCategories: ReadonlySet<SettingsCategory>;
+}
+
+export interface SettingsSearchDefinition {
+  id: string;
+  category: SettingsCategory;
+  /** A localized title key, or a literal title for product names such as AI. */
+  titleKey?: string;
+  title?: string;
+  descriptionKey?: string;
+  /** Identifies a built-in shortcut row so its local filter can be restored on navigation. */
+  shortcutId?: string;
+  route?: SettingsSearchRoute;
+  /** The fixed settings-group anchor; omitted values use the owning tab. */
+  targetId?: string;
+  visible?: (context: SettingsSearchContext) => boolean;
+}
+
+export interface SettingsSearchEntry {
+  id: string;
+  category: SettingsCategory;
+  title: string;
+  description: string;
+  categoryLabel: string;
+  targetId: string;
+  shortcutId?: string;
+  route?: SettingsSearchRoute;
+}
+
+export interface SettingsSearchRoute {
+  syncMethodTab?: "webdav" | "snippet" | "local";
+}
+
+export type Translate = (key: string) => string;
+
+type ToolbarVisibilityItemKey = "checkUpdates" | "sqlLibrary" | "sqlFileTree" | "history" | "ai" | "theme" | "github" | "alwaysOnTop";
+
+export type ToolbarVisibilityItem = ({ key: ToolbarVisibilityItemKey; titleKey: string; title?: never } | { key: ToolbarVisibilityItemKey; title: string; titleKey?: never }) & {
+  /** The matching toolbar button can only exist in the desktop app, so the Web build hides the switch. */
+  desktopOnly?: true;
+};
+
+/**
+ * The toolbar visibility controls and their search entries use this same list.
+ * Keeping the labels here prevents a newly added toggle from being absent from
+ * settings search. Fixed Tools menu entries have no visibility switch; legacy
+ * persisted fields remain compatible without advertising ineffective controls.
+ */
+export const TOOLBAR_VISIBILITY_ITEMS: readonly ToolbarVisibilityItem[] = [
+  { key: "sqlLibrary", titleKey: "sqlLibrary.title" },
+  { key: "sqlFileTree", titleKey: "sqlFileTree.title" },
+  { key: "history", titleKey: "history.title" },
+  { key: "ai", title: "AI" },
+  { key: "theme", titleKey: "toolbar.theme" },
+  { key: "alwaysOnTop", titleKey: "toolbar.alwaysOnTop", desktopOnly: true },
+];
+
+export function toolbarVisibilityItemLabel(item: ToolbarVisibilityItem, translate: Translate): string {
+  return item.titleKey ? translate(item.titleKey) : (item.title ?? "");
+}
+
+/** Desktop-only toolbar switches are hidden in the Web build, where the matching button can never render. */
+export function visibleToolbarVisibilityItems(items: readonly ToolbarVisibilityItem[], isWeb: boolean): ToolbarVisibilityItem[] {
+  return items.filter((item) => !item.desktopOnly || !isWeb);
+}
+
+export function createToolbarVisibilitySettingsSearchDefinitions(items: readonly ToolbarVisibilityItem[] = TOOLBAR_VISIBILITY_ITEMS): SettingsSearchDefinition[] {
+  return items.map((item) => ({
+    id: `appearance-toolbar-${item.key}`,
+    category: "appearance",
+    ...(item.titleKey ? { titleKey: item.titleKey } : { title: item.title }),
+    targetId: "appearance",
+    ...(item.desktopOnly ? { visible: desktopOnly } : {}),
+  }));
+}
+
+const desktopOnly = (context: SettingsSearchContext) => !context.isWeb;
+const webOnly = (context: SettingsSearchContext) => context.isWeb;
+const sqlServerSpaceCompletionVisible = (context: SettingsSearchContext) => context.hasSqlServerConnection === true || context.sqlServerSpaceConfirmsCompletionEnabled === true;
+
+export interface ShortcutSearchDefinitionSource {
+  id: string;
+  labelKey: string;
+}
+
+/**
+ * Built-in shortcut definitions are already the canonical list of fixed
+ * shortcut settings. Keep their search entries derived from that list so new
+ * shortcuts cannot be omitted from global settings search.
+ */
+export function createShortcutSettingsSearchDefinitions(shortcuts: readonly ShortcutSearchDefinitionSource[]): SettingsSearchDefinition[] {
+  return shortcuts.map((shortcut) => ({
+    id: `shortcut-${shortcut.id}`,
+    category: "shortcuts",
+    titleKey: shortcut.labelKey,
+    targetId: "shortcuts",
+    shortcutId: shortcut.id,
+  }));
+}
+
+/**
+ * Fixed settings groups. Dynamic rows (snippets, prompt templates and provider
+ * configurations) deliberately resolve to their management entry instead.
+ */
+export const SETTINGS_SEARCH_DEFINITIONS: readonly SettingsSearchDefinition[] = [
+  { id: "editor-font", category: "editor", titleKey: "settings.fontFamily", targetId: "editor" },
+  { id: "editor-theme", category: "editor", titleKey: "settings.theme", targetId: "editor" },
+  { id: "editor-font-size", category: "editor", titleKey: "settings.fontSize", targetId: "editor" },
+  { id: "editor-execute-mode", category: "editor", titleKey: "settings.executeMode", targetId: "editor" },
+  { id: "editor-default-transaction-mode", category: "editor", titleKey: "settings.defaultTransactionMode", descriptionKey: "settings.defaultTransactionModeDescription", targetId: "editor" },
+  { id: "editor-execute-all-on-blank-line", category: "editor", titleKey: "settings.executeAllOnBlankLine", descriptionKey: "settings.executeAllOnBlankLineDescription", targetId: "editor" },
+  { id: "editor-execution-target", category: "editor", titleKey: "settings.showExecutionTargetPicker", descriptionKey: "settings.showExecutionTargetPickerDescription", targetId: "editor" },
+  { id: "editor-run-buttons", category: "editor", titleKey: "settings.showStatementRunButtons", descriptionKey: "settings.showStatementRunButtonsDescription", targetId: "editor" },
+  { id: "editor-line-numbers", category: "editor", titleKey: "settings.showLineNumbers", descriptionKey: "settings.showLineNumbersDescription", targetId: "editor" },
+  { id: "editor-statement-frame", category: "editor", titleKey: "settings.showCurrentStatementFrame", descriptionKey: "settings.showCurrentStatementFrameDescription", targetId: "editor" },
+  { id: "editor-value-hints", category: "editor", titleKey: "settings.showInsertValueHints", descriptionKey: "settings.showInsertValueHintsDescription", targetId: "editor" },
+  { id: "editor-show-whitespace", category: "editor", titleKey: "settings.showWhitespace", descriptionKey: "settings.showWhitespaceDescription", targetId: "editor" },
+  { id: "editor-word-wrap", category: "editor", titleKey: "settings.wordWrap", descriptionKey: "settings.wordWrapDescription", targetId: "editor" },
+  { id: "editor-vim", category: "editor", titleKey: "settings.vimMode", descriptionKey: "settings.vimModeDescription", targetId: "editor" },
+  { id: "editor-brackets", category: "editor", titleKey: "settings.autoCloseBrackets", descriptionKey: "settings.autoCloseBracketsDescription", targetId: "editor" },
+  { id: "editor-source-paste-restore", category: "editor", titleKey: "settings.restoreSqlFromSourcePaste", descriptionKey: "settings.restoreSqlFromSourcePasteDescription", targetId: "editor" },
+  { id: "editor-double-click-string", category: "editor", titleKey: "settings.doubleClickStringSelectionMode", descriptionKey: "settings.doubleClickStringSelectionModeDescription", targetId: "editor" },
+  { id: "editor-completion-spacing", category: "editor", titleKey: "settings.insertSpaceAfterCompletion", descriptionKey: "settings.insertSpaceAfterCompletionDescription", targetId: "editor" },
+  { id: "editor-sqlserver-space-completion", category: "editor", titleKey: "settings.sqlServerSpaceConfirmsCompletion", descriptionKey: "settings.sqlServerSpaceConfirmsCompletionDescription", targetId: "editor", visible: sqlServerSpaceCompletionVisible },
+  { id: "editor-completion-keyword-case", category: "editor", titleKey: "settings.completionKeywordCase", descriptionKey: "settings.completionCaseDescription", targetId: "completion-case" },
+  { id: "editor-completion-function-case", category: "editor", titleKey: "settings.completionFunctionCase", descriptionKey: "settings.completionCaseDescription", targetId: "completion-case" },
+  { id: "editor-completion-trigger-mode", category: "editor", titleKey: "settings.completionTriggerMode", descriptionKey: "settings.completionTriggerModeDescription", targetId: "editor" },
+  { id: "editor-table-completion-schema-qualification", category: "editor", titleKey: "settings.tableCompletionSchemaQualification", descriptionKey: "settings.tableCompletionSchemaQualificationDescription", targetId: "editor" },
+  { id: "editor-auto-alias", category: "editor", titleKey: "settings.autoAliasTables", descriptionKey: "settings.autoAliasTablesDescription", targetId: "editor" },
+  { id: "editor-unsaved-close", category: "editor", titleKey: "settings.confirmUnsavedSqlClose", descriptionKey: "settings.confirmUnsavedSqlCloseDescription", targetId: "editor" },
+  { id: "editor-app-close-unsaved-tabs", category: "editor", titleKey: "settings.appCloseUnsavedTabsMode", descriptionKey: "settings.appCloseUnsavedTabsModeDescription", targetId: "editor" },
+  { id: "editor-prefill-query", category: "navigation", titleKey: "settings.prefillNewQueryWithSelect", descriptionKey: "settings.prefillNewQueryWithSelectDescription", targetId: "navigation" },
+  { id: "editor-generate-sql-include-database", category: "editor", titleKey: "settings.generateSqlIncludeDatabaseName", descriptionKey: "settings.generateSqlIncludeDatabaseNameDescription", targetId: "editor" },
+  { id: "editor-generate-sql-quote-identifiers", category: "editor", titleKey: "settings.generateSqlQuoteIdentifiers", descriptionKey: "settings.generateSqlQuoteIdentifiersDescription", targetId: "editor" },
+  { id: "editor-format-sql-on-sql-file-save", category: "editor", titleKey: "settings.formatSqlOnSqlFileSave", descriptionKey: "settings.formatSqlOnSqlFileSaveDescription", targetId: "editor" },
+  { id: "editor-table-ddl-hover-preview", category: "editor", titleKey: "settings.showTableDdlHoverPreview", descriptionKey: "settings.showTableDdlHoverPreviewDescription", targetId: "editor" },
+  { id: "editor-table-hover-lookup-mode", category: "editor", titleKey: "settings.tableHoverLookupMode", descriptionKey: "settings.tableHoverLookupModeDescription", targetId: "editor" },
+  { id: "editor-diagnostics", category: "editor", titleKey: "settings.sqlSemanticDiagnosticsEnabled", descriptionKey: "settings.sqlSemanticDiagnosticsEnabledDescription", targetId: "editor" },
+  { id: "editor-sql-variables", category: "editor", titleKey: "settings.sqlVariableSyntax", descriptionKey: "settings.sqlVariableSyntaxDescription", targetId: "editor" },
+  { id: "editor-saved-sql-target", category: "editor", titleKey: "settings.savedSqlOpenTarget", targetId: "editor" },
+  { id: "editor-confirm-dangerous-sql", category: "editor", titleKey: "settings.confirmDangerousSqlExecution", descriptionKey: "settings.confirmDangerousSqlExecutionDescription", targetId: "editor" },
+  { id: "editor-continue-batch-on-error", category: "editor", titleKey: "settings.continueOnErrorOnBatch", descriptionKey: "settings.continueOnErrorOnBatchDescription", targetId: "editor" },
+  { id: "editor-table-click-navigation", category: "navigation", titleKey: "settings.clickTableNavigationTarget", descriptionKey: "settings.clickTableNavigationTargetDescription", targetId: "navigation" },
+  { id: "formatter", category: "formatter", titleKey: "settings.sqlFormatterTab", targetId: "formatter" },
+  { id: "formatter-shortcuts", category: "formatter", titleKey: "settings.sqlFormatterEditorShortcuts", targetId: "formatter" },
+  { id: "formatter-keyword-case", category: "formatter", titleKey: "settings.sqlFormatterKeywordCase", targetId: "formatter" },
+  { id: "formatter-function-case", category: "formatter", titleKey: "settings.sqlFormatterFunctionCase", targetId: "formatter" },
+  { id: "formatter-data-type-case", category: "formatter", titleKey: "settings.sqlFormatterDataTypeCase", targetId: "formatter" },
+  { id: "formatter-identifier-case", category: "formatter", titleKey: "settings.sqlFormatterIdentifierCase", targetId: "formatter" },
+  { id: "formatter-indent", category: "formatter", titleKey: "settings.sqlFormatterIndent", targetId: "formatter" },
+  { id: "formatter-tab-width", category: "formatter", titleKey: "settings.sqlFormatterTabWidth", targetId: "formatter" },
+  { id: "formatter-indent-style", category: "formatter", titleKey: "settings.sqlFormatterIndentStyle", targetId: "formatter" },
+  { id: "formatter-logical-operator-newline", category: "formatter", titleKey: "settings.sqlFormatterLogicalOperatorNewline", targetId: "formatter" },
+  { id: "formatter-from-clause-layout", category: "formatter", titleKey: "settings.sqlFormatterFromClauseLayout", targetId: "formatter" },
+  { id: "formatter-expression-width", category: "formatter", titleKey: "settings.sqlFormatterExpressionWidth", targetId: "formatter" },
+  { id: "formatter-lines-between-queries", category: "formatter", titleKey: "settings.sqlFormatterLinesBetweenQueries", targetId: "formatter" },
+  { id: "formatter-preserve-empty-lines", category: "formatter", titleKey: "settings.sqlFormatterPreserveEmptyLines", targetId: "formatter" },
+  { id: "formatter-dense-operators", category: "formatter", titleKey: "settings.sqlFormatterDenseOperators", targetId: "formatter" },
+  { id: "formatter-newline-before-semicolon", category: "formatter", titleKey: "settings.sqlFormatterNewlineBeforeSemicolon", targetId: "formatter" },
+  { id: "formatter-param-types", category: "formatter", titleKey: "settings.sqlFormatterParamTypes", targetId: "formatter" },
+  { id: "appearance-language", category: "appearance", titleKey: "settings.languageTitle", targetId: "appearance" },
+  { id: "appearance-theme", category: "appearance", titleKey: "settings.theme", targetId: "appearance" },
+  { id: "appearance-color-theme", category: "appearance", titleKey: "settings.colorTheme", targetId: "appearance" },
+  { id: "appearance-ui-scale", category: "appearance", titleKey: "settings.uiScale", descriptionKey: "settings.uiScaleDescription", targetId: "appearance" },
+  { id: "appearance-font-settings", category: "appearance", titleKey: "settings.fontSettingsTitle", descriptionKey: "settings.fontSettingsDescription", targetId: "font-settings" },
+  { id: "appearance-ui-font", category: "appearance", titleKey: "settings.uiFontFamily", descriptionKey: "settings.uiFontFamilyDescription", targetId: "font-settings" },
+  { id: "appearance-grid-font", category: "appearance", titleKey: "settings.dataGridFontFamily", descriptionKey: "settings.dataGridFontFamilyDescription", targetId: "font-settings" },
+  { id: "appearance-corners", category: "appearance", titleKey: "settings.cornerStyle", targetId: "appearance" },
+  { id: "appearance-welcome-page", category: "appearance", titleKey: "settings.welcomePage", descriptionKey: "settings.welcomePageDescription", targetId: "welcome-page-settings" },
+  { id: "appearance-layout", category: "appearance", titleKey: "settings.appLayout", targetId: "appearance" },
+  { id: "appearance-tab-layout", category: "appearance", titleKey: "settings.tabLayout", targetId: "appearance" },
+  { id: "appearance-connection-tab-colors", category: "appearance", titleKey: "settings.colorizeConnectionTabs", descriptionKey: "settings.colorizeConnectionTabsDescription", targetId: "appearance" },
+  { id: "appearance-tray", category: "appearance", titleKey: "settings.showTrayIcon", descriptionKey: "settings.showTrayIconDescription", targetId: "appearance", visible: desktopOnly },
+  { id: "appearance-quit", category: "appearance", titleKey: "settings.quitOnClose", descriptionKey: "settings.quitOnCloseDescription", targetId: "appearance", visible: desktopOnly },
+  { id: "about-debug-logs", category: "about", titleKey: "settings.debugLoggingEnabled", descriptionKey: "settings.debugLoggingEnabledDescription", targetId: "about", visible: desktopOnly },
+  { id: "navigation", category: "navigation", titleKey: "settings.navigationTab", targetId: "navigation" },
+  { id: "navigation-sidebar", category: "navigation", titleKey: "settings.sidebarActivation", targetId: "navigation" },
+  { id: "navigation-routine-source", category: "navigation", titleKey: "settings.routineSourceOpenMode", descriptionKey: "settings.routineSourceOpenModeDescription", targetId: "navigation" },
+  { id: "navigation-reuse-data-tab", category: "navigation", titleKey: "settings.reuseDataTab", descriptionKey: "settings.reuseDataTabDescription", targetId: "navigation" },
+  { id: "navigation-open-data-tabs-next-to-active", category: "navigation", titleKey: "settings.openDataTabsNextToActive", descriptionKey: "settings.openDataTabsNextToActiveDescription", targetId: "navigation" },
+  { id: "navigation-object-display", category: "navigation", titleKey: "settings.sidebarObjectDisplay", targetId: "navigation" },
+  { id: "navigation-object-info", category: "navigation", titleKey: "settings.sidebarObjectInfoMode", descriptionKey: "settings.sidebarObjectInfoModeDescription", targetId: "navigation" },
+  { id: "navigation-table-search", category: "navigation", titleKey: "settings.sidebarTableSearchEnabled", descriptionKey: "settings.sidebarTableSearchEnabledDescription", targetId: "navigation" },
+  { id: "navigation-search-opened-databases-only", category: "navigation", titleKey: "settings.sidebarSearchOpenedDatabasesOnly", descriptionKey: "settings.sidebarSearchOpenedDatabasesOnlyDescription", targetId: "navigation" },
+  { id: "navigation-active-node", category: "navigation", titleKey: "settings.autoSelectActiveSidebarNode", descriptionKey: "settings.autoSelectActiveSidebarNodeDescription", targetId: "navigation" },
+  { id: "navigation-sidebar-pin-default-database", category: "navigation", titleKey: "settings.sidebarPinDefaultDatabase", descriptionKey: "settings.sidebarPinDefaultDatabaseDescription", targetId: "navigation" },
+  { id: "navigation-browse-objects-on-database-activation", category: "navigation", titleKey: "settings.sidebarBrowseObjectsOnDatabaseActivation", descriptionKey: "settings.sidebarBrowseObjectsOnDatabaseActivationDescription", targetId: "navigation" },
+  { id: "navigation-tabs-restore", category: "navigation", titleKey: "settings.openTabsRestoreMode", descriptionKey: "settings.openTabsRestoreModeDescription", targetId: "navigation" },
+  { id: "navigation-sidebar-scroll", category: "navigation", titleKey: "settings.sidebarAllowHorizontalScroll", descriptionKey: "settings.sidebarAllowHorizontalScrollDescription", targetId: "navigation" },
+  { id: "navigation-sidebar-tooltips", category: "navigation", titleKey: "settings.sidebarShowTooltips", descriptionKey: "settings.sidebarShowTooltipsDescription", targetId: "navigation" },
+  { id: "navigation-sidebar-indent", category: "navigation", titleKey: "settings.sidebarIndent", descriptionKey: "settings.sidebarIndentDescription", targetId: "navigation" },
+  { id: "navigation-sidebar-font-size", category: "navigation", titleKey: "settings.sidebarFontSize", descriptionKey: "settings.sidebarFontSizeDescription", targetId: "navigation" },
+  { id: "navigation-hidden-tables", category: "navigation", titleKey: "settings.sidebarHiddenTablePrefixes", descriptionKey: "settings.sidebarHiddenTablePrefixesDescription", targetId: "navigation" },
+  { id: "history-retention", category: "data", titleKey: "settings.historyRetentionLimit", descriptionKey: "settings.historyRetentionDescription", targetId: "history-retention" },
+  { id: "mcp-history-retention", category: "data", titleKey: "settings.mcpHistoryRetentionLimit", descriptionKey: "settings.mcpHistoryRetentionDescription", targetId: "mcp-history-retention" },
+  { id: "navigation-table-page-size", category: "navigation", titleKey: "settings.sidebarTablePageSize", descriptionKey: "settings.sidebarTablePageSizeDescription", targetId: "navigation" },
+  { id: "navigation-disconnect-tabs", category: "navigation", titleKey: "settings.disconnectTabHandlingMode", descriptionKey: "settings.disconnectTabHandlingModeDescription", targetId: "navigation" },
+  { id: "navigation-delete-connection-tabs", category: "navigation", titleKey: "settings.deleteConnectionTabHandlingMode", descriptionKey: "settings.deleteConnectionTabHandlingModeDescription", targetId: "navigation" },
+  { id: "navigation-remember-connection-database", category: "navigation", titleKey: "settings.rememberConnectionDatabaseOnDelete", descriptionKey: "settings.rememberConnectionDatabaseOnDeleteDescription", targetId: "navigation" },
+  { id: "query-page-size", category: "data", titleKey: "settings.queryPageSize", descriptionKey: "settings.queryPageSizeDescription", targetId: "data" },
+  { id: "data-page-size", category: "data", titleKey: "settings.tableOpenPageSize", descriptionKey: "settings.tableOpenPageSizeDescription", targetId: "data" },
+  { id: "data-table-open-sort-mode", category: "data", titleKey: "settings.tableOpenSortMode", descriptionKey: "settings.tableOpenSortDescription", targetId: "data" },
+  { id: "data-table-database-sort-direction", category: "data", titleKey: "settings.tableDatabaseSortDirection", targetId: "data" },
+  { id: "data-table-local-sort-direction", category: "data", titleKey: "settings.tableLocalSortDirection", targetId: "data" },
+  { id: "default-auto-keep-results", category: "data", titleKey: "settings.defaultAutoKeepResults", descriptionKey: "settings.defaultAutoKeepResultsDescription", targetId: "default-auto-keep-results" },
+  { id: "multi-statement-default-view", category: "data", titleKey: "settings.multiStatementDefaultView", descriptionKey: "settings.multiStatementDefaultViewDescription", targetId: "multi-statement-default-view" },
+  { id: "query-result-max-rows", category: "data", titleKey: "settings.queryResultMaxRows", descriptionKey: "settings.queryResultMaxRowsDescription", targetId: "data" },
+  { id: "data-grid-header-comments", category: "data", titleKey: "settings.showColumnCommentsInHeader", descriptionKey: "settings.showColumnCommentsInHeaderDescription", targetId: "data" },
+  { id: "data-grid-header-types", category: "data", titleKey: "settings.showColumnTypesInHeader", descriptionKey: "settings.showColumnTypesInHeaderDescription", targetId: "data" },
+  { id: "data-grid-header-tooltips", category: "data", titleKey: "settings.showColumnHeaderTooltips", descriptionKey: "settings.showColumnHeaderTooltipsDescription", targetId: "data" },
+  { id: "result-source-database-name", category: "data", titleKey: "settings.showResultSourceDatabase", descriptionKey: "settings.showResultSourceDatabaseDescription", targetId: "data" },
+  { id: "result-tab-naming-mode", category: "data", titleKey: "settings.resultTabNamingMode", descriptionKey: "settings.resultTabNamingModeDescription", targetId: "data" },
+  { id: "result-tab-prefer-comments", category: "data", titleKey: "settings.resultTabPreferComments", descriptionKey: "settings.resultTabPreferCommentsDescription", targetId: "data" },
+  { id: "data-grid-transpose-field-metadata", category: "data", titleKey: "settings.dataGridShowTransposeFieldMetadata", descriptionKey: "settings.dataGridShowTransposeFieldMetadataDescription", targetId: "data" },
+  { id: "data-grid-cell-type-colors", category: "data", titleKey: "settings.colorizeDataGridCellTypes", descriptionKey: "settings.colorizeDataGridCellTypesDescription", targetId: "data" },
+  { id: "data-grid-type-colors", category: "data", titleKey: "settings.dataGridTypeColorScheme", descriptionKey: "settings.dataGridTypeColorSchemeDescription", targetId: "data-grid-type-colors" },
+  { id: "data-grid-index-indicators", category: "data", titleKey: "settings.showIndexIndicatorsInHeader", descriptionKey: "settings.showIndexIndicatorsInHeaderDescription", targetId: "data" },
+  { id: "data-grid-compact-header-actions", category: "data", titleKey: "settings.compactColumnHeaderActions", descriptionKey: "settings.compactColumnHeaderActionsDescription", targetId: "data" },
+  { id: "data-grid-auto-total", category: "data", titleKey: "settings.autoCalculateTotalRows", descriptionKey: "settings.autoCalculateTotalRowsDescription", targetId: "data" },
+  { id: "data-grid-infinite-scroll", category: "data", titleKey: "settings.infiniteScroll", descriptionKey: "settings.infiniteScrollDescription", targetId: "data" },
+  { id: "redis-key-templates", category: "data", titleKey: "settings.redisKeyTemplates", descriptionKey: "settings.redisKeyTemplatesDescription", targetId: "redis-key-templates" },
+  { id: "data-grid-auto-transpose", category: "data", titleKey: "settings.dataGridAutoTransposeSingleRow", descriptionKey: "settings.dataGridAutoTransposeSingleRowDescription", targetId: "data" },
+  { id: "data-grid-quick-entry", category: "data", titleKey: "settings.dataGridQuickEntry", descriptionKey: "settings.dataGridQuickEntryDescription", targetId: "data" },
+  { id: "data-grid-toolbar-layout", category: "data", titleKey: "settings.dataGridToolbarLayout", descriptionKey: "settings.dataGridToolbarLayoutDescription", targetId: "data-grid-toolbar-layout" },
+  { id: "data-grid-filter-view", category: "data", titleKey: "settings.dataGridFilterView", descriptionKey: "settings.dataGridFilterViewDescription", targetId: "data-grid-filter-view" },
+  { id: "data-grid-flattening-multi-line", category: "data", titleKey: "settings.flatteningMultiLineText", descriptionKey: "settings.flatteningMultiLineTextDescription", targetId: "data" },
+  { id: "data-grid-show-whitespace", category: "data", titleKey: "settings.dataGridShowWhitespace", descriptionKey: "settings.dataGridShowWhitespaceDescription", targetId: "data" },
+  { id: "data-grid-striped-rows", category: "data", titleKey: "settings.dataGridStripedRows", descriptionKey: "settings.dataGridStripedRowsDescription", targetId: "data" },
+  { id: "sql-file-editor-max-mb", category: "editor", titleKey: "settings.externalSqlEditorMaxMb", descriptionKey: "settings.externalSqlEditorMaxMbDescription", targetId: "editor-sql-file" },
+  { id: "sql-file-web-upload-max-mb", category: "data", titleKey: "settings.webSqlFileUploadMaxMb", descriptionKey: "settings.webSqlFileUploadMaxMbDescription", targetId: "data-sql-file-upload", visible: (context) => context.isWeb },
+  { id: "appearance-toolbar", category: "appearance", titleKey: "settings.toolbarTitle", descriptionKey: "settings.toolbarHiddenHint", targetId: "appearance" },
+  { id: "appearance-exclusive-sidebar-panels", category: "appearance", titleKey: "settings.exclusiveRightSidebarPanels", descriptionKey: "settings.exclusiveRightSidebarPanelsDescription", targetId: "appearance" },
+  ...createToolbarVisibilitySettingsSearchDefinitions(),
+  { id: "data-datetime", category: "data", titleKey: "settings.dateTimeSection", targetId: "data" },
+  { id: "data-datetime-display-format", category: "data", titleKey: "settings.globalDateTimeDisplayFormat", descriptionKey: "settings.globalDateTimeDisplayFormatDescription", targetId: "data" },
+  { id: "data-datetime-export-format", category: "data", titleKey: "settings.globalDateTimeExportFormat", descriptionKey: "settings.globalDateTimeExportFormatDescription", targetId: "data" },
+  { id: "data-datetime-import-format", category: "data", titleKey: "settings.globalDateTimeImportFormat", descriptionKey: "settings.globalDateTimeImportFormatDescription", targetId: "data" },
+  { id: "data-export", category: "data", titleKey: "settings.exportSection", targetId: "data" },
+  { id: "data-export-batch", category: "data", titleKey: "settings.exportBatchSize", descriptionKey: "settings.exportBatchSizeDescription", targetId: "data" },
+  { id: "data-export-row-limit-enabled", category: "data", titleKey: "settings.exportRowLimitEnabled", descriptionKey: "settings.exportRowLimitEnabledDescription", targetId: "data" },
+  { id: "data-export-row-limit", category: "data", titleKey: "settings.exportRowLimit", descriptionKey: "settings.exportRowLimitDescription", targetId: "data" },
+  { id: "data-export-keyset", category: "data", titleKey: "settings.queryExportKeysetOptimizationEnabled", descriptionKey: "settings.queryExportKeysetOptimizationEnabledDescription", targetId: "data" },
+  { id: "data-performance", category: "data", titleKey: "settings.performanceSection", targetId: "data-performance" },
+  { id: "data-metadata-cache", category: "data", titleKey: "settings.metadataCacheMemoryLimit", descriptionKey: "settings.metadataCacheMemoryLimitDescription", targetId: "data-performance" },
+  { id: "data-table-template", category: "data", titleKey: "settings.tableColumnTemplateFields", descriptionKey: "settings.tableColumnTemplateFieldsDescription", targetId: "table-column-templates" },
+  { id: "data-duckdb", category: "data", titleKey: "settings.duckDbWorkerProcessIsolation", descriptionKey: "settings.duckDbWorkerProcessIsolationDescription", targetId: "data", visible: desktopOnly },
+  { id: "data-duckdb-process-limit", category: "data", titleKey: "settings.duckDbWorkerMaxProcesses", descriptionKey: "settings.duckDbWorkerMaxProcessesDescription", targetId: "data", visible: desktopOnly },
+  { id: "backups", category: "backups", titleKey: "databaseBackup.title", targetId: "backups", visible: desktopOnly },
+  { id: "tunnels", category: "tunnels", titleKey: "settings.tunnelsTab", targetId: "tunnels" },
+  { id: "shortcuts", category: "shortcuts", titleKey: "settings.shortcutsTab", targetId: "shortcuts" },
+  { id: "sql-shortcuts", category: "shortcuts", titleKey: "settings.sqlShortcutsTitle", descriptionKey: "settings.sqlShortcutsDescription", targetId: "sql-shortcuts" },
+  { id: "snippets", category: "snippets", titleKey: "settings.snippetsTab", descriptionKey: "settings.snippetsDescription", targetId: "snippets" },
+  { id: "snippet-trigger-key", category: "snippets", titleKey: "settings.snippetTriggerKey", descriptionKey: "settings.snippetTriggerKeyDescription", targetId: "snippet-trigger-key" },
+  { id: "sync-webdav", category: "sync", titleKey: "settings.syncWebDavTitle", descriptionKey: "settings.syncWebDavDescription", targetId: "sync-webdav", route: { syncMethodTab: "webdav" } },
+  { id: "sync-webdav-endpoint", category: "sync", titleKey: "settings.syncEndpoint", targetId: "sync-webdav", route: { syncMethodTab: "webdav" } },
+  { id: "sync-webdav-username", category: "sync", titleKey: "settings.syncUsername", targetId: "sync-webdav", route: { syncMethodTab: "webdav" } },
+  { id: "sync-webdav-password", category: "sync", titleKey: "settings.syncPassword", targetId: "sync-webdav", route: { syncMethodTab: "webdav" } },
+  { id: "sync-webdav-remote-path", category: "sync", titleKey: "settings.syncRemotePath", targetId: "sync-webdav", route: { syncMethodTab: "webdav" } },
+  { id: "sync-webdav-auto-upload", category: "sync", titleKey: "settings.syncAutoUploadInterval", targetId: "sync-webdav", route: { syncMethodTab: "webdav" } },
+  { id: "sync-snippet", category: "sync", titleKey: "settings.syncSnippetTitle", descriptionKey: "settings.syncSnippetDescription", targetId: "sync-snippet", route: { syncMethodTab: "snippet" }, visible: desktopOnly },
+  { id: "sync-snippet-provider", category: "sync", titleKey: "settings.syncSnippetProvider", targetId: "sync-snippet", route: { syncMethodTab: "snippet" }, visible: desktopOnly },
+  { id: "sync-snippet-id", category: "sync", titleKey: "settings.syncSnippetId", targetId: "sync-snippet", route: { syncMethodTab: "snippet" }, visible: desktopOnly },
+  { id: "sync-snippet-token", category: "sync", titleKey: "settings.syncSnippetToken", targetId: "sync-snippet", route: { syncMethodTab: "snippet" }, visible: desktopOnly },
+  { id: "sync-local-backup", category: "sync", titleKey: "settings.localBackupTitle", descriptionKey: "settings.localBackupDescription", targetId: "sync-local", route: { syncMethodTab: "local" }, visible: desktopOnly },
+  { id: "sync-secrets", category: "sync", titleKey: "settings.syncSecrets", targetId: "sync" },
+  { id: "sync-secrets-passphrase", category: "sync", titleKey: "settings.syncSecretsPassphrase", targetId: "sync" },
+  { id: "ai-config", category: "ai", titleKey: "ai.configList", targetId: "ai" },
+  { id: "ai-conversation-font-family", category: "ai", titleKey: "ai.conversationFontFamily", descriptionKey: "ai.conversationTypographyDescription", targetId: "ai-typography" },
+  { id: "ai-conversation-font-size", category: "ai", titleKey: "ai.conversationFontSize", descriptionKey: "ai.conversationTypographyDescription", targetId: "ai-typography" },
+  { id: "ai-prompts", category: "ai", titleKey: "ai.promptTemplates", descriptionKey: "ai.promptTemplatesDescription", targetId: "ai" },
+  { id: "ai-default-mode", category: "ai", titleKey: "ai.defaultAiMode", descriptionKey: "ai.defaultAiModeDescription", targetId: "ai" },
+  { id: "ai-default-auto-routing", category: "ai", titleKey: "ai.defaultAutoRouting", descriptionKey: "ai.defaultAutoRoutingDescription", targetId: "ai" },
+  { id: "ai-agent-turn-limit", category: "ai", titleKey: "ai.maxAgentTurns", descriptionKey: "ai.maxAgentTurnsDescription", targetId: "ai" },
+  { id: "ai-global-retries", category: "ai", titleKey: "ai.maxRetriesGlobal", descriptionKey: "ai.maxRetriesGlobalDescription", targetId: "ai" },
+  { id: "ai-global-instructions", category: "ai", titleKey: "ai.globalInstructions", descriptionKey: "ai.globalInstructionsDescription", targetId: "ai" },
+  { id: "ai-custom-skill-root", category: "ai", titleKey: "settings.aiSkillRoot", descriptionKey: "settings.aiSkillRootDesc", targetId: "ai", visible: desktopOnly },
+  { id: "mcp", category: "mcp", titleKey: "settings.mcpTitle", descriptionKey: "settings.mcpDescription", targetId: "mcp" },
+  { id: "mcp-bin-path", category: "mcp", titleKey: "settings.mcpBinPath", targetId: "mcp" },
+  { id: "mcp-permissions", category: "mcp", titleKey: "settings.mcpExecutionMode", descriptionKey: "settings.mcpExecutionModeDescription", targetId: "mcp" },
+  { id: "mcp-config", category: "mcp", titleKey: "settings.mcpConfig", targetId: "mcp" },
+  { id: "security", category: "security", titleKey: "settings.securityTab", targetId: "security", visible: webOnly },
+  { id: "security-password", category: "security", titleKey: "auth.changePassword", targetId: "security", visible: webOnly },
+  { id: "about-support", category: "about", titleKey: "settings.supportInfoTitle", descriptionKey: "settings.supportInfoDescription", targetId: "about" },
+  { id: "about-transfer", category: "about", titleKey: "settings.settingsTransferTitle", descriptionKey: "settings.settingsTransferDescription", targetId: "about" },
+];
+
+export function resolveSettingsSearchEntries(definitions: readonly SettingsSearchDefinition[], context: SettingsSearchContext, translate: Translate, categoryLabels: Readonly<Record<SettingsCategory, string>>): SettingsSearchEntry[] {
+  const categoryOrder = new Map(Array.from(context.visibleCategories, (category, index) => [category, index]));
+
+  return definitions
+    .filter((definition) => context.visibleCategories.has(definition.category) && (definition.visible?.(context) ?? true))
+    .map((definition) => ({
+      id: definition.id,
+      category: definition.category,
+      title: definition.titleKey ? translate(definition.titleKey) : (definition.title ?? ""),
+      description: definition.descriptionKey ? translate(definition.descriptionKey) : "",
+      categoryLabel: categoryLabels[definition.category],
+      targetId: definition.targetId ?? definition.category,
+      shortcutId: definition.shortcutId,
+      route: definition.route,
+    }))
+    .sort((left, right) => (categoryOrder.get(left.category) ?? Number.MAX_SAFE_INTEGER) - (categoryOrder.get(right.category) ?? Number.MAX_SAFE_INTEGER));
+}
+
+export function searchSettings(entries: readonly SettingsSearchEntry[], query: string, locale: string, limit = 8): SettingsSearchEntry[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase(locale);
+  if (!normalizedQuery) return [];
+  return entries.filter((entry) => `${entry.title}\n${entry.description}\n${entry.categoryLabel}`.toLocaleLowerCase(locale).includes(normalizedQuery)).slice(0, limit);
+}

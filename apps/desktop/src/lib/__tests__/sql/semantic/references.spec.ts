@@ -1,0 +1,145 @@
+import { describe, expect, it } from "vitest";
+import { buildSqlSemanticDiagnostics } from "@/lib/sql/semantic/diagnostics";
+import { buildSqlSemanticModel } from "@/lib/sql/semantic/model";
+import { sqlFixtureCursor } from "@/lib/sql/semantic/fixtures";
+import { resolveSqlSemanticNavigationTarget, mergeSqlSemanticReferenceAnalysis, sqlSemanticCompletionReferenceTables, sqlSemanticTableReferences } from "@/lib/sql/semantic/references";
+import { splitQualifiedIdentifier } from "@/lib/sql/sqlNavigation";
+import type { SqlReferenceAnalysis } from "@/types/database";
+
+const span = (startColumn: number, endColumn: number) => ({
+  start_line: 1,
+  start_column: startColumn,
+  end_line: 1,
+  end_column: endColumn,
+});
+
+describe("sqlSemanticReferences shared consumers", () => {
+  it("feeds CTE projected columns to diagnostics without physical table metadata", () => {
+    const { sql, cursor } = sqlFixtureCursor("WITH recent_orders(id, total) AS (SELECT id, total FROM orders) SELECT ro.missing FROM recent_orders ro WHERE ro.|");
+    const model = buildSqlSemanticModel(sql, cursor);
+    const analysis: SqlReferenceAnalysis = {
+      tables: [],
+      columns: [{ name: "missing", qualifier: "ro", span: span(sql.indexOf("missing") + 1, sql.indexOf("missing") + "missing".length) }],
+    };
+
+    const diagnostics = buildSqlSemanticDiagnostics(mergeSqlSemanticReferenceAnalysis(analysis, model), {
+      tables: [],
+      columnsByTable: new Map(),
+      sql,
+    });
+
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual(["Unknown column ro.missing"]);
+  });
+
+  it("does not flag a SELECT alias used by DuckDB ORDER BY", () => {
+    const sql = `SELECT SUM(price * amount) AS total, api_key_name FROM amounts GROUP BY api_key_name ORDER BY total DESC`;
+    const aliasStart = sql.indexOf("total", sql.indexOf("ORDER BY"));
+    const analysis: SqlReferenceAnalysis = {
+      tables: [
+        {
+          name: "amounts",
+          span: span(sql.indexOf("amounts") + 1, sql.indexOf("amounts") + "amounts".length),
+        },
+      ],
+      columns: [
+        {
+          name: "total",
+          span: span(aliasStart + 1, aliasStart + "total".length),
+        },
+      ],
+    };
+
+    const diagnostics = buildSqlSemanticDiagnostics(analysis, {
+      tables: [],
+      columnsByTable: new Map([["amounts", [{ name: "price" }, { name: "amount" }, { name: "api_key_name" }]]]),
+      sql,
+    });
+
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("does not flag a SELECT alias used by MySQL HAVING", () => {
+    const sql = `SELECT COUNT(*) AS cnt, g FROM amounts GROUP BY g HAVING cnt > 1`;
+    const aliasStart = sql.indexOf("cnt", sql.indexOf("HAVING"));
+    const analysis: SqlReferenceAnalysis = {
+      tables: [
+        {
+          name: "amounts",
+          span: span(sql.indexOf("amounts") + 1, sql.indexOf("amounts") + "amounts".length),
+        },
+      ],
+      columns: [
+        {
+          name: "cnt",
+          span: span(aliasStart + 1, aliasStart + "cnt".length),
+        },
+      ],
+    };
+
+    const diagnostics = buildSqlSemanticDiagnostics(analysis, {
+      tables: [],
+      columnsByTable: new Map([["amounts", [{ name: "price" }, { name: "g" }]]]),
+      sql,
+      databaseType: "mysql",
+    });
+
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("keeps flagging a HAVING alias for PostgreSQL, which rejects it", () => {
+    const sql = `SELECT COUNT(*) AS cnt, g FROM amounts GROUP BY g HAVING cnt > 1`;
+    const aliasStart = sql.indexOf("cnt", sql.indexOf("HAVING"));
+    const analysis: SqlReferenceAnalysis = {
+      tables: [
+        {
+          name: "amounts",
+          span: span(sql.indexOf("amounts") + 1, sql.indexOf("amounts") + "amounts".length),
+        },
+      ],
+      columns: [
+        {
+          name: "cnt",
+          span: span(aliasStart + 1, aliasStart + "cnt".length),
+        },
+      ],
+    };
+
+    const diagnostics = buildSqlSemanticDiagnostics(analysis, {
+      tables: [],
+      columnsByTable: new Map([["amounts", [{ name: "price" }, { name: "g" }]]]),
+      sql,
+      databaseType: "postgres",
+    });
+
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual(["Unknown column cnt"]);
+  });
+
+  it("resolves navigation targets from subquery aliases and projected columns", () => {
+    const { sql, cursor } = sqlFixtureCursor("SELECT sq.user_| FROM (SELECT id, name AS user_name FROM users) sq");
+    const model = buildSqlSemanticModel(sql, cursor);
+    const target = resolveSqlSemanticNavigationTarget(model, splitQualifiedIdentifier("sq.user_name"));
+
+    expect(target).toEqual(expect.objectContaining({ name: "sq", alias: "sq", columns: ["id", "user_name"] }));
+    expect(target?.source.kind).toBe("subquery");
+  });
+
+  it("keeps completion diagnostics and navigation row-source resolution consistent", () => {
+    const { sql, cursor } = sqlFixtureCursor("WITH recent_orders(id, total) AS (SELECT id, total FROM orders) SELECT * FROM recent_orders ro WHERE ro.|");
+    const model = buildSqlSemanticModel(sql, cursor);
+    const completionRefs = sqlSemanticCompletionReferenceTables(model);
+    const diagnosticRefs = sqlSemanticTableReferences(model);
+    const navigationTarget = resolveSqlSemanticNavigationTarget(model, ["ro", "total"]);
+
+    expect(completionRefs).toEqual(expect.arrayContaining([expect.objectContaining({ name: "recent_orders", alias: "ro", columns: ["id", "total"] })]));
+    expect(diagnosticRefs).toEqual(expect.arrayContaining([expect.objectContaining({ name: "recent_orders", alias: "ro", columns: ["id", "total"] })]));
+    expect(navigationTarget).toEqual(expect.objectContaining({ name: "recent_orders", alias: "ro", columns: ["id", "total"] }));
+  });
+
+  it("resolves full SQL Server table navigation to the qualified database", () => {
+    const { sql, cursor } = sqlFixtureCursor("SELECT * FROM [DatabaseA].[OUT].[orders] a JOIN [DatabaseB].[OUT].[orders] b ON a.id = b.id|");
+    const model = buildSqlSemanticModel(sql, cursor, { databaseType: "sqlserver" });
+    const target = resolveSqlSemanticNavigationTarget(model, ["DatabaseB", "OUT", "orders"]);
+
+    expect(target).toEqual(expect.objectContaining({ name: "orders", database: "DatabaseB", schema: "OUT", alias: "b" }));
+  });
+});

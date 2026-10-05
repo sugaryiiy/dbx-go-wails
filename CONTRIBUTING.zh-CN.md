@@ -1,0 +1,174 @@
+# 参与 DBX 贡献
+
+感谢你愿意花时间了解 DBX。不管是改一个错别字、补文档，还是修某个数据库相关的问题，都很有价值。
+
+## 从哪里开始
+
+1. 浏览 [Issues](https://github.com/t8y2/dbx/issues)，选择尚未分配、评论中也没有人正在处理的问题。不要只依赖标签，先阅读完整正文、评论和截图。
+2. 在 Issue 下留言说明你想做什么，避免重复劳动；使用 `/claim` 认领，后续无法继续时使用 `/unclaim` 取消认领，也兼容 `/unclaimed`。
+3. Fork 仓库，新建分支开发，然后向 `main` 提 PR。
+4. 关联 PR 合并后，如果 Issue 仍然处于打开状态，可以评论 `/close`。该命令只允许当前 assignee、且必须由关联 PR 作者本人使用。
+
+如果暂时不确定做什么，优先选择复现清晰、改动范围小，或者你能使用真实数据库验证的问题。完整流程见[官网贡献教程](https://dbxio.com/cn/docs/contributing)。
+
+## 开发环境
+
+### 环境要求
+
+- Node.js >= 22.13.0
+- pnpm 10.27.0
+- Rust >= 1.88
+- Make
+
+Linux 桌面端还需要 WebKit/GTK 相关依赖，具体命令见 [README.zh-CN.md](README.zh-CN.md#快速开始)。
+
+### 本地运行
+
+```bash
+git clone https://github.com/t8y2/dbx.git
+cd dbx
+make
+```
+
+`make` 会在需要时安装依赖，并启动 Tauri 桌面端开发环境。
+
+常用命令：
+
+```bash
+make dev-fast          # 本地开发跳过 DuckDB
+make dev-web           # 只启动前端
+make dev-backend       # 只启动 Web 后端
+make docs              # 本地预览文档站
+make cargo-check-fast  # 快速 Rust 检查
+```
+
+### macOS 开发签名
+
+请使用 `make dev`、`make dev-fast` 或 `pnpm dev:tauri`。这些入口会在每次重新编译后、启动前，用固定的本地开发身份签名。首次启动仍可能需要对 DBX 原有钥匙串条目选择一次“始终允许”，之后重编译保持相同代码身份。直接执行 `pnpm tauri dev` 会绕过此流程。
+
+首次运行会在 `~/Library/Application Support/DBX/development-signing/` 创建独立签名钥匙串和自签开发证书，仅将该钥匙串加入当前用户的搜索列表，不更改默认钥匙串或系统信任设置。目录权限为 `0700`，文件权限为 `0600`；其中保存的随机密码只用于解锁这个开发签名钥匙串。不使用发布私钥，也不导出或更换已有连接的加密密钥。请保留这套本地身份，不要提交或分享；配置不完整、损坏或证书过期时会明确报错，不会自动换证书或降级为临时签名。
+
+签名 runner 仅接受 `debug/dbx`，保留 Cargo feature 和应用参数，不影响 Linux、Windows 或正式打包。使用这些 macOS 开发入口时，需要取消自定义的 `CARGO_TARGET_*_RUNNER` 环境变量。
+
+Core、桌面端和 Web 的 Storage 测试夹具使用 `dbx_core::persistence::test_storage`（仅由开发依赖启用 `test-support` feature），在迁移预检查前选择测试目录自己的密钥，不访问用户钥匙串，也不继承 `DBX_SECRET_KEY` / `DBX_SECRET_KEY_FILE`。测试数据库复制时，应将夹具目录及其密钥一起保留。
+
+```bash
+node --test scripts/dev-tauri.test.mjs
+DBX_TEST_MACOS_KEYCHAIN=1 node --test scripts/dev-tauri.test.mjs
+```
+
+第二条为 macOS 集成验证：创建并清理临时签名钥匙串，禁止系统交互，证明临时签名重编译会被拒绝，而采用同一稳定身份的两个不同构建仍能读取同一测试条目。
+
+### JDBC Agent 驱动
+
+Agent 驱动工程在 `agents/` 目录。Java/JDBC 驱动构建和测试需要 JDK 21；环境允许时 Gradle 可以自动下载对应 toolchain。
+
+```bash
+cd agents
+./gradlew test
+```
+
+修改已有 Agent 时不要手动修改 `agents/versions.json`，发布工作流会自动 bump 发生变化的模块。只有新增驱动时才需要登记初始版本；新增 Java/JDBC 驱动还要同步 `agents/settings.gradle` 和支持列表，原生驱动按 Agent authoring/release checklist 登记构建产物。
+
+本地验证 Java Agent 时，需要构建目标 `shadowJar`，备份并覆盖 `~/.dbx/agents/drivers/<db_type>/agent.jar`，然后重启 DBX 或重新连接数据库。完整命令见[官网贡献教程](https://dbxio.com/cn/docs/contributing)。
+
+## 项目结构
+
+| 路径                    | 说明                              |
+| ----------------------- | --------------------------------- |
+| `apps/desktop/src/`     | Vue 前端                          |
+| `src-tauri/`            | Tauri 桌面端壳层与命令层          |
+| `crates/dbx-core/`      | 共享 Rust 数据库逻辑              |
+| `crates/dbx-web/`       | Docker / Web HTTP 后端            |
+| `packages/cli/`         | `@dbx-app/cli`                    |
+| `packages/mcp-server/`  | `@dbx-app/mcp-server`             |
+| `packages/mongo-shell/` | 桌面端内部 MongoDB 编辑器解析工具 |
+| `docs/`                 | 官方文档站                        |
+| `examples/`             | 配置与自动化示例                  |
+| `agents/`               | JDBC Agent 驱动工程               |
+
+## 开发约定
+
+### 分支命名
+
+分支名尽量简短明确，例如：
+
+- `docs/web-api-reference`
+- `fix/mysql-connection-timeout`
+- `feat/redis-key-search`
+
+### 控制改动范围
+
+一个 PR 只做一类事。文档 PR 不要夹带无关代码；修 Bug 时也不要顺手大重构，除非重构是修复所必需的。
+
+提交前和推送后请按 [PR 提交与 CI 核查](docs/testing/pr-preflight.md) 检查多语言完整性、相关工作流及远端状态。
+
+### 提交说明
+
+提交信息用自然语言写清楚即可：
+
+- `docs: add web API reference for Docker deployments`
+- `fix(redis): handle empty scan cursor`
+- `feat(schema): show catalog info for Doris`
+
+### 测试
+
+按改动范围跑对应检查：
+
+```bash
+make cargo-check-fast
+make cargo-test-fast
+pnpm test
+```
+
+如果改的是前端或某个 package，再补跑对应目录下的测试。
+
+测试质量比测试数量更重要：
+
+- 调用生产函数或挂载真实组件，验证可观察的结果、状态变化、错误或事件。Mock 外部边界，不要 Mock 正在验证的行为。
+- 不要在测试中复制实现，也不要用源码字符串匹配锁定 class、局部变量名、模板片段或辅助函数调用写法。这类检查会阻碍无害重构，却不能证明运行行为；布局应在浏览器中验证，而不是从 CSS 字符串推断。
+- 回归用例优先补进已有行为测试，不再另加一份源码接线快照。只有输入和预期不同的场景优先使用参数化用例。
+- 发布产物、权限、兼容性规则和跨运行时契约可以使用文件内容检查。安全门禁在有等价行为覆盖前保留，不要仅因测试读文件、使用 Mock 或运行较慢就删除。
+
+### 文档
+
+用户文档主要分两块：
+
+- 仓库内文档：`README.md`、`CONTRIBUTING.md`、各 package README、`examples/`
+- 官网文档：`docs/content/docs/`
+
+如果在 `docs/content/docs/` 新增页面，记得同步更新：
+
+- `docs/content/docs/meta.json`
+- `docs/content/docs/meta.cn.json`
+
+本地预览：
+
+```bash
+make docs
+```
+
+## 提 PR
+
+1. 把分支推到你自己的 Fork。
+2. 向 `https://github.com/t8y2/dbx` 的 `main` 提 PR。
+3. 在 PR 描述里关联相关 Issue。
+4. 写清楚改了什么、怎么验证的；如果涉及 UI，附上截图。
+
+改动越小，越容易 review 和合并。
+
+## 欢迎的贡献类型
+
+- 文档改进与翻译
+- 可复现、行为清晰的 Bug 修复
+- 你有真实测试环境的数据库专项修复
+- 非平凡逻辑的测试补充
+- CLI、MCP、Docker、Web API 的使用示例
+
+## 社区
+
+- [Discord](https://discord.gg/W7NyVDRt6a)
+- [GitHub Issues](https://github.com/t8y2/dbx/issues)
+- [官方文档](https://dbxio.com/cn/docs/what-is-dbx)
+
+合并后的贡献者会出现在 [DBX 贡献墙](https://dbxio.com/cn/community)。

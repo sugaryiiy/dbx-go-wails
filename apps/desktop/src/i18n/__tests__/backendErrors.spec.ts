@@ -1,0 +1,662 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it as test } from "vitest";
+import { createI18n } from "vue-i18n";
+import { translateBackendError, type BackendErrorTranslate } from "@/i18n/backend-errors";
+import { BackendErrorException, formatError, normalizeBackendError, sanitizeBackendErrorMessage } from "@/lib/backend/errorUtils";
+import az from "@/i18n/locales/az";
+import en from "@/i18n/locales/en";
+import es from "@/i18n/locales/es";
+import id from "@/i18n/locales/id";
+import it from "@/i18n/locales/it";
+import ja from "@/i18n/locales/ja";
+import ko from "@/i18n/locales/ko";
+import ptBR from "@/i18n/locales/pt-BR";
+import ru from "@/i18n/locales/ru";
+import tr from "@/i18n/locales/tr";
+import zhCN from "@/i18n/locales/zh-CN";
+import zhTW from "@/i18n/locales/zh-TW";
+import { PHOENIX_DRIVER_NOT_INSTALLED_ERROR, PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR } from "@/lib/database/phoenixConnection";
+
+const LOCALES = {
+  az,
+  en,
+  es,
+  id,
+  it,
+  ja,
+  ko,
+  "pt-BR": ptBR,
+  ru,
+  tr,
+  "zh-CN": zhCN,
+  "zh-TW": zhTW,
+} as const;
+
+type LocaleKey = keyof typeof LOCALES;
+
+const STRUCTURED_BACKEND_ERROR_KEYS = [
+  "backendErrors.jdbc.connectionFailed",
+  "backendErrors.jdbc.connectionInterrupted",
+  "backendErrors.jdbc.operationTimedOut",
+  "backendErrors.jdbc.operationCanceled",
+  "backendErrors.jdbc.busyRetryLater",
+  "backendErrors.jdbc.runtimeReplaced",
+  "backendErrors.jdbc.sqlFailed",
+  "backendErrors.jdbc.protocolFailed",
+  "backendErrors.jdbc.contractInvalid",
+  "backendErrors.jdbc.legacyFailure",
+  "backendErrors.transaction.sessionExpired",
+  "backendErrors.legacy",
+  "backendErrors.unknown",
+] as const;
+
+// Reproduces the exact string crates/dbx-driver-agent/src/agent_service.rs builds on
+// Windows: `\` line continuations strip the newline plus the following indent.
+const WINDOWS_JRE_REMOVE_ERROR = [
+  "Failed to remove the old JRE directory: C:\\dbx\\jre21",
+  "Possible causes:",
+  "  - a dbx Agent / java process still holds the directory",
+  "  - antivirus software is scanning it",
+  "Close any process that may hold the directory, or restart dbx and try again.",
+  "(original error: Access is denied. (os error 5))",
+].join("\n");
+
+// Every backend message changed away from hardcoded Chinese, paired with the
+// key and params it must resolve to.
+const CASES: { name: string; message: string; key: string; params?: Record<string, string> }[] = [
+  {
+    name: "plugin update requires closing related connections",
+    message: "Plugin update blocked by active connections: Production S3, Local storage",
+    key: "pluginPlatform.updateBlockedByConnections",
+    params: { labels: "Production S3, Local storage" },
+  },
+  {
+    name: "plugin update waits for active operations",
+    message: "Plugin update blocked by active operations. Please wait for them to finish.",
+    key: "pluginPlatform.updateBlockedByOperations",
+  },
+  {
+    name: "plugin update from a changed source needs confirmation",
+    message: "Plugin update source change requires confirmation: the offering repository, publisher, or signing key differs from the recorded install",
+    key: "pluginPlatform.updateSourceChangeRequired",
+  },
+  {
+    name: "plugin downgrade is rejected",
+    message: "Plugin downgrade to version 1.0.5 is not allowed (installed 1.1.0)",
+    key: "pluginPlatform.updateDowngradeRejected",
+  },
+  {
+    name: "connection admission waits for plugin update",
+    message: "Plugin update is in progress. Please try again after it finishes.",
+    key: "pluginPlatform.updateInProgress",
+  },
+  {
+    name: "Nacos ordinary user must configure managed namespaces when namespace discovery is forbidden",
+    message: "Failed to list Nacos namespaces: NACOS_ERROR[v3ManagedNamespacesRequired]: access denied",
+    key: "nacos.nacosManagedNamespacesRequired",
+  },
+  {
+    name: "Nacos ordinary user must configure managed namespaces when authorization management is forbidden",
+    message: "NACOS_ERROR[managedNamespacesRequired]: 403 Forbidden",
+    key: "nacos.nacosManagedNamespacesRequired",
+  },
+  {
+    name: "Nacos 3 managed namespace permission check failed",
+    message: 'NACOS_ERROR[managedNamespaceAccessDenied]: One or more configured namespace IDs are not readable: namespace "team-a" naming: forbidden',
+    key: "nacos.nacosManagedNamespaceAccessDenied",
+    params: { detail: 'namespace "team-a" naming: forbidden' },
+  },
+  {
+    name: "Apache Phoenix JDBC driver missing",
+    message: PHOENIX_DRIVER_NOT_INSTALLED_ERROR,
+    key: "connection.phoenixDriverNotInstalled",
+  },
+  {
+    name: "shared JDBC plugin missing for Apache Phoenix",
+    message: PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR,
+    key: "connection.phoenixDriverNotInstalled",
+  },
+  {
+    name: "SSH TOTP prompt cancelled",
+    message: "SSH layer 1 failed: SSH keyboard-interactive authentication was cancelled",
+    key: "connection.sshTotpCancelled",
+  },
+  {
+    name: "streaming export unsupported",
+    message: "Streaming export is unsupported for this query. Simplify it or use a supported driver.",
+    key: "exportProgress.streamingUnsupported",
+  },
+  {
+    name: "agent session missing",
+    message: "Streaming export needs a result-set session, but this driver returned no session_id.",
+    key: "exportProgress.agentSessionMissing",
+  },
+  {
+    name: "MongoDB Legacy insertMany unsupported",
+    message: "MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver",
+    key: "mongo.import.legacyInsertUnsupported",
+  },
+  {
+    // crates/dbx-core/src/data/mongodb_import_export.rs attributes a batch-level failure to a row.
+    name: "MongoDB Legacy insertMany unsupported on a located row",
+    message: "row 1: MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver",
+    key: "mongo.import.legacyInsertUnsupported",
+  },
+  {
+    name: "MongoDB Legacy partial insert",
+    message: "MongoDB Legacy Agent rejected 2 of 500 documents: E11000 duplicate key error collection: app.users",
+    key: "mongo.insert.partialFailure",
+    params: { failed: "2", total: "500", message: "E11000 duplicate key error collection: app.users" },
+  },
+  {
+    name: "MongoDB Legacy export cursor invalid",
+    message: "MongoDB Legacy Agent returned an invalid find cursor",
+    key: "mongo.import.legacyCursorInvalid",
+  },
+  {
+    // Agent-raised messages reach the frontend through the "Agent RPC error (<code>): " envelope.
+    name: "MongoDB Legacy export cursor expired",
+    message: "Agent RPC error (-1): Find cursor not found",
+    key: "mongo.import.legacyCursorInvalid",
+  },
+  {
+    name: "DuckDB draining",
+    message: "The previous DuckDB query is still stopping. Please try again shortly.",
+    key: "editor.duckdbDraining",
+  },
+  {
+    name: "JRE directory remove failure (Windows)",
+    message: WINDOWS_JRE_REMOVE_ERROR,
+    key: "driverStore.jreDirRemoveFailedWindows",
+    params: { path: "C:\\dbx\\jre21", error: "Access is denied. (os error 5)" },
+  },
+  {
+    name: "JRE directory remove failure (POSIX)",
+    message: "Failed to remove the old JRE directory: /home/u/.dbx/jre21 (original error: Permission denied (os error 13))",
+    key: "driverStore.jreDirRemoveFailed",
+    params: { path: "/home/u/.dbx/jre21", error: "Permission denied (os error 13)" },
+  },
+  {
+    name: "JRE still in use",
+    message: "JRE jre21 is in use by drivers: MySQL, PostgreSQL. Uninstall them first.",
+    key: "driverStore.jreInUseByDrivers",
+    params: { jre: "jre21", drivers: "MySQL, PostgreSQL" },
+  },
+  {
+    name: "offline package missing registry",
+    message: "agent-registry.json not found in the ZIP; not a valid offline driver package.",
+    key: "driverStore.offlinePackageRegistryMissing",
+  },
+  {
+    name: "driver update blocked by open connections",
+    message: "Close these database connections before updating drivers: Prod MySQL, Stage PG",
+    key: "driverStore.driverUpdateBlocked",
+    params: { labels: "Prod MySQL, Stage PG" },
+  },
+  {
+    name: "GBase 8s server name mismatch",
+    message: "Agent RPC error (-1): java.sql.SQLException: GBASEDBTSERVER 与 DBSERVERNAME 或 DBSERVERALIASES 不匹配。",
+    key: "connection.gbaseServerMismatch",
+  },
+  {
+    name: "Kafka topic unload unsupported",
+    message: "Kafka does not support unloading topics",
+    key: "mqClients.unloadTopicUnsupportedKafka",
+  },
+  {
+    name: "file does not exist",
+    message: "file does not exist: /tmp/missing.sqlite",
+    key: "common.fileNotFound",
+    params: { path: "/tmp/missing.sqlite" },
+  },
+  {
+    name: "login rate limited",
+    message: "Please try again in 42s",
+    key: "auth.rateLimited",
+    params: { seconds: "42" },
+  },
+];
+
+function translatorFor(locale: LocaleKey): BackendErrorTranslate {
+  const i18n = createI18n({
+    legacy: false,
+    locale,
+    fallbackLocale: "en",
+    messages: LOCALES as unknown as Record<string, Record<string, unknown>>,
+  });
+  return i18n.global.t as unknown as BackendErrorTranslate;
+}
+
+function lookup(messages: Record<string, unknown>, key: string): unknown {
+  return key.split(".").reduce<unknown>((node, part) => (node as Record<string, unknown> | undefined)?.[part], messages);
+}
+
+describe("backend error translation", () => {
+  test.each(CASES)("$name resolves to a defined English key", ({ key }) => {
+    expect(lookup(en as unknown as Record<string, unknown>, key)).toEqual(expect.any(String));
+  });
+
+  // zh-CN is the locale that regressed when these messages were switched from
+  // hardcoded Chinese to hardcoded English, so it is covered explicitly
+  // alongside the other non-English locales.
+  const localeKeys = Object.keys(LOCALES) as LocaleKey[];
+
+  test.each(localeKeys)("all structured catalog keys exist in %s", (locale) => {
+    for (const key of STRUCTURED_BACKEND_ERROR_KEYS) {
+      expect(lookup(LOCALES[locale] as unknown as Record<string, unknown>, key), `${locale}:${key}`).toEqual(expect.any(String));
+    }
+  });
+
+  describe.each(localeKeys)("in %s", (locale) => {
+    const t = translatorFor(locale);
+
+    test.each(CASES)("$name maps to its key and interpolates params", ({ message, key, params }) => {
+      const translated = translateBackendError(t, message);
+
+      expect(translated).toBe(params ? t(key, params) : t(key));
+      // A missed placeholder would leak `{path}` style tokens to the user.
+      expect(translated).not.toMatch(/\{[A-Za-z]+\}/);
+      // The raw message must not survive untranslated.
+      if (locale !== "en") expect(translated).not.toBe(message);
+    });
+
+    test.each(CASES.filter((entry) => entry.params))("$name keeps captured values in the output", ({ message, params }) => {
+      const translated = translateBackendError(t, message);
+      for (const value of Object.values(params!)) expect(translated).toContain(value);
+    });
+  });
+
+  test("unknown backend messages are passed through untouched", () => {
+    const t = translatorFor("zh-CN");
+    expect(translateBackendError(t, "some driver specific failure")).toBe("some driver specific failure");
+  });
+
+  test("hides internal Agent error data from user-facing messages", () => {
+    const t = translatorFor("zh-CN");
+    const message = 'Agent RPC error (-1): driver: bad connection\nDBX_AGENT_ERROR_DATA:{"category":null,"retryable":null,"sessionDisposition":null,"stage":null,"operationOutcome":null,"agentSessionId":"e1a4d0a2907947b8adf31abb10c4dff9"}';
+    const expected = "Agent RPC error (-1): driver: bad connection";
+
+    expect(sanitizeBackendErrorMessage(message)).toBe(expected);
+    expect(formatError(new Error(message))).toBe(expected);
+    expect(new BackendErrorException(message).message).toBe(expected);
+    expect(translateBackendError(t, message)).toBe(expected);
+  });
+
+  test("preserves marker-like database messages without valid internal data", () => {
+    const message = "database returned\nDBX_AGENT_ERROR_DATA:not-json";
+
+    expect(sanitizeBackendErrorMessage(message)).toBe(message);
+  });
+
+  test("hides internal Agent error data that precedes appended fallback context", () => {
+    const t = translatorFor("zh-CN");
+    const message =
+      'Agent RPC error (-1): ORA-12514: TNS:listener does not currently know of service requested in connect descriptor\nDBX_AGENT_ERROR_DATA:{"category":null,"retryable":null,"sessionDisposition":null,"stage":null,"operationOutcome":null,"agentSessionId":null}\n\nFallback with alternate Oracle descriptor failed: Agent RPC error (-1): ORA-12505';
+    const expected = "Agent RPC error (-1): ORA-12514: TNS:listener does not currently know of service requested in connect descriptor\n\nFallback with alternate Oracle descriptor failed: Agent RPC error (-1): ORA-12505";
+
+    expect(sanitizeBackendErrorMessage(message)).toBe(expected);
+    expect(formatError(new Error(message))).toBe(expected);
+    expect(translateBackendError(t, message)).toBe(expected);
+  });
+
+  test("hides nested Agent error data inside fallback context", () => {
+    const message = 'native wire version error\nDBX_AGENT_ERROR_DATA:{"category":"connection"}\n\nFallback with MongoDB (Legacy) driver failed: Agent RPC error (-1): handshake rejected\nDBX_AGENT_ERROR_DATA:{"agentSessionId":"session-1"}';
+    const expected = "native wire version error\n\nFallback with MongoDB (Legacy) driver failed: Agent RPC error (-1): handshake rejected";
+
+    expect(sanitizeBackendErrorMessage(message)).toBe(expected);
+  });
+
+  test("keeps invalid internal-looking data while hiding valid payloads after it", () => {
+    const message = 'database returned\nDBX_AGENT_ERROR_DATA:not-json\n\nFallback failed: Agent RPC error (-1): closed\nDBX_AGENT_ERROR_DATA:{"agentSessionId":"session-1"}';
+    const expected = "database returned\nDBX_AGENT_ERROR_DATA:not-json\n\nFallback failed: Agent RPC error (-1): closed";
+
+    expect(sanitizeBackendErrorMessage(message)).toBe(expected);
+  });
+
+  test("strips the SQL error-position transport suffix from raw messages", () => {
+    const message = 'ERROR: relation "missing" does not exist\nDBX_SQL_ERROR_POSITION:15';
+    const expected = 'ERROR: relation "missing" does not exist';
+
+    expect(sanitizeBackendErrorMessage(message)).toBe(expected);
+    expect(formatError(new Error(message))).toBe(expected);
+  });
+
+  test("strips the position suffix that precedes appended context text", () => {
+    const message = "ERROR: boom\nDBX_SQL_ERROR_POSITION:7; cleanup failed";
+
+    expect(sanitizeBackendErrorMessage(message)).toBe("ERROR: boom; cleanup failed");
+  });
+
+  test("normalizes Error and structural message objects before translation", () => {
+    const t = translatorFor("zh-CN");
+    const message = "file does not exist: /tmp/missing.sqlite";
+    const expected = t("common.fileNotFound", { path: "/tmp/missing.sqlite" });
+
+    expect(translateBackendError(t, new Error(message))).toBe(expected);
+    expect(translateBackendError(t, { message })).toBe(expected);
+  });
+
+  test("preserves and translates structured BackendError envelopes", () => {
+    const t = translatorFor("zh-CN");
+    const error = {
+      version: 1,
+      code: "DBX-JDBC-2002",
+      messageKey: "backendErrors.jdbc.operationTimedOut",
+      messageParams: { stage: "execute" },
+      source: "jdbcAgent",
+      operationOutcome: "unknown",
+      detail: "relation dbx_table_that_does_not_exist does not exist",
+    } as const;
+
+    expect(normalizeBackendError(error)).toEqual(error);
+    const expected = `${t(error.messageKey, error.messageParams)}\n\n${error.detail}`;
+    expect(translateBackendError(t, error)).toBe(expected);
+    expect(translateBackendError(t, new BackendErrorException(error))).toBe(expected);
+  });
+
+  test("shows the database detail after an unclassified Agent summary", () => {
+    const t = translatorFor("zh-CN");
+    const error = {
+      version: 1,
+      code: "DBX-JDBC-9001",
+      messageKey: "backendErrors.jdbc.legacyFailure",
+      messageParams: {},
+      source: "jdbcAgentLegacy",
+      operationOutcome: "unknown",
+      detail: "Table dbx_table_that_does_not_exist does not exist",
+    } as const;
+
+    expect(translateBackendError(t, error)).toBe(`${t(error.messageKey)}\n\n${error.detail}`);
+  });
+
+  test("shows a native adapter code with the DuckDB detail", () => {
+    const t = translatorFor("en");
+    const error = {
+      version: 1,
+      code: "DBX-JDBC-4001",
+      messageKey: "backendErrors.jdbc.sqlFailed",
+      messageParams: { stage: "execute" },
+      source: "jdbcAgent",
+      operationOutcome: "unknown",
+      origin: { subsystem: "database", adapter: "native", driver: "duckdb" },
+      diagnostics: { category: "sql", stage: "execute", adapterCode: "duckdb_execute_failed" },
+      detail: "Catalog Error: Table missing_table does not exist",
+    } as const;
+
+    expect(translateBackendError(t, error)).toBe(`${t(error.messageKey, error.messageParams)}\n\n[duckdb_execute_failed] ${error.detail}`);
+  });
+
+  test("hides internal Agent error data from structured error details", () => {
+    const t = translatorFor("zh-CN");
+    const detail = 'driver: bad connection\nDBX_AGENT_ERROR_DATA:{"category":null,"agentSessionId":"session-1"}';
+    const error = {
+      version: 1,
+      code: "DBX-JDBC-9001",
+      messageKey: "backendErrors.jdbc.legacyFailure",
+      messageParams: {},
+      source: "jdbcAgentLegacy",
+      operationOutcome: "unknown",
+      detail,
+    } as const;
+
+    expect(translateBackendError(t, error)).toBe(`${t(error.messageKey)}\n\ndriver: bad connection`);
+  });
+
+  test.each([
+    ["array params", { messageParams: ["execute"] }],
+    ["nested params", { messageParams: { stage: { name: "execute" } } }],
+    ["non-finite params", { messageParams: { retryAfter: Number.POSITIVE_INFINITY } }],
+    ["non-string detail", { detail: 42 }],
+    ["object detail", { detail: { message: "database failure" } }],
+    ["non-string source", { source: 42 }],
+    ["unknown outcome", { operationOutcome: "completed" }],
+  ])("rejects malformed structured envelopes with %s", (_name, override) => {
+    expect(
+      normalizeBackendError({
+        version: 1,
+        code: "DBX-JDBC-2002",
+        messageKey: "backendErrors.jdbc.operationTimedOut",
+        messageParams: { stage: "execute" },
+        source: "jdbcAgent",
+        operationOutcome: "unknown",
+        ...override,
+      }),
+    ).toBeNull();
+  });
+
+  test("accepts an optional driver-reported error position", () => {
+    const error = normalizeBackendError({
+      version: 1,
+      code: "DBX-JDBC-4001",
+      messageKey: "backendErrors.jdbc.sqlFailed",
+      messageParams: { stage: "execute" },
+      source: "jdbcAgent",
+      operationOutcome: "unknown",
+      detail: 'ERROR: relation "missing" does not exist',
+      errorPosition: { line: 2, column: 6, offset: 12 },
+    });
+
+    expect(error?.errorPosition).toEqual({ line: 2, column: 6, offset: 12 });
+
+    const t = translatorFor("zh-CN");
+    expect(translateBackendError(t, error)).toBe(`${t("backendErrors.jdbc.sqlFailed", { stage: "execute" })}\n\nERROR: relation "missing" does not exist`);
+  });
+
+  test.each([
+    ["zero line", { line: 0, column: 1, offset: 0 }],
+    ["negative column", { line: 1, column: -1, offset: 0 }],
+    ["non-integer offset", { line: 1, column: 1, offset: 1.5 }],
+    ["string line", { line: "1", column: 1, offset: 0 }],
+    ["array position", [1, 1, 0]],
+  ])("rejects a malformed error position with %s", (_name, errorPosition) => {
+    expect(
+      normalizeBackendError({
+        version: 1,
+        code: "DBX-JDBC-4001",
+        messageKey: "backendErrors.jdbc.sqlFailed",
+        messageParams: { stage: "execute" },
+        source: "jdbcAgent",
+        operationOutcome: "unknown",
+        errorPosition,
+      }),
+    ).toBeNull();
+  });
+
+  test("accepts unknown compatibility sources and extensible origins", () => {
+    const error = normalizeBackendError({
+      version: 1,
+      code: "DBX-DB-4001",
+      messageKey: "backendErrors.jdbc.sqlFailed",
+      messageParams: { stage: "execute" },
+      source: "nativeDatabase",
+      operationOutcome: "unknown",
+      origin: { subsystem: "database", adapter: "native", driver: "postgresql" },
+      detail: "relation missing_table does not exist",
+    });
+    expect(error?.source).toBe("nativeDatabase");
+    expect(error?.origin?.driver).toBe("postgresql");
+  });
+
+  test("falls back to legacy text for plain HTTP and Tauri failures", () => {
+    const t = translatorFor("zh-CN");
+    const error = new BackendErrorException("legacy backend failure");
+    expect(error.backendError.code).toBe("DBX-LEGACY-0001");
+    expect(translateBackendError(t, error)).toBe(`${t("backendErrors.legacy")}\n\nlegacy backend failure`);
+  });
+
+  // Tauri wraps every backend rejection in a legacy envelope, so a message the catalog knows must
+  // still be phrased by the catalog rather than surfaced as raw English under a generic summary.
+  test("phrases a known message that arrived inside a legacy envelope", () => {
+    const t = translatorFor("zh-CN");
+    const wrap = (message: string) => new BackendErrorException(message);
+
+    expect(translateBackendError(t, wrap("row 1: MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver"))).toBe(t("mongo.import.legacyInsertUnsupported"));
+    expect(translateBackendError(t, wrap("Agent RPC error (-1): Find cursor not found"))).toBe(t("mongo.import.legacyCursorInvalid"));
+    expect(translateBackendError(t, wrap("MongoDB Legacy Agent rejected 2 of 500 documents: E11000 duplicate key"))).toBe(t("mongo.insert.partialFailure", { failed: "2", total: "500", message: "E11000 duplicate key" }));
+  });
+
+  test("keeps an explicit original detail when a structured legacy error omits detail", () => {
+    const t = translatorFor("zh-CN");
+    const error = {
+      version: 1 as const,
+      code: "DBX-LEGACY-0001",
+      messageKey: "backendErrors.legacy",
+      messageParams: {},
+      source: "legacyBackend",
+      operationOutcome: "unknown" as const,
+    };
+
+    expect(translateBackendError(t, error, "ClickHouse error: table analytics.events does not exist")).toBe(`${t("backendErrors.legacy")}\n\nClickHouse error: table analytics.events does not exist`);
+  });
+
+  test("renders plugin signature failures without exposing the JSON error envelope", () => {
+    const detail = "Plugin package is signed by untrusted key 'dbx-store-release-2026'";
+    const error = JSON.stringify({
+      version: 1,
+      code: "DBX-LEGACY-0001",
+      messageKey: "backendErrors.legacy",
+      messageParams: {},
+      source: "legacyBackend",
+      origin: { subsystem: "backend", adapter: "legacy" },
+      operationOutcome: "unknown",
+      detail,
+    });
+
+    for (const locale of ["zh-CN", "en"] as const) {
+      const t = translatorFor(locale);
+      expect(translateBackendError(t, error)).toBe(`${t("backendErrors.legacy")}\n\n${detail}`);
+      expect(translateBackendError(t, new Error(error))).toBe(`${t("backendErrors.legacy")}\n\n${detail}`);
+    }
+  });
+
+  test("does not append the generic transport fallback to a structured error", () => {
+    const t = translatorFor("zh-CN");
+    const error = {
+      version: 1 as const,
+      code: "DBX-LEGACY-0001",
+      messageKey: "backendErrors.legacy",
+      messageParams: {},
+      source: "legacyBackend",
+      operationOutcome: "unknown" as const,
+    };
+
+    expect(translateBackendError(t, error, "Backend request failed")).toBe(t("backendErrors.legacy"));
+  });
+
+  test("does not duplicate the summary when the fallback already carries it", () => {
+    const t = translatorFor("zh-CN");
+    const error = {
+      version: 1 as const,
+      code: "DBX-LEGACY-0001",
+      messageKey: "backendErrors.legacy",
+      messageParams: {},
+      source: "legacyBackend",
+      operationOutcome: "unknown" as const,
+    };
+    const summary = t("backendErrors.legacy");
+
+    expect(translateBackendError(t, error, `${summary}\n\nrelation missing_table does not exist`)).toBe(`${summary}\n\nrelation missing_table does not exist`);
+  });
+
+  test("preserves JSON envelopes carried by strings and Error messages", () => {
+    const envelope = {
+      version: 1,
+      code: "DBX-JDBC-4001",
+      messageKey: "backendErrors.jdbc.sqlFailed",
+      messageParams: { stage: "execute" },
+      source: "jdbcAgent",
+      operationOutcome: "unknown",
+      detail: "relation missing_table does not exist",
+    } as const;
+    expect(normalizeBackendError(JSON.stringify(envelope))).toEqual(envelope);
+    expect(normalizeBackendError(new Error(JSON.stringify(envelope)))).toEqual(envelope);
+  });
+
+  test("retains bounded diagnostics from unknown rejection objects", () => {
+    const error = new BackendErrorException({ reason: "database worker returned a vendor diagnostic" });
+    expect(error.backendError.code).toBe("DBX-LEGACY-0001");
+    expect(error.backendError.detail).toBe("database worker returned a vendor diagnostic");
+    expect(new BackendErrorException({ reason: "x".repeat(70_000) }).backendError.detail).toHaveLength(64 * 1024);
+  });
+
+  test("normalizes structured errors across Error realms and module copies", () => {
+    const envelope = {
+      version: 1,
+      code: "DBX-JDBC-5001",
+      messageKey: "backendErrors.jdbc.protocolFailed",
+      messageParams: {},
+      source: "jdbcAgent" as const,
+      operationOutcome: "unknown" as const,
+      detail: "connection reset by peer",
+    };
+    const copiedError = Object.assign(new Error("Backend request failed"), {
+      name: "BackendErrorException",
+      backendError: envelope,
+    });
+    const workerError = { name: "BackendErrorException", message: JSON.stringify(envelope) };
+
+    expect(normalizeBackendError(copiedError)).toEqual(envelope);
+    expect(normalizeBackendError(workerError)).toEqual(envelope);
+  });
+
+  test("does not recurse forever through cyclic error wrappers", () => {
+    const self: Record<string, unknown> = {};
+    self.error = self;
+    expect(normalizeBackendError(self)).toBeNull();
+    expect(() => new BackendErrorException(self)).not.toThrow();
+
+    const first: Record<string, unknown> = {};
+    const second: Record<string, unknown> = {};
+    first.backendError = second;
+    second.error = first;
+    expect(normalizeBackendError(first)).toBeNull();
+    expect(() => new BackendErrorException(first)).not.toThrow();
+  });
+
+  test("stops at a finite wrapper depth", () => {
+    let wrapper: Record<string, unknown> = { error: { message: "deep legacy error" } };
+    for (let index = 0; index < 32; index += 1) wrapper = { backendError: wrapper };
+
+    expect(normalizeBackendError(wrapper)).toBeNull();
+  });
+
+  test("does not stringify a structured envelope as [object Object]", () => {
+    expect(
+      formatError({
+        version: 1,
+        code: "DBX-JDBC-5001",
+        messageKey: "backendErrors.jdbc.protocolFailed",
+        messageParams: {},
+        source: "jdbcAgent",
+        operationOutcome: "unknown",
+      }),
+    ).toBe("DBX-JDBC-5001");
+  });
+});
+
+// Matching on message text only works while both sides agree on the wording, so
+// pin current backend literals to their Rust source. Compatibility-only patterns
+// may remain after the backend stops emitting them.
+describe("backend error wording is pinned to the Rust sources", () => {
+  const rust = (path: string) => readFileSync(new URL(`../../../../../${path}`, import.meta.url), "utf8");
+
+  test.each([
+    ["crates/dbx-core/src/data/query_result_export.rs", "Streaming export is unsupported for this query. Simplify it or use a supported driver."],
+    ["crates/dbx-core/src/data/query_result_export.rs", "Streaming export needs a result-set session, but this driver returned no session_id."],
+    ["crates/dbx-core/src/data/mongodb_import_export.rs", "MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver"],
+    ["crates/dbx-core/src/data/mongodb_import_export.rs", "MongoDB Legacy Agent returned an invalid find cursor"],
+    ["crates/dbx-core/src/query/mongo_ops.rs", "MongoDB Legacy Agent rejected "],
+    ["crates/dbx-driver-agent/src/agent_service.rs", "Failed to remove the old JRE directory: "],
+    ["crates/dbx-driver-agent/src/agent_service.rs", "is in use by drivers: "],
+    ["crates/dbx-driver-agent/src/agent_service.rs", "agent-registry.json not found in the ZIP; not a valid offline driver package."],
+    ["crates/dbx-core/src/admin/mq/adapters/kafka.rs", "Kafka does not support unloading topics"],
+    ["crates/dbx-plugin-runtime/src/plugins/installer.rs", "Plugin update source change requires confirmation:"],
+    ["crates/dbx-plugin-runtime/src/plugins/installer.rs", "Plugin downgrade to version "],
+    ["crates/dbx-web/src/auth.rs", "Please try again in {remaining}s"],
+    ["crates/dbx-web/src/routes/agents.rs", "Close these database connections before updating drivers: "],
+    ["src-tauri/src/commands/agents.rs", "Close these database connections before updating drivers: "],
+    ["src-tauri/src/commands/fs_open.rs", "file does not exist: "],
+  ])("%s still emits %j", (path, fragment) => {
+    expect(rust(path)).toContain(fragment);
+  });
+});

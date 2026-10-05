@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build offline ZIP bundles for each platform.
+# Usage: ./scripts/build_offline_zip.sh <release-dir>
+# The release-dir must contain agent-registry.json, raw driver artifacts, and dbx-jre-*.tar.zst.
+# If offline-jdbc/jdbc is present, it is included as the managed JDBC payload.
+
+RELEASE_DIR="$(cd "${1:?Usage: build_offline_zip.sh <release-dir>}" && pwd)"
+
+if [ ! -f "$RELEASE_DIR/agent-registry.json" ]; then
+  echo "ERROR: agent-registry.json not found in $RELEASE_DIR"
+  exit 1
+fi
+
+PLATFORMS=(
+  "macos-aarch64"
+  "macos-x64"
+  "linux-x64"
+  "linux-aarch64"
+  "windows-x64"
+  "windows-aarch64"
+)
+
+STAGING=$(mktemp -d)
+trap 'rm -rf "$STAGING"' EXIT
+
+for platform in "${PLATFORMS[@]}"; do
+  WORK="$STAGING/$platform"
+  mkdir -p "$WORK/jre" "$WORK/drivers"
+
+  cp "$RELEASE_DIR/agent-registry.json" "$WORK/"
+
+  if [ -d "$RELEASE_DIR/offline-jdbc/jdbc" ]; then
+    cp -R "$RELEASE_DIR/offline-jdbc/jdbc" "$WORK/"
+  fi
+
+  # Copy all JRE archives for this platform
+  JRE_COUNT=0
+  for jre_file in "$RELEASE_DIR"/dbx-jre-*-"$platform".tar.zst; do
+    [ -f "$jre_file" ] || continue
+    cp "$jre_file" "$WORK/jre/"
+    JRE_COUNT=$((JRE_COUNT + 1))
+  done
+
+  if [ "$JRE_COUNT" -eq 0 ]; then
+    echo "SKIP $platform (no JRE found)"
+    rm -rf "$WORK"
+    continue
+  fi
+
+  # Copy all driver JARs (platform-independent)
+  for jar_file in "$RELEASE_DIR"/dbx-agent-*.jar; do
+    [ -f "$jar_file" ] || continue
+    cp "$jar_file" "$WORK/drivers/"
+  done
+
+  for native_file in "$RELEASE_DIR"/dbx-agent-*-"$platform" "$RELEASE_DIR"/dbx-agent-*-"$platform".exe; do
+    [ -f "$native_file" ] || continue
+    cp "$native_file" "$WORK/drivers/"
+  done
+
+  # The SQLite SSH worker executes on the remote SSH host, so its Linux binaries
+  # must ship in every bundle: the desktop platform never matches them, which
+  # otherwise leaves the worker missing from offline packages (#8987).
+  for worker_file in "$RELEASE_DIR"/dbx-agent-sqlite-worker-*-linux-x64 \
+      "$RELEASE_DIR"/dbx-agent-sqlite-worker-*-linux-aarch64; do
+    [ -f "$worker_file" ] || continue
+    cp "$worker_file" "$WORK/drivers/"
+  done
+
+  ZIP_NAME="dbx-agents-offline-${platform}.zip"
+  ZIP_ENTRIES=(agent-registry.json jre/ drivers/)
+  [ -d "$WORK/jdbc" ] && ZIP_ENTRIES+=(jdbc/)
+  (cd "$WORK" && zip -r "$RELEASE_DIR/$ZIP_NAME" "${ZIP_ENTRIES[@]}")
+  SIZE=$(du -h "$RELEASE_DIR/$ZIP_NAME" | cut -f1)
+  echo "Created $ZIP_NAME ($SIZE)"
+done
+
+echo "Done."

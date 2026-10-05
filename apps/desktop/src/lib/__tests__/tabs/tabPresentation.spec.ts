@@ -1,0 +1,917 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
+import { useConnectionStore } from "@/stores/connectionStore";
+import { useSettingsStore } from "@/stores/settingsStore";
+import {
+  connectionGroupDisplayName,
+  executionSummaryItems,
+  middleEllipsis,
+  queryResultBaseSql,
+  queryResultExecutionSql,
+  resultGridCacheKey,
+  resultGridColumnWidthCacheKey,
+  resultGridInstanceKey,
+  resultRunItems,
+  resultSourceRange,
+  statementExecutionMarkers,
+  tabColorStyle,
+  tabConnectionColor,
+  tabDatabaseIconType,
+  tabDisplayTitle,
+  tabDisplayTitles,
+  syncTabTitleNumbers,
+  tabIconClass,
+  tabModeLabel,
+  tabTooltipLines,
+  tabularResultItems,
+  dirtyTabTitleStyle,
+} from "@/lib/tabs/tabPresentation";
+import { sqlTextFingerprint } from "@/lib/sql/sqlTextFingerprint";
+import type { ConnectionConfig, QueryResult, QueryResultRun, QueryTab } from "@/types/database";
+
+const translations: Record<string, string> = {
+  "tabs.tooltipConnection": "Connection:",
+  "tabs.tooltipGroup": "Group:",
+  "tabs.tooltipDatabase": "Database:",
+  "tabs.tooltipSchema": "Schema:",
+  "tabs.tooltipTable": "Table:",
+  "tabs.tooltipTableComment": "Table Comment:",
+  "tree.events": "Events",
+  "connectionGroup.ungroupedLabel": "Ungrouped",
+  "editor.noDatabase": "No database",
+  "databaseSearch.title": "Search Database",
+};
+
+const translate = (key: string) => translations[key] ?? key;
+
+beforeEach(() => {
+  const values = new Map<string, string>();
+  vi.stubGlobal("localStorage", {
+    getItem: vi.fn((key: string) => values.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => values.set(key, value)),
+    removeItem: vi.fn((key: string) => values.delete(key)),
+  });
+  setActivePinia(createPinia());
+});
+
+function queryTab(overrides: Partial<QueryTab>): QueryTab {
+  return {
+    id: "tab-1",
+    title: "SQL",
+    connectionId: "conn-1",
+    database: "db",
+    sql: "SELECT * FROM dbo.first;\nSELECT * FROM dbo.second;",
+    originalSql: "",
+    isExecuting: false,
+    isCancelling: false,
+    isExplaining: false,
+    mode: "query",
+    ...overrides,
+  } as QueryTab;
+}
+
+describe("query result SQL selection", () => {
+  it("uses the active result source statement for multi-result query actions", () => {
+    const tab = queryTab({
+      resultBaseSql: "SELECT * FROM dbo.first;\nSELECT * FROM dbo.second;",
+      result: {
+        columns: ["id"],
+        rows: [[1]],
+        affected_rows: 0,
+        execution_time_ms: 1,
+        sourceStatement: "SELECT * FROM dbo.second",
+      },
+    });
+
+    expect(queryResultBaseSql(tab)).toBe("SELECT * FROM dbo.second");
+    expect(queryResultExecutionSql(tab)).toBe("SELECT * FROM dbo.second");
+  });
+
+  it("prefers the sorted SQL when the active result is sorted", () => {
+    const tab = queryTab({
+      resultSortedSql: "SELECT * FROM dbo.second ORDER BY id DESC",
+      result: {
+        columns: ["id"],
+        rows: [[2]],
+        affected_rows: 0,
+        execution_time_ms: 1,
+        sourceStatement: "SELECT * FROM dbo.second",
+      },
+    });
+
+    expect(queryResultBaseSql(tab)).toBe("SELECT * FROM dbo.second");
+    expect(queryResultExecutionSql(tab)).toBe("SELECT * FROM dbo.second ORDER BY id DESC");
+  });
+
+  it("uses lastExecutedSql when a data tab has no editor SQL", () => {
+    const tab = queryTab({ mode: "data", sql: "", lastExecutedSql: "SELECT * FROM users", result: { columns: ["id"], rows: [[1]], affected_rows: 0, execution_time_ms: 1 } });
+
+    expect(queryResultBaseSql(tab)).toBe("SELECT * FROM users");
+    expect(queryResultExecutionSql(tab)).toBe("SELECT * FROM users");
+  });
+});
+
+describe("query result labels", () => {
+  it("excludes tagged server messages without renumbering storage indexes", () => {
+    const message: QueryResult = { columns: ["Message"], rows: [["notice"]], affected_rows: 0, execution_time_ms: 1, server_message: true };
+    const data: QueryResult = { columns: ["Message"], rows: [["real data"]], affected_rows: 0, execution_time_ms: 1 };
+    const empty: QueryResult = { ...data, rows: [] };
+    const results = [message, data, message, empty, data];
+
+    expect(tabularResultItems(results).map(({ index, n }) => ({ index, n }))).toEqual([
+      { index: 1, n: 1 },
+      { index: 3, n: 2 },
+      { index: 4, n: 3 },
+    ]);
+    expect(tabularResultItems([message])).toEqual([]);
+    expect(results).toHaveLength(5);
+  });
+
+  it("preserves both ends when shortening long source labels", () => {
+    expect(middleEllipsis("easy_manager_tool.tool_monitor_data_index_item")).toBe("easy_manage...index_item");
+    expect(middleEllipsis("aaa.apis")).toBe("aaa.apis");
+    expect(middleEllipsis("abcdef", 4)).toBe("a...");
+  });
+
+  it("uses the full source label as the result tab tooltip", () => {
+    const [item] = tabularResultItems([
+      {
+        columns: ["id"],
+        rows: [[1]],
+        affected_rows: 0,
+        execution_time_ms: 1,
+        sourceLabel: "app.users",
+        sourceStatement: "SELECT * FROM users",
+      },
+    ]);
+
+    expect(item?.label).toBe("app.users");
+    expect(item?.displayLabel).toBe("app.users");
+    expect(item?.labelTruncated).toBe(false);
+    expect(item?.title).toBe("app.users");
+  });
+
+  it("exposes a middle-shortened display label while retaining the full tooltip", () => {
+    const [item] = tabularResultItems([
+      {
+        columns: ["id"],
+        rows: [[1]],
+        affected_rows: 0,
+        execution_time_ms: 1,
+        sourceLabel: "easy_manager_tool.tool_monitor_data_index_item",
+        sourceStatement: "SELECT * FROM tool_monitor_data_index_item",
+      },
+    ]);
+
+    expect(item?.displayLabel).toBe("easy_manage...index_item");
+    expect(item?.labelTruncated).toBe(true);
+    expect(item?.title).toBe("easy_manager_tool.tool_monitor_data_index_item");
+  });
+
+  it("does not expose SQL text as a visible fallback label", () => {
+    const [item] = tabularResultItems([
+      {
+        columns: ["value"],
+        rows: [[1]],
+        affected_rows: 0,
+        execution_time_ms: 1,
+        sourceStatement: "SELECT 1",
+      },
+    ]);
+
+    expect(item?.label).toBeUndefined();
+    expect(item?.title).toBe("SELECT 1");
+  });
+
+  it("shows only the object name when result set names exclude the database", () => {
+    const results = [
+      {
+        columns: ["id"],
+        rows: [[1]],
+        affected_rows: 0,
+        execution_time_ms: 1,
+        sourceLabel: "cosimulation2.0.data_monitor",
+        sourceQualifier: "cosimulation2.0",
+        sourceName: "data_monitor",
+        sourceStatement: "SELECT * FROM data_monitor",
+      },
+    ];
+
+    const [withDatabase] = tabularResultItems(results);
+    const [withoutDatabase] = tabularResultItems(results, { includeSourceDatabase: false });
+
+    expect(withDatabase?.label).toBe("cosimulation2.0.data_monitor");
+    expect(withoutDatabase?.label).toBe("data_monitor");
+    expect(withoutDatabase?.displayLabel).toBe("data_monitor");
+    // 完整名称（含库名）仍保留在悬浮提示中
+    expect(withoutDatabase?.title).toBe("cosimulation2.0.data_monitor");
+  });
+
+  it("uses a custom result name in comment mode even when the database is hidden", () => {
+    const [item] = tabularResultItems(
+      [
+        {
+          columns: ["id"],
+          rows: [[1]],
+          affected_rows: 0,
+          execution_time_ms: 1,
+          sourceLabel: "My weekly report",
+          sourceLabelKind: "comment",
+          sourceQualifier: "app",
+          sourceName: "users",
+          sourceStatement: "SELECT * FROM users",
+        },
+      ],
+      { includeSourceDatabase: false, namingMode: "comment" },
+    );
+
+    expect(item?.label).toBe("My weekly report");
+    expect(item?.title).toBe("My weekly report");
+  });
+
+  it("uses the source table in source mode when a SQL comment also names the result", () => {
+    const [item] = tabularResultItems(
+      [
+        {
+          columns: ["id"],
+          rows: [[1]],
+          affected_rows: 0,
+          execution_time_ms: 1,
+          sourceLabel: "My weekly report",
+          sourceLabelKind: "comment",
+          sourceQualifier: "app",
+          sourceName: "users",
+        },
+      ],
+      { namingMode: "source", preferComments: false },
+    );
+
+    expect(item?.label).toBe("app.users");
+  });
+
+  it.each([
+    ["source", undefined, true, "Weekly report"],
+    ["source", true, false, "Weekly report"],
+    ["source", false, true, "app.users"],
+    ["source", false, false, "users"],
+    ["comment", false, true, "Weekly report"],
+    ["ordinal", true, true, undefined],
+  ] as const)("respects %s naming with preferComments=%s and includeSourceDatabase=%s", (namingMode, preferComments, includeSourceDatabase, expected) => {
+    const result: QueryResult = { columns: ["id"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, sourceLabel: "Weekly report", sourceLabelKind: "comment", sourceQualifier: "app", sourceName: "users" };
+    expect(tabularResultItems([result], { namingMode, preferComments, includeSourceDatabase })[0]?.label).toBe(expected);
+  });
+
+  it("uses the explicit label kind for comment mode and keeps legacy source labels out", () => {
+    const comment = tabularResultItems(
+      [
+        {
+          columns: ["id"],
+          rows: [[1]],
+          affected_rows: 0,
+          execution_time_ms: 1,
+          sourceLabel: "Weekly report",
+          sourceLabelKind: "comment",
+        },
+      ],
+      { namingMode: "comment" },
+    )[0];
+    const legacySource = tabularResultItems(
+      [
+        {
+          columns: ["id"],
+          rows: [[1]],
+          affected_rows: 0,
+          execution_time_ms: 1,
+          sourceLabel: "app.users",
+        },
+      ],
+      { namingMode: "comment" },
+    )[0];
+
+    expect(comment?.label).toBe("Weekly report");
+    expect(legacySource?.label).toBeUndefined();
+  });
+});
+
+describe("query result grid identity", () => {
+  it("separates rerun payloads while retaining run and result-set identity", () => {
+    const first = queryTab({ activeResultRunId: "run-1", activeResultIndex: 2, resultGridRevision: "execution-1" });
+    const rerun = queryTab({ activeResultRunId: "run-2", activeResultIndex: 2, resultGridRevision: "execution-2" });
+
+    expect(resultGridInstanceKey(first)).toBe("tab-1-run-1-2-execution-1");
+    expect(resultGridInstanceKey(rerun)).not.toBe(resultGridInstanceKey(first));
+    expect(resultGridInstanceKey({ ...first, activeResultIndex: 1 })).toBe("tab-1-run-1-1-execution-1");
+    expect(resultGridCacheKey(rerun)).not.toBe(resultGridCacheKey(first));
+    expect(resultGridColumnWidthCacheKey(rerun)).toBe(resultGridColumnWidthCacheKey(first));
+    expect(resultGridColumnWidthCacheKey({ ...first, activeResultIndex: 1 })).not.toBe(resultGridColumnWidthCacheKey(first));
+  });
+});
+
+describe("result run labels", () => {
+  // 与 store 真实创建批次的方式保持一致：默认标题是 `Run N`，只有重命名/多库执行才标记 customTitle
+  const run = (id: string, sequence: number, result?: QueryResult, overrides: Partial<QueryResultRun> = {}): QueryResultRun => ({ id, title: `Run ${sequence}`, sequence, sql: "SELECT * FROM users", createdAt: sequence, result, ...overrides });
+  const sourceResult = (label: string, qualifier: string, name: string): QueryResult => ({ columns: ["id"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, sourceLabel: label, sourceQualifier: qualifier, sourceName: name }) as QueryResult;
+
+  it("names result runs after their source table instead of the run ordinal", () => {
+    const items = resultRunItems(
+      queryTab({
+        resultRuns: [run("run-1", 1, sourceResult("app.users", "app", "users")), run("run-2", 2, sourceResult("app.orders", "app", "orders"))],
+      }) as QueryTab,
+    );
+
+    expect(items.map((item) => item.sourceLabel)).toEqual(["app.users", "app.orders"]);
+  });
+
+  it("suffixes repeated sources and follows the database-name setting", () => {
+    const tab = queryTab({
+      resultRuns: [run("run-1", 1, sourceResult("cosimulation2.0.users", "cosimulation2.0", "users")), run("run-2", 2, sourceResult("cosimulation2.0.users", "cosimulation2.0", "users")), run("run-3", 3)],
+    }) as QueryTab;
+
+    expect(resultRunItems(tab).map((item) => item.sourceLabel)).toEqual(["cosimulation2.0.users", "cosimulation2.0.users (2)", undefined]);
+    expect(resultRunItems(tab, { includeSourceDatabase: false }).map((item) => item.sourceLabel)).toEqual(["users", "users (2)", undefined]);
+  });
+
+  it("keeps a renamed run title ahead of the source label", () => {
+    const items = resultRunItems(queryTab({ resultRuns: [run("run-1", 1, sourceResult("app.users", "app", "users"), { title: "报表", customTitle: true })] }) as QueryTab);
+
+    expect(items[0]?.title).toBe("报表");
+    expect(items[0]?.sourceLabel).toBe("app.users");
+  });
+
+  it("replaces the default Run N title with the source label", () => {
+    const items = resultRunItems(queryTab({ resultRuns: [run("run-1", 1, sourceResult("app.users", "app", "users"))] }) as QueryTab);
+
+    expect(items[0]?.title).toBe("");
+    expect(items[0]?.sourceLabel).toBe("app.users");
+  });
+
+  it("falls back to the run SQL for runs created before source labels were stored", () => {
+    const items = resultRunItems(queryTab({ resultRuns: [run("run-1", 1)] }) as QueryTab, { database: "cosimulation2.0", databaseType: "mysql" });
+
+    expect(items[0]?.sourceLabel).toBe("cosimulation2.0.users");
+  });
+
+  it("uses explicit comment labels while ignoring legacy source labels in comment mode", () => {
+    const commentRun = run("run-1", 1, { ...sourceResult("Weekly report", "app", "users"), sourceLabelKind: "comment", sourceName: undefined });
+    const legacySourceRun = run("run-2", 2, { ...sourceResult("app.orders", "app", "orders"), sourceLabelKind: undefined });
+
+    expect(resultRunItems(queryTab({ resultRuns: [commentRun, legacySourceRun] }) as QueryTab, { namingMode: "comment" }).map((item) => item.sourceLabel)).toEqual(["Weekly report", undefined]);
+    expect(resultRunItems(queryTab({ resultRuns: [commentRun] }) as QueryTab, { namingMode: "ordinal" })[0]?.sourceLabel).toBeUndefined();
+  });
+
+  it("uses the source table for a commented run in source mode", () => {
+    const commentRun = run("run-1", 1, { ...sourceResult("Weekly report", "app", "users"), sourceLabelKind: "comment" });
+
+    expect(resultRunItems(queryTab({ resultRuns: [commentRun] }) as QueryTab, { namingMode: "source", preferComments: false }).map((item) => item.sourceLabel)).toEqual(["app.users"]);
+  });
+
+  it.each([false, true])("switches comment preference after the run payload is evicted (%s)", (preferComments) => {
+    const commentRun = run("run-1", 1, undefined, { sourceLabel: "Weekly report", sourceLabelKind: "comment", sourceName: "users" });
+    const tab = queryTab({ resultRuns: [commentRun] }) as QueryTab;
+    expect(resultRunItems(tab, { database: "app", databaseType: "mysql", preferComments })[0]?.sourceLabel).toBe(preferComments ? "Weekly report" : "app.users");
+    expect(resultRunItems(tab, { database: "app", databaseType: "mysql", preferComments, includeSourceDatabase: false })[0]?.sourceLabel).toBe(preferComments ? "Weekly report" : "users");
+    expect(resultRunItems(tab, { namingMode: "comment", preferComments })[0]?.sourceLabel).toBe("Weekly report");
+    expect(resultRunItems(tab, { namingMode: "ordinal", preferComments })[0]?.sourceLabel).toBeUndefined();
+  });
+
+  it("prefers comments by default for stored runs without a result payload", () => {
+    const commentRun = run("run-1", 1, undefined, { sourceLabel: "Weekly report", sourceLabelKind: "comment" });
+    expect(resultRunItems(queryTab({ resultRuns: [commentRun] }) as QueryTab)[0]?.sourceLabel).toBe("Weekly report");
+  });
+});
+
+describe("tab group presentation", () => {
+  // 编号由 store 在标签列表变化时分配，渲染函数只读结果；这里把两步串起来，
+  // 与真实调用顺序保持一致（#9938）。
+  const titlesWithNumbers = (tabs: QueryTab[]) => {
+    syncTabTitleNumbers(tabs, translate);
+    return tabDisplayTitles(tabs, translate);
+  };
+
+  it("numbers colliding query tab titles so several tabs stay distinguishable", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", driver_profile: "postgres", database: "app" } as ConnectionConfig];
+    const tabs = [queryTab({ id: "tab-1" }), queryTab({ id: "tab-2" }), queryTab({ id: "tab-3" })];
+
+    const titles = titlesWithNumbers(tabs);
+    expect([...titles.values()]).toEqual(["PostgreSQL@db 1", "PostgreSQL@db 2", "PostgreSQL@db 3"]);
+  });
+
+  it("keeps the remaining numbers when a tab in the middle is closed", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", driver_profile: "postgres", database: "app" } as ConnectionConfig];
+    const tabs = [queryTab({ id: "tab-1" }), queryTab({ id: "tab-2" }), queryTab({ id: "tab-3" })];
+    titlesWithNumbers(tabs);
+
+    const titles = titlesWithNumbers(tabs.filter((tab) => tab.id !== "tab-2"));
+    expect(titles.get("tab-1")).toBe("PostgreSQL@db 1");
+    expect(titles.get("tab-3")).toBe("PostgreSQL@db 3");
+  });
+
+  it("keeps the number on the last surviving tab of a closed group", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", driver_profile: "postgres", database: "app" } as ConnectionConfig];
+    const tabs = [queryTab({ id: "tab-1" }), queryTab({ id: "tab-2" })];
+    titlesWithNumbers(tabs);
+
+    expect(titlesWithNumbers([tabs[0]!]).get("tab-1")).toBe("PostgreSQL@db 1");
+  });
+
+  it("continues after the highest number still in use when a new tab opens", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", driver_profile: "postgres", database: "app" } as ConnectionConfig];
+    const tabs = [queryTab({ id: "tab-1" }), queryTab({ id: "tab-2" }), queryTab({ id: "tab-3" })];
+    titlesWithNumbers(tabs);
+
+    const next = [...tabs.filter((tab) => tab.id !== "tab-2"), queryTab({ id: "tab-4" })];
+    const titles = titlesWithNumbers(next);
+    expect(titles.get("tab-1")).toBe("PostgreSQL@db 1");
+    expect(titles.get("tab-3")).toBe("PostgreSQL@db 3");
+    expect(titles.get("tab-4")).toBe("PostgreSQL@db 4");
+  });
+
+  it("drops the number of a tab whose title stops colliding", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", driver_profile: "postgres", database: "app" } as ConnectionConfig];
+    const tabs = [queryTab({ id: "tab-1" }), queryTab({ id: "tab-2" })];
+    titlesWithNumbers(tabs);
+
+    tabs[1]!.database = "other";
+    const titles = titlesWithNumbers(tabs);
+    expect(titles.get("tab-1")).toBe("PostgreSQL@db 1");
+    expect(titles.get("tab-2")).toBe("PostgreSQL@other");
+  });
+
+  it("leaves tab titles untouched while they are unique", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", driver_profile: "postgres", database: "app" } as ConnectionConfig];
+    const tabs = [queryTab({ id: "tab-1" }), queryTab({ id: "tab-2", database: "other" }), queryTab({ id: "tab-3", customTitle: true, title: "orders.sql", savedSqlId: "sql-1" })];
+
+    const titles = titlesWithNumbers(tabs);
+    expect(titles.get("tab-1")).toBe("PostgreSQL@db");
+    expect(titles.get("tab-2")).toBe("PostgreSQL@other");
+    expect(titles.get("tab-3")).toBe("orders.sql");
+  });
+
+  it("numbers duplicate custom titles in strip order and skips preview tabs", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", driver_profile: "postgres", database: "app" } as ConnectionConfig, { id: "conn-preview", name: "[Preview] PostgreSQL", db_type: "postgres", driver_profile: "postgres", database: "app" } as ConnectionConfig];
+    const tabs = [queryTab({ id: "tab-1", customTitle: true, title: "orders.sql", savedSqlId: "sql-1" }), queryTab({ id: "tab-preview", connectionId: "conn-preview" }), queryTab({ id: "tab-2", customTitle: true, title: "orders.sql", savedSqlId: "sql-2" })];
+
+    const titles = titlesWithNumbers(tabs);
+    expect(titles.get("tab-1")).toBe("orders.sql 1");
+    expect(titles.get("tab-2")).toBe("orders.sql 2");
+    expect(titles.get("tab-preview")).toBe("SQL");
+  });
+
+  it("does not expose the internal objects mode in object browser tab titles", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", driver_profile: "postgres", database: "app" } as ConnectionConfig];
+
+    expect(tabDisplayTitle(queryTab({ mode: "objects", title: "app objects" }), translate)).toBe("db");
+    expect(tabDisplayTitle(queryTab({ mode: "objects", title: "public objects", objectBrowser: { schema: "public" } }), translate)).toBe("public@db");
+  });
+
+  it("uses the selected MySQL event name for event editor tabs", () => {
+    expect(tabDisplayTitle(queryTab({ mode: "objects", objectBrowser: { objectType: "tables", initialObjectFilter: "events", eventName: "cleanup_sessions" } }), translate)).toBe("cleanup_sessions@db");
+    expect(tabDisplayTitle(queryTab({ mode: "objects", objectBrowser: { objectType: "tables", initialObjectFilter: "events" } }), translate)).toBe("Events@db");
+  });
+
+  it("formats database-search tab titles with database and schema scope", () => {
+    expect(tabDisplayTitle(queryTab({ mode: "database-search", database: "shop", schema: "public" }), translate)).toBe("Search Database@shop.public");
+    expect(tabDisplayTitle(queryTab({ mode: "database-search", database: "shop" }), translate)).toBe("Search Database@shop");
+    expect(tabModeLabel(queryTab({ mode: "database-search" }), translate)).toBe("Search Database");
+
+    const settings = useSettingsStore();
+    settings.editorSettings.compactTabTitle = true;
+    expect(tabDisplayTitle(queryTab({ mode: "database-search", database: "shop" }), translate)).toBe("Search Database");
+    settings.editorSettings.compactTabTitle = false;
+  });
+
+  it("formats query tab titles with database, schema, and catalog scope", () => {
+    const store = useConnectionStore();
+    store.connections = [
+      { id: "conn-1", name: "PostgreSQL", db_type: "postgres", database: "app" } as ConnectionConfig,
+      { id: "conn-oracle", name: "Oracle", db_type: "oracle", database: "" } as ConnectionConfig,
+      { id: "conn-doris", name: "Doris", db_type: "doris", database: "analytics" } as ConnectionConfig,
+    ];
+
+    expect(tabDisplayTitle(queryTab({ connectionId: "conn-1", database: "app", schema: "public" }), translate)).toBe("PostgreSQL@app.public");
+    expect(tabDisplayTitle(queryTab({ connectionId: "conn-1", database: "app", schema: "tenant_a" }), translate)).toBe("PostgreSQL@app.tenant_a");
+    expect(tabDisplayTitle(queryTab({ connectionId: "conn-oracle", database: "", schema: "SCOTT" }), translate)).toBe("Oracle@SCOTT");
+    expect(tabDisplayTitle(queryTab({ connectionId: "conn-doris", database: "analytics", catalog: "internal", schema: "dim" }), translate)).toBe("Doris@internal.analytics.dim");
+    expect(tabDisplayTitle(queryTab({ connectionId: "conn-1", database: "app", schema: "app" }), translate)).toBe("PostgreSQL@app");
+  });
+
+  it("includes schema in tab tooltips when schema is present", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", database: "app" } as ConnectionConfig];
+    store.sidebarLayout = { groups: [], order: [{ type: "connection", id: "conn-1" }] };
+
+    const queryTabLines = tabTooltipLines(queryTab({ connectionId: "conn-1", database: "app", schema: "public" }), translate);
+    expect(queryTabLines).toContainEqual({ label: "Schema:", value: "public" });
+
+    const dataTabLines = tabTooltipLines(queryTab({ connectionId: "conn-1", mode: "data", database: "app", tableMeta: { schema: "analytics", tableName: "events", columns: [], primaryKeys: [] } }), translate);
+    expect(dataTabLines).toContainEqual({ label: "Schema:", value: "analytics" });
+
+    const sameSchemaLines = tabTooltipLines(queryTab({ connectionId: "conn-1", database: "app", schema: "app" }), translate);
+    expect(sameSchemaLines.some((line) => line.label === "Schema:")).toBe(false);
+  });
+
+  it("uses the live database and branch context for Dolt version control tabs", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "Production Dolt", db_type: "mysql", driver_profile: "dolt", database: "app" } as ConnectionConfig];
+
+    expect(tabDisplayTitle(queryTab({ mode: "dolt-version-control", title: "Dolt Version Control", workspaceBranch: "feature/orders" }), translate)).toBe("Production Dolt VCS@db.feature/orders");
+    expect(tabDisplayTitle(queryTab({ mode: "dolt-version-control", title: "Dolt Version Control" }), translate)).toBe("Production Dolt VCS@db");
+  });
+
+  it("adds the full, live group path to tab tooltips", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", database: "app" } as ConnectionConfig];
+    store.sidebarLayout = {
+      groups: [
+        { id: "project", name: "Project", collapsed: false },
+        { id: "staging", name: "Staging", collapsed: false },
+      ],
+      order: [
+        {
+          type: "group",
+          id: "project",
+          children: [{ type: "group", id: "staging", children: [{ type: "connection", id: "conn-1" }] }],
+        },
+      ],
+    };
+
+    expect(connectionGroupDisplayName("conn-1", translate)).toBe("Project / Staging");
+    expect(tabTooltipLines(queryTab({ database: "app" }), translate)).toEqual([
+      { label: "Connection:", value: "PostgreSQL" },
+      { label: "Group:", value: "Project / Staging" },
+      { label: "Database:", value: "app" },
+    ]);
+  });
+
+  it("omits the database row from tooltips for connections without a database target", () => {
+    const store = useConnectionStore();
+    store.sidebarLayout = {
+      groups: [],
+      order: [{ type: "connection", id: "conn-1" }],
+    };
+
+    for (const dbType of ["dynamodb", "elasticsearch", "easysearch", "meilisearch", "solr", "qdrant", "weaviate", "chromadb", "etcd", "zookeeper", "nacos", "consul", "mq", "mqtt", "victoriametrics"] as const) {
+      store.connections = [{ id: "conn-1", name: "Local", db_type: dbType, database: "default" } as ConnectionConfig];
+
+      const lines = tabTooltipLines(queryTab({ database: "default" }), translate);
+
+      expect(lines, dbType).toContainEqual({ label: "Connection:", value: "Local" });
+      expect(lines, dbType).toContainEqual({ label: "Group:", value: "Ungrouped" });
+      expect(lines, dbType).not.toContainEqual({ label: "Database:", value: "default" });
+    }
+  });
+
+  it("shows a database row for plugin tabs only when the tab or connection has a database", () => {
+    const store = useConnectionStore();
+    store.sidebarLayout = {
+      groups: [],
+      order: [{ type: "connection", id: "conn-1" }],
+    };
+    store.connections = [{ id: "conn-1", name: "SSH server", db_type: "plugin" } as ConnectionConfig];
+
+    const tab = queryTab({ mode: "plugin-workbench", database: "" });
+    expect(tabTooltipLines(tab, translate)).toEqual([
+      { label: "Connection:", value: "SSH server" },
+      { label: "Group:", value: "Ungrouped" },
+    ]);
+
+    store.connections = [{ id: "conn-1", name: "Database plugin", db_type: "plugin", database: "analytics" } as ConnectionConfig];
+    expect(tabTooltipLines(tab, translate)).toContainEqual({ label: "Database:", value: "analytics" });
+    expect(tabTooltipLines(queryTab({ mode: "plugin-workbench", database: "reporting" }), translate)).toContainEqual({ label: "Database:", value: "reporting" });
+  });
+
+  it("labels a top-level connection as ungrouped", () => {
+    const store = useConnectionStore();
+    store.connections = [{ id: "conn-1", name: "PostgreSQL", db_type: "postgres", database: "app" } as ConnectionConfig];
+    store.sidebarLayout = {
+      groups: [],
+      order: [{ type: "connection", id: "conn-1" }],
+    };
+
+    expect(connectionGroupDisplayName("conn-1", translate)).toBe("Ungrouped");
+  });
+
+  it("shows a bounded table comment only when it is non-empty", () => {
+    const lines = tabTooltipLines(
+      queryTab({
+        mode: "data",
+        tableComment: `  ${"表".repeat(55)}\narchive  `,
+        tableMeta: { schema: "public", tableName: "users", columns: [], primaryKeys: [] },
+      }),
+      translate,
+    );
+    const comment = lines.find((line) => line.label === "Table Comment:")?.value;
+
+    expect(Array.from(comment || "")).toHaveLength(50);
+    expect(comment?.endsWith("…")).toBe(true);
+    expect(tabTooltipLines(queryTab({ mode: "data", tableComment: "   ", tableMeta: { schema: "public", tableName: "users", columns: [], primaryKeys: [] } }), translate).some((line) => line.label === "Table Comment:")).toBe(false);
+  });
+});
+
+describe("query result source ranges", () => {
+  it("prefers the preserved editor range for a selected duplicate statement", () => {
+    const sql = "SELECT * FROM users;\nSELECT * FROM users;";
+    const from = sql.lastIndexOf("SELECT");
+
+    expect(resultSourceRange(sql, { sourceStatement: "SELECT * FROM users", sourceFrom: from, sourceTo: sql.length - 1 }, 0, "mysql")).toEqual({
+      from,
+      to: sql.length - 1,
+      sql: "SELECT * FROM users",
+    });
+  });
+
+  it("uses the result index to distinguish repeated statements", () => {
+    const sql = "SELECT * FROM users;\nSELECT * FROM users;";
+    const range = resultSourceRange(sql, { sourceStatement: "SELECT * FROM users" }, 1, "mysql");
+
+    expect(range).toEqual({
+      from: sql.lastIndexOf("SELECT"),
+      to: sql.length - 1,
+      sql: "SELECT * FROM users",
+    });
+  });
+
+  it("resolves newline-separated MongoDB commands with the Mongo shell parser", () => {
+    const sql = "db.model_field_group.find({})\n\ndb.model_info.find({})";
+    const sourceStatement = "db.model_info.find({})";
+    const range = resultSourceRange(sql, { sourceStatement }, 1, "mongodb");
+
+    expect(range).toEqual({
+      from: sql.indexOf(sourceStatement),
+      to: sql.length,
+      sql: sourceStatement,
+    });
+  });
+
+  it("resolves newline-separated Redis commands with the Redis parser", () => {
+    const sql = "GET first\n\nGET second";
+    const sourceStatement = "GET second";
+    const range = resultSourceRange(sql, { sourceStatement }, 1, "redis");
+
+    expect(range).toEqual({
+      from: sql.indexOf(sourceStatement),
+      to: sql.length,
+      sql: sourceStatement,
+    });
+  });
+
+  it("does not highlight a stale or ambiguous statement", () => {
+    expect(resultSourceRange("SELECT * FROM users;", { sourceStatement: "SELECT * FROM orders" }, 0, "mysql")).toBeUndefined();
+    expect(resultSourceRange("SELECT * FROM users; SELECT * FROM users;", { sourceStatement: "SELECT * FROM users" }, undefined, "mysql")).toBeUndefined();
+  });
+});
+
+describe("execution summary", () => {
+  it("uses the explicit execution marker instead of the result column name", () => {
+    const successfulAlias = { columns: ["Error"], rows: [[2]], affected_rows: 0, execution_time_ms: 1 };
+    const markedFailure = { columns: ["Error"], rows: [["failed"]], affected_rows: 0, execution_time_ms: 1, execution_error: true as const };
+
+    expect(executionSummaryItems({ results: [successfulAlias, markedFailure] }).map(({ status, isError }) => ({ status, isError }))).toEqual([
+      { status: "success", isError: false },
+      { status: "error", isError: true },
+    ]);
+  });
+
+  it("maps out-of-order results to their explicit statement indexes", () => {
+    const items = executionSummaryItems({
+      results: [
+        { columns: ["value"], rows: [["third"]], affected_rows: 0, execution_time_ms: 3, statement_index: 2 },
+        { columns: ["value"], rows: [["first"]], affected_rows: 0, execution_time_ms: 1, statement_index: 0 },
+      ],
+      batchSqlExecution: {
+        executionId: "run-out-of-order",
+        submittedSql: "SELECT 'first'; SELECT 'second'; SELECT 'third'",
+        editorFingerprint: "fingerprint",
+        sourceOffset: 0,
+        completed: 2,
+        total: 3,
+        startedAt: 1,
+        items: [
+          { statementIndex: 0, sql: "SELECT 'first'", from: 0, to: 14, status: "success" },
+          { statementIndex: 1, sql: "SELECT 'second'", from: 16, to: 31, status: "skipped" },
+          { statementIndex: 2, sql: "SELECT 'third'", from: 33, to: 47, status: "success" },
+        ],
+      },
+    });
+
+    expect(items.map((item) => [item.statementIndex, item.result?.rows[0]?.[0]])).toEqual([
+      [0, "first"],
+      [1, undefined],
+      [2, "third"],
+    ]);
+  });
+});
+
+describe("statement execution markers", () => {
+  it("renders a live marker for a single statement", () => {
+    const sql = "SELECT 1";
+    expect(
+      statementExecutionMarkers(sql, undefined, "mysql", sql, "", {
+        executionId: "run-single",
+        submittedSql: sql,
+        editorFingerprint: sqlTextFingerprint(sql),
+        sourceOffset: 0,
+        completed: 0,
+        total: 1,
+        startedAt: 1,
+        items: [{ statementIndex: 0, sql, from: 0, to: sql.length, status: "running" }],
+      }),
+    ).toEqual([{ from: 0, status: "running", successCount: 0, errorCount: 0, runningCount: 1 }]);
+  });
+
+  it("renders running and completed markers from live batch state", () => {
+    const sql = "SELECT 1;\nSELECT 2;\nSELECT 3;";
+    const secondFrom = sql.indexOf("SELECT 2");
+    const thirdFrom = sql.indexOf("SELECT 3");
+    expect(
+      statementExecutionMarkers(sql, undefined, "sqlite", sql, "", {
+        executionId: "run-1",
+        submittedSql: sql,
+        editorFingerprint: sqlTextFingerprint(sql),
+        sourceOffset: 0,
+        completed: 1,
+        total: 3,
+        startedAt: 1,
+        items: [
+          { statementIndex: 0, sql: "SELECT 1", from: 0, to: 8, status: "success" },
+          { statementIndex: 1, sql: "SELECT 2", from: secondFrom, to: secondFrom + 8, status: "running" },
+          { statementIndex: 2, sql: "SELECT 3", from: thirdFrom, to: thirdFrom + 8, status: "pending" },
+        ],
+      }),
+    ).toEqual([
+      { from: 0, status: "success", successCount: 1, errorCount: 0 },
+      { from: secondFrom, status: "running", successCount: 0, errorCount: 0, runningCount: 1 },
+    ]);
+  });
+
+  it("projects explicit statement indexes to current editor lines", () => {
+    const sql = "SELECT 1;\nSELECT * FROM missing;\nSELECT 3;";
+    const secondFrom = sql.indexOf("SELECT *");
+    const markers = statementExecutionMarkers(
+      sql,
+      [
+        { columns: ["value"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, statement_index: 0, sourceStatement: "SELECT 1", sourceFrom: 0, sourceTo: 8 },
+        { columns: ["Error"], rows: [["no such table"]], affected_rows: 0, execution_time_ms: 1, execution_error: true, statement_index: 1, sourceStatement: "SELECT * FROM missing", sourceFrom: secondFrom, sourceTo: secondFrom + "SELECT * FROM missing".length },
+      ],
+      "sqlite",
+      sql,
+    );
+
+    expect(markers).toEqual([
+      { from: 0, status: "success", successCount: 1, errorCount: 0 },
+      { from: secondFrom, status: "error", successCount: 0, errorCount: 1 },
+    ]);
+  });
+
+  it("omits unindexed query-level errors and legacy single-statement results without live state", () => {
+    expect(statementExecutionMarkers("SELECT 1; SELECT 2;", [{ columns: ["Error"], rows: [["pool failed"]], affected_rows: 0, execution_time_ms: 1, execution_error: true }], "mysql", "SELECT 1; SELECT 2;")).toEqual([]);
+    expect(statementExecutionMarkers("SELECT 1", [{ columns: ["value"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, statement_index: 0, sourceStatement: "SELECT 1", sourceFrom: 0, sourceTo: 8 }], "mysql", "SELECT 1")).toEqual([]);
+  });
+
+  it("keeps duplicate statements scoped by preserved absolute ranges", () => {
+    const sql = "SELECT * FROM users;\nSELECT * FROM users;";
+    const from = sql.lastIndexOf("SELECT");
+
+    expect(statementExecutionMarkers(sql, [{ columns: ["id"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, statement_index: 1, sourceStatement: "SELECT * FROM users", sourceFrom: from, sourceTo: sql.length - 1 }], "mysql", sql)).toEqual([
+      { from, status: "success", successCount: 1, errorCount: 0 },
+    ]);
+  });
+
+  it("aggregates same-line statements with error precedence", () => {
+    const sql = "SELECT 1; SELECT bad;";
+    expect(
+      statementExecutionMarkers(
+        sql,
+        [
+          { columns: ["value"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, statement_index: 0, sourceStatement: "SELECT 1", sourceFrom: 0, sourceTo: 8 },
+          { columns: ["Error"], rows: [["bad"]], affected_rows: 0, execution_time_ms: 1, execution_error: true, statement_index: 1, sourceStatement: "SELECT bad", sourceFrom: 10, sourceTo: 20 },
+        ],
+        "mysql",
+        sql,
+      ),
+    ).toEqual([{ from: 0, status: "error", successCount: 1, errorCount: 1 }]);
+  });
+
+  it("invalidates every marker after the editor document changes", () => {
+    const executedSql = "SELECT 1;\nSELECT 2;";
+    expect(statementExecutionMarkers(`-- edited\n${executedSql}`, [{ columns: ["value"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, statement_index: 0, sourceStatement: "SELECT 1" }], "mysql", "stale-editor-fingerprint", executedSql)).toEqual([]);
+  });
+});
+
+describe("shared tab presentation helpers", () => {
+  it("classifies tab icon colors without MQ special-casing", () => {
+    expect(tabIconClass(queryTab({ mode: "data" }))).toContain("text-green-500");
+    const connectionStore = useConnectionStore();
+    connectionStore.connections = [{ id: "dynamodb-1", name: "DynamoDB", db_type: "dynamodb", driver_profile: "dynamodb", color: "" } as ConnectionConfig];
+    expect(tabIconClass(queryTab({ connectionId: "dynamodb-1", mode: "data" }))).toContain("text-amber-500");
+    expect(tabIconClass(queryTab({ mode: "mq" }))).toBe("");
+    expect(tabIconClass(queryTab({ externalSqlFileMissing: true }))).toContain("text-amber-600");
+    expect(tabIconClass(queryTab({ mode: "users" }))).toBe("text-primary");
+    expect(tabIconClass(queryTab({ mode: "objects", objectBrowser: { objectType: "tables", initialObjectFilter: "events", eventName: "cleanup_sessions" } }))).toBe("text-orange-400");
+  });
+
+  it("uses logical Redis database labels instead of the connection title", () => {
+    const connectionStore = useConnectionStore();
+    connectionStore.connections = [{ id: "redis-1", name: "Redis", db_type: "redis", driver_profile: "redis", color: "" } as ConnectionConfig];
+    expect(tabDisplayTitle(queryTab({ connectionId: "redis-1", database: "0", mode: "redis", sql: "" }), translate)).toBe("db0");
+    expect(tabDisplayTitle(queryTab({ connectionId: "redis-1", database: "1", mode: "redis", sql: "" }), translate)).toBe("db1");
+  });
+
+  it("keeps source tab colors aligned with the sidebar object palette", () => {
+    const colors = [
+      ["PROCEDURE", "text-blue-500"],
+      ["FUNCTION", "text-amber-500"],
+      ["SEQUENCE", "text-emerald-500"],
+      ["SYNONYM", "text-sky-500"],
+      ["PACKAGE", "text-cyan-500"],
+      ["PACKAGE_BODY", "text-cyan-400"],
+      ["TYPE", "text-violet-500"],
+      ["TYPE_BODY", "text-violet-400"],
+    ] as const;
+    for (const [objectType, color] of colors) {
+      expect(tabIconClass(queryTab({ objectSource: { name: "object", objectType } }))).toContain(color);
+    }
+  });
+
+  it("builds active/inactive color styles for classic and non-classic layouts", () => {
+    useSettingsStore().editorSettings.colorizeConnectionTabs = false;
+    // Node has no window/CSS globals: pin both to modern-engine answers.
+    vi.stubGlobal("CSS", { supports: () => true });
+    vi.stubGlobal("window", {
+      matchMedia: (query: string) => ({
+        media: query,
+        matches: true,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }),
+    });
+    try {
+      const activeClassic = tabColorStyle(queryTab({}), true, true);
+      expect(activeClassic?.boxShadow).toContain("var(--foreground)");
+      const inactiveModern = tabColorStyle(queryTab({}), false, false);
+      expect(inactiveModern?.borderColor).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("swaps inline color-mix tab colors for concrete rgba on legacy WebViews", () => {
+    useSettingsStore().editorSettings.colorizeConnectionTabs = false;
+    // WebKit without color-mix() invalidates the inline values at computed-value
+    // time, which left the active tab with no background at all (macOS 12); and
+    // it cannot substitute var() inside inline custom properties, so the legacy
+    // branch resolves the token to concrete rgb. Node has no document: the
+    // helper falls back to the default theme's foreground (10, 10, 10).
+    vi.stubGlobal("CSS", { supports: () => false });
+    try {
+      const pill = tabColorStyle(queryTab({}), true, false);
+      expect(pill?.["--app-tab-background"]).toBe("rgba(10, 10, 10, 0.18)");
+      expect(pill?.borderColor).toBe("var(--ring)");
+      const classic = tabColorStyle(queryTab({}), true, true);
+      expect(classic?.["--app-tab-background"]).toBe("rgba(10, 10, 10, 0.18)");
+      expect(classic?.boxShadow).toBe("inset 0 -2px 0 rgba(10, 10, 10, 0.72)");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("assigns stable palette colors to unconfigured connections", () => {
+    const connectionStore = useConnectionStore();
+    connectionStore.connections = [
+      { id: "conn-1", name: "One", db_type: "mysql", color: "" },
+      { id: "conn-2", name: "Two", db_type: "mysql", color: "#abcdef" },
+    ] as ConnectionConfig[];
+    expect(tabConnectionColor("conn-1")).toBe(tabConnectionColor("conn-1"));
+    expect(tabConnectionColor("conn-1")).not.toBe("");
+    expect(tabConnectionColor("conn-1")).not.toBe(tabConnectionColor("conn-3"));
+    expect(tabConnectionColor("conn-2")).toBe("#abcdef");
+  });
+
+  it("resolves MQ driver icons from the connection store", () => {
+    const connectionStore = useConnectionStore();
+    connectionStore.connections = [
+      {
+        id: "mq-1",
+        name: "MQ",
+        db_type: "mq",
+        driver_profile: "kafka",
+        color: "",
+      } as ConnectionConfig,
+    ];
+    expect(tabDatabaseIconType(queryTab({ connectionId: "mq-1", mode: "mq" }))).toBe("kafka");
+  });
+
+  it("returns a dirty-title style only when the tab is dirty", () => {
+    expect(dirtyTabTitleStyle(false)).toBeUndefined();
+    expect(dirtyTabTitleStyle(true)?.fontStyle).toBe("italic");
+    expect(dirtyTabTitleStyle(true)?.fontWeight).toBe(700);
+  });
+});

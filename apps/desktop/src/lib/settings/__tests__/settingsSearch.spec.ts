@@ -1,0 +1,358 @@
+import { describe, expect, it } from "vitest";
+import {
+  SETTINGS_SEARCH_DEFINITIONS,
+  TOOLBAR_VISIBILITY_ITEMS,
+  createShortcutSettingsSearchDefinitions,
+  createToolbarVisibilitySettingsSearchDefinitions,
+  resolveSettingsCategory,
+  resolveSettingsSearchEntries,
+  searchSettings,
+  visibleToolbarVisibilityItems,
+  type SettingsCategory,
+  type SettingsSearchDefinition,
+} from "@/lib/settings/settingsSearch";
+
+const categoryLabels = {
+  editor: "Editor",
+  formatter: "SQL Formatter",
+  appearance: "Appearance",
+  navigation: "Navigation",
+  data: "Data",
+  backups: "Backups",
+  tunnels: "Tunnels",
+  shortcuts: "Shortcuts",
+  snippets: "Snippets",
+  sync: "Sync",
+  ai: "AI",
+  mcp: "MCP",
+  updates: "Updates",
+  security: "Security",
+  about: "About",
+} satisfies Record<SettingsCategory, string>;
+
+const translations: Record<string, string> = {
+  font: "Editor font",
+  fontDescription: "Choose the typeface used by the editor",
+  export: "Export options",
+  hidden: "Desktop only",
+};
+const translate = (key: string) => translations[key] ?? key;
+const allCategories = new Set(Object.keys(categoryLabels) as SettingsCategory[]);
+
+describe("settings search", () => {
+  it("finds connection tab colors by their Chinese label", () => {
+    const entries = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { isWeb: false, visibleCategories: allCategories }, (key) => (key === "settings.colorizeConnectionTabs" ? "按连接颜色区分标签页" : key), categoryLabels);
+    expect(searchSettings(entries, "连接颜色", "zh-CN")).toEqual(expect.arrayContaining([expect.objectContaining({ id: "appearance-connection-tab-colors", category: "appearance", targetId: "appearance" })]));
+  });
+
+  const definitions: readonly SettingsSearchDefinition[] = [
+    { id: "font", category: "editor", titleKey: "font", descriptionKey: "fontDescription" },
+    { id: "export", category: "data", titleKey: "export" },
+    { id: "desktop", category: "about", titleKey: "hidden", visible: ({ isWeb }) => !isWeb },
+  ];
+
+  it("indexes the query editor line-number preference", () => {
+    const definition = SETTINGS_SEARCH_DEFINITIONS.find((entry) => entry.id === "editor-line-numbers");
+    expect(definition).toEqual({
+      id: "editor-line-numbers",
+      category: "editor",
+      titleKey: "settings.showLineNumbers",
+      descriptionKey: "settings.showLineNumbersDescription",
+      targetId: "editor",
+    });
+
+    const entries = resolveSettingsSearchEntries(
+      [definition!],
+      { isWeb: false, visibleCategories: new Set<SettingsCategory>(["editor"]) },
+      (key) =>
+        ({
+          "settings.showLineNumbers": "Show line numbers",
+          "settings.showLineNumbersDescription": "Show line numbers in the SQL editor gutter",
+        })[key] ?? key,
+      categoryLabels,
+    );
+
+    expect(searchSettings(entries, "line number", "en").map((entry) => entry.id)).toEqual(["editor-line-numbers"]);
+  });
+
+  it("indexes SQL Server space confirmation when SQL Server exists or an exported setting is enabled", () => {
+    const definition = SETTINGS_SEARCH_DEFINITIONS.find((entry) => entry.id === "editor-sqlserver-space-completion");
+    expect(definition).toEqual(
+      expect.objectContaining({
+        id: "editor-sqlserver-space-completion",
+        category: "editor",
+        titleKey: "settings.sqlServerSpaceConfirmsCompletion",
+        descriptionKey: "settings.sqlServerSpaceConfirmsCompletionDescription",
+        targetId: "editor",
+        visible: expect.any(Function),
+      }),
+    );
+
+    const context = { isWeb: false, visibleCategories: new Set<SettingsCategory>(["editor"]) };
+    const withoutSqlServer = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { ...context, hasSqlServerConnection: false, sqlServerSpaceConfirmsCompletionEnabled: false }, translate, categoryLabels);
+    const importedWithoutSqlServer = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { ...context, hasSqlServerConnection: false, sqlServerSpaceConfirmsCompletionEnabled: true }, translate, categoryLabels);
+    const withSqlServer = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { ...context, hasSqlServerConnection: true, sqlServerSpaceConfirmsCompletionEnabled: false }, translate, categoryLabels);
+
+    expect(withoutSqlServer.map((entry) => entry.id)).not.toContain("editor-sqlserver-space-completion");
+    expect(importedWithoutSqlServer.map((entry) => entry.id)).toContain("editor-sqlserver-space-completion");
+    expect(withSqlServer.map((entry) => entry.id)).toContain("editor-sqlserver-space-completion");
+  });
+
+  it("does not index connection or query timeout under editor settings", () => {
+    expect(SETTINGS_SEARCH_DEFINITIONS.map((definition) => definition.id)).not.toContain("editor-global-connect-timeout");
+    expect(SETTINGS_SEARCH_DEFINITIONS.map((definition) => definition.id)).not.toContain("editor-global-query-timeout");
+  });
+
+  it("indexes the multi-statement default view and its settings control", () => {
+    expect(SETTINGS_SEARCH_DEFINITIONS).toContainEqual({
+      id: "multi-statement-default-view",
+      category: "data",
+      titleKey: "settings.multiStatementDefaultView",
+      descriptionKey: "settings.multiStatementDefaultViewDescription",
+      targetId: "multi-statement-default-view",
+    });
+  });
+
+  it("places SQL file limits in their owning settings categories", () => {
+    expect(SETTINGS_SEARCH_DEFINITIONS).toContainEqual({
+      id: "sql-file-editor-max-mb",
+      category: "editor",
+      titleKey: "settings.externalSqlEditorMaxMb",
+      descriptionKey: "settings.externalSqlEditorMaxMbDescription",
+      targetId: "editor-sql-file",
+    });
+    expect(SETTINGS_SEARCH_DEFINITIONS).toContainEqual({
+      id: "sql-file-web-upload-max-mb",
+      category: "data",
+      titleKey: "settings.webSqlFileUploadMaxMb",
+      descriptionKey: "settings.webSqlFileUploadMaxMbDescription",
+      targetId: "data-sql-file-upload",
+      visible: expect.any(Function),
+    });
+
+    const desktopEntries = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { isWeb: false, visibleCategories: new Set<SettingsCategory>(["editor", "data"]) }, translate, categoryLabels);
+    const webEntries = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { isWeb: true, visibleCategories: new Set<SettingsCategory>(["editor", "data"]) }, translate, categoryLabels);
+    expect(desktopEntries.map((entry) => entry.id)).toContain("sql-file-editor-max-mb");
+    expect(desktopEntries.map((entry) => entry.id)).not.toContain("sql-file-web-upload-max-mb");
+    expect(webEntries.map((entry) => entry.id)).toEqual(expect.arrayContaining(["sql-file-editor-max-mb", "sql-file-web-upload-max-mb"]));
+  });
+
+  it("points the debug logging result at the About tab that renders the switch", () => {
+    // The 启用调试日志 switch (id="debug-logging-enabled") is rendered inside the
+    // About section, next to the debug log copy/download/clear actions. The
+    // search entry used to claim "appearance", so picking the result switched
+    // to 外观 and never revealed the control (regression from #10308).
+    expect(SETTINGS_SEARCH_DEFINITIONS).toContainEqual({
+      id: "about-debug-logs",
+      category: "about",
+      titleKey: "settings.debugLoggingEnabled",
+      descriptionKey: "settings.debugLoggingEnabledDescription",
+      targetId: "about",
+      visible: expect.any(Function),
+    });
+    expect(SETTINGS_SEARCH_DEFINITIONS.map((definition) => definition.id)).not.toContain("appearance-debug-logs");
+
+    const desktopEntries = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { isWeb: false, visibleCategories: new Set<SettingsCategory>(["appearance", "about"]) }, translate, categoryLabels);
+    const entry = desktopEntries.find((item) => item.id === "about-debug-logs");
+    expect(entry?.category).toBe("about");
+    expect(entry?.categoryLabel).toBe("About");
+    expect(entry?.targetId).toBe("about");
+
+    const webEntries = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { isWeb: true, visibleCategories: new Set<SettingsCategory>(["appearance", "about"]) }, translate, categoryLabels);
+    expect(webEntries.map((item) => item.id)).not.toContain("about-debug-logs");
+  });
+
+  it("maps legacy SQL file settings navigation to the editor", () => {
+    expect(resolveSettingsCategory("sqlFile")).toBe("editor");
+    expect(resolveSettingsCategory("updates")).toBe("about");
+    expect(resolveSettingsCategory()).toBe("appearance");
+    expect(resolveSettingsCategory("removed-category")).toBe("appearance");
+  });
+
+  it("matches translated title, description, and category without changing declared order", () => {
+    const entries = resolveSettingsSearchEntries(definitions, { isWeb: false, visibleCategories: allCategories }, translate, categoryLabels);
+    expect(searchSettings(entries, "TYPEFACE", "en").map((entry) => entry.id)).toEqual(["font"]);
+    expect(searchSettings(entries, "data", "en").map((entry) => entry.id)).toEqual(["export"]);
+    expect(searchSettings(entries, "font", "en").map((entry) => entry.id)).toEqual(["font"]);
+  });
+
+  it("returns no result for empty queries and honours visibility conditions", () => {
+    const webEntries = resolveSettingsSearchEntries(definitions, { isWeb: true, visibleCategories: allCategories }, translate, categoryLabels);
+    expect(searchSettings(webEntries, "  ", "en")).toEqual([]);
+    expect(searchSettings(webEntries, "desktop", "en")).toEqual([]);
+  });
+
+  it("exposes WebDAV sync in Web settings without exposing snippet sync", () => {
+    const webEntries = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { isWeb: true, visibleCategories: new Set<SettingsCategory>(["sync"]) }, translate, categoryLabels);
+
+    expect(webEntries.map((entry) => entry.id)).toEqual(["sync-webdav", "sync-webdav-endpoint", "sync-webdav-username", "sync-webdav-password", "sync-webdav-remote-path", "sync-webdav-auto-upload", "sync-secrets", "sync-secrets-passphrase"]);
+  });
+
+  it("matches Chinese text as a Unicode substring", () => {
+    expect(searchSettings([{ id: "font", category: "editor", title: "界面字体", description: "选择应用字体", categoryLabel: "编辑器", targetId: "editor" }], "字体", "zh-CN").map((entry) => entry.id)).toEqual(["font"]);
+  });
+
+  it("filters out unavailable categories and caps results", () => {
+    const entries = resolveSettingsSearchEntries(definitions, { isWeb: false, visibleCategories: new Set<SettingsCategory>(["editor", "data"]) }, translate, categoryLabels);
+    expect(entries.map((entry) => entry.id)).toEqual(["font", "export"]);
+    expect(
+      searchSettings(
+        Array.from({ length: 10 }, (_, index) => ({ ...entries[0], id: String(index) })),
+        "font",
+        "en",
+      ),
+    ).toHaveLength(8);
+  });
+
+  it("returns matching categories in the navigation order", () => {
+    const entries = resolveSettingsSearchEntries(definitions, { isWeb: false, visibleCategories: new Set<SettingsCategory>(["data", "editor", "about"]) }, translate, categoryLabels);
+
+    expect(entries.map((entry) => entry.id)).toEqual(["export", "font", "desktop"]);
+  });
+
+  it("preserves nested settings routes on resolved entries", () => {
+    const [entry] = resolveSettingsSearchEntries([{ id: "snippet", category: "sync", title: "GitHub", targetId: "sync-snippet", route: { syncMethodTab: "snippet" } }], { isWeb: false, visibleCategories: new Set<SettingsCategory>(["sync"]) }, translate, categoryLabels);
+
+    expect(entry).toMatchObject({ targetId: "sync-snippet", route: { syncMethodTab: "snippet" } });
+  });
+
+  it("derives one search result for every built-in shortcut", () => {
+    expect(
+      createShortcutSettingsSearchDefinitions([
+        { id: "formatSql", labelKey: "settings.shortcutFormatSql" },
+        { id: "toggleLineComment", labelKey: "settings.shortcutToggleLineComment" },
+      ]),
+    ).toEqual([
+      { id: "shortcut-formatSql", category: "shortcuts", titleKey: "settings.shortcutFormatSql", targetId: "shortcuts", shortcutId: "formatSql" },
+      { id: "shortcut-toggleLineComment", category: "shortcuts", titleKey: "settings.shortcutToggleLineComment", targetId: "shortcuts", shortcutId: "toggleLineComment" },
+    ]);
+  });
+
+  it("derives a search result for every toolbar visibility control", () => {
+    const definitions = createToolbarVisibilitySettingsSearchDefinitions();
+
+    expect(definitions).toHaveLength(TOOLBAR_VISIBILITY_ITEMS.length);
+    expect(definitions.map((definition) => definition.id)).toEqual(TOOLBAR_VISIBILITY_ITEMS.map((item) => `appearance-toolbar-${item.key}`));
+    expect(definitions).toContainEqual({ id: "appearance-toolbar-sqlLibrary", category: "appearance", titleKey: "sqlLibrary.title", targetId: "appearance" });
+    expect(definitions).toContainEqual({ id: "appearance-toolbar-ai", category: "appearance", title: "AI", targetId: "appearance" });
+    expect(definitions).toContainEqual({ id: "appearance-toolbar-alwaysOnTop", category: "appearance", titleKey: "toolbar.alwaysOnTop", targetId: "appearance", visible: expect.any(Function) });
+  });
+
+  it("does not advertise ineffective visibility switches for fixed Tools menu entries", () => {
+    const retired = ["dataTransfer", "driverManager", "pluginCenter", "sqlFile", "schemaDiff", "dataCompare", "github", "checkUpdates"];
+    const controls = TOOLBAR_VISIBILITY_ITEMS.map((item) => item.key);
+    const entries = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { isWeb: false, visibleCategories: allCategories }, translate, categoryLabels);
+    for (const key of retired) {
+      expect(controls).not.toContain(key);
+      expect(entries.map((entry) => entry.id)).not.toContain(`appearance-toolbar-${key}`);
+    }
+    expect(controls).toEqual(expect.arrayContaining(["sqlLibrary", "sqlFileTree", "history", "ai"]));
+  });
+
+  it("keeps the desktop-only toolbar switch and its search entry out of the Web build", () => {
+    const desktopKeys = visibleToolbarVisibilityItems(TOOLBAR_VISIBILITY_ITEMS, false).map((item) => item.key);
+    const webKeys = visibleToolbarVisibilityItems(TOOLBAR_VISIBILITY_ITEMS, true).map((item) => item.key);
+    expect(desktopKeys).toEqual(TOOLBAR_VISIBILITY_ITEMS.map((item) => item.key));
+    expect(webKeys).not.toContain("alwaysOnTop");
+    expect(webKeys).toContain("theme");
+
+    const definitions = createToolbarVisibilitySettingsSearchDefinitions();
+    const entryIds = (isWeb: boolean) => resolveSettingsSearchEntries(definitions, { isWeb, visibleCategories: new Set<SettingsCategory>(["appearance"]) }, (key) => key, categoryLabels).map((entry) => entry.id);
+    expect(entryIds(false)).toContain("appearance-toolbar-alwaysOnTop");
+    expect(entryIds(true)).not.toContain("appearance-toolbar-alwaysOnTop");
+  });
+
+  it("indexes the existing descriptions for fixed appearance controls", () => {
+    const descriptionTranslations: Record<string, string> = {
+      "settings.uiScale": "Interface scale",
+      "settings.uiScaleDescription": "Scale the interface for high-DPI displays",
+      "settings.uiFontFamily": "Interface font",
+      "settings.uiFontFamilyDescription": "Applies to the toolbar and dialogs",
+      "settings.showTrayIcon": "Show tray icon",
+      "settings.showTrayIconDescription": "Keep DBX hidden in the background",
+    };
+    const entries = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { isWeb: false, visibleCategories: new Set<SettingsCategory>(["appearance"]) }, (key) => descriptionTranslations[key] ?? key, categoryLabels);
+
+    expect(searchSettings(entries, "high-DPI", "en").map((entry) => entry.id)).toEqual(["appearance-ui-scale"]);
+    expect(searchSettings(entries, "toolbar and dialogs", "en").map((entry) => entry.id)).toEqual(["appearance-ui-font"]);
+    expect(searchSettings(entries, "hidden in the background", "en").map((entry) => entry.id)).toEqual(["appearance-tray"]);
+  });
+
+  it("indexes the metadata cache memory limit under data settings", () => {
+    expect(SETTINGS_SEARCH_DEFINITIONS).toContainEqual(
+      expect.objectContaining({
+        id: "data-performance",
+        category: "data",
+        titleKey: "settings.performanceSection",
+        targetId: "data-performance",
+      }),
+    );
+    expect(SETTINGS_SEARCH_DEFINITIONS).toContainEqual(
+      expect.objectContaining({
+        id: "data-metadata-cache",
+        category: "data",
+        titleKey: "settings.metadataCacheMemoryLimit",
+        targetId: "data-performance",
+      }),
+    );
+  });
+
+  it("registers every fixed settings control that needs a dedicated search result", () => {
+    const expectedControls: ReadonlyArray<Pick<SettingsSearchDefinition, "titleKey" | "category" | "targetId">> = [
+      { titleKey: "settings.savedSqlOpenTarget", category: "editor", targetId: "editor" },
+      { titleKey: "settings.confirmDangerousSqlExecution", category: "editor", targetId: "editor" },
+      { titleKey: "settings.continueOnErrorOnBatch", category: "editor", targetId: "editor" },
+      { titleKey: "settings.dataGridQuickEntry", category: "data", targetId: "data" },
+      { titleKey: "settings.dataGridToolbarLayout", category: "data", targetId: "data-grid-toolbar-layout" },
+      { titleKey: "settings.dataGridFilterView", category: "data", targetId: "data-grid-filter-view" },
+      { titleKey: "settings.colorizeDataGridCellTypes", category: "data", targetId: "data" },
+      { titleKey: "sqlLibrary.title", category: "appearance", targetId: "appearance" },
+      { titleKey: "history.title", category: "appearance", targetId: "appearance" },
+      { titleKey: "toolbar.theme", category: "appearance", targetId: "appearance" },
+      { titleKey: "settings.sidebarObjectInfoMode", category: "navigation", targetId: "navigation" },
+      { titleKey: "settings.insertSpaceAfterCompletion", category: "editor", targetId: "editor" },
+      { titleKey: "settings.completionTriggerMode", category: "editor", targetId: "editor" },
+      { titleKey: "settings.tableCompletionSchemaQualification", category: "editor", targetId: "editor" },
+      { titleKey: "settings.autoAliasTables", category: "editor", targetId: "editor" },
+      { titleKey: "settings.clickTableNavigationTarget", category: "navigation", targetId: "navigation" },
+      { titleKey: "settings.prefillNewQueryWithSelect", category: "navigation", targetId: "navigation" },
+      { titleKey: "settings.generateSqlIncludeDatabaseName", category: "editor", targetId: "editor" },
+      { titleKey: "settings.generateSqlQuoteIdentifiers", category: "editor", targetId: "editor" },
+      { titleKey: "settings.formatSqlOnSqlFileSave", category: "editor", targetId: "editor" },
+      { titleKey: "settings.showTableDdlHoverPreview", category: "editor", targetId: "editor" },
+      { titleKey: "settings.sqlFormatterKeywordCase", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterFunctionCase", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterDataTypeCase", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterIdentifierCase", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterIndent", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterTabWidth", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterIndentStyle", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterLogicalOperatorNewline", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterExpressionWidth", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterLinesBetweenQueries", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterPreserveEmptyLines", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterDenseOperators", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterNewlineBeforeSemicolon", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.sqlFormatterParamTypes", category: "formatter", targetId: "formatter" },
+      { titleKey: "settings.routineSourceOpenMode", category: "navigation", targetId: "navigation" },
+      { titleKey: "settings.disconnectTabHandlingMode", category: "navigation", targetId: "navigation" },
+      { titleKey: "settings.compactColumnHeaderActions", category: "data", targetId: "data" },
+      { titleKey: "settings.infiniteScroll", category: "data", targetId: "data" },
+      { titleKey: "settings.globalDateTimeDisplayFormat", category: "data", targetId: "data" },
+      { titleKey: "settings.globalDateTimeExportFormat", category: "data", targetId: "data" },
+      { titleKey: "settings.globalDateTimeImportFormat", category: "data", targetId: "data" },
+      { titleKey: "settings.exportRowLimitEnabled", category: "data", targetId: "data" },
+      { titleKey: "settings.exportRowLimit", category: "data", targetId: "data" },
+      { titleKey: "settings.queryExportKeysetOptimizationEnabled", category: "data", targetId: "data" },
+      { titleKey: "ai.defaultAiMode", category: "ai", targetId: "ai" },
+      { titleKey: "ai.defaultAutoRouting", category: "ai", targetId: "ai" },
+      { titleKey: "ai.maxAgentTurns", category: "ai", targetId: "ai" },
+      { titleKey: "ai.maxRetriesGlobal", category: "ai", targetId: "ai" },
+      { titleKey: "ai.globalInstructions", category: "ai", targetId: "ai" },
+    ];
+
+    for (const expectedControl of expectedControls) {
+      expect(SETTINGS_SEARCH_DEFINITIONS).toContainEqual(expect.objectContaining(expectedControl));
+    }
+  });
+});

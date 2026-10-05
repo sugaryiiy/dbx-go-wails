@@ -1,0 +1,900 @@
+import { reactive, computed } from "vue";
+import * as api from "@/lib/backend/api";
+import { isTerminalTransferProgress } from "@/lib/backend/transferProgress";
+import { uuid } from "@/lib/common/utils";
+import { formatQueryDuration } from "@/lib/format/duration";
+
+export type BackgroundTaskKind = "table-export" | "database-export" | "data-dictionary" | "sql-file" | "data-transfer" | "data-generation" | "multi-db-execution" | "schema-diff" | "data-compare";
+export type BackgroundTaskStatus = "Running" | "Writing" | "Cancelling" | "Done" | "Error" | "Cancelled";
+export type DatabaseExportSource = "manual" | "scheduled";
+
+export interface DataTransferFailure {
+  table: string;
+  error: string;
+  truncated?: boolean;
+}
+
+export interface SqlFileFailure {
+  statementIndex: number;
+  statementSummary: string;
+  error: string;
+  fileIndex?: number;
+  fileName?: string;
+  truncated?: boolean;
+}
+
+export interface SqlFileFailureContext {
+  fileIndex?: number;
+  fileName?: string;
+}
+
+export interface ExportTask {
+  exportId: string;
+  kind: BackgroundTaskKind;
+  tableName: string;
+  format: string;
+  filePath: string;
+  rowsExported: number;
+  totalRows: number | null;
+  status: BackgroundTaskStatus;
+  errorMessage: string | null;
+  databaseExportSource?: DatabaseExportSource;
+  currentObject?: string;
+  preparing?: boolean;
+  objectIndex?: number;
+  totalObjects?: number;
+  overallPercent?: number;
+  statementIndex?: number;
+  successCount?: number;
+  failureCount?: number;
+  affectedRows?: number;
+  elapsedMs?: number;
+  bytesRead?: number;
+  totalBytes?: number;
+  sqlFilePhase?: api.SqlFileProgress["phase"];
+  startedAt?: number;
+  finishedAt?: number;
+  statementSummary?: string;
+  tableIndex?: number;
+  totalTables?: number;
+  currentTable?: string;
+  targetConnectionId?: string;
+  targetCatalog?: string;
+  targetDatabase?: string;
+  targetSchema?: string;
+  targetTables?: string[];
+  transferFailures?: DataTransferFailure[];
+  transferFailuresOmitted?: number;
+  sqlFileFailures?: SqlFileFailure[];
+  sqlFileFailuresOmitted?: number;
+  multiDbSourceTabId?: string;
+  multiDbTotal?: number;
+  multiDbCompleted?: number;
+  multiDbSuccessCount?: number;
+  multiDbFailureCount?: number;
+  multiDbSkippedCount?: number;
+  multiDbNotExecutedCount?: number;
+  currentTarget?: { connectionId: string; catalog?: string; database: string; schema?: string };
+  comparePhase?: string;
+  compareCurrent?: number;
+  compareTotal?: number;
+  compareCurrentObject?: string;
+  compareResultCount?: number;
+  compareSameCount?: number;
+  compareDifferentCount?: number;
+  compareFailedCount?: number;
+  compareAddedCount?: number;
+  compareRemovedCount?: number;
+  compareModifiedCount?: number;
+  dictionaryPhase?: "preparing" | "collecting" | "generating" | "saving";
+  dictionaryCompleted?: number;
+  dictionaryTotal?: number;
+  dictionaryCurrent?: string;
+  dictionaryWarnings?: number;
+  dictionaryProgressKnown?: boolean;
+  canCancel?: boolean;
+  onOpen?: () => void;
+  onRemove?: () => void;
+}
+
+export interface CompareTaskProgress {
+  status: Extract<BackgroundTaskStatus, "Running" | "Done" | "Error" | "Cancelled">;
+  comparePhase?: string;
+  compareCurrent?: number;
+  compareTotal?: number;
+  compareCurrentObject?: string;
+  compareResultCount?: number;
+  compareSameCount?: number;
+  compareDifferentCount?: number;
+  compareFailedCount?: number;
+  compareAddedCount?: number;
+  compareRemovedCount?: number;
+  compareModifiedCount?: number;
+  errorMessage?: string | null;
+}
+
+export interface MultiDbExecutionTaskProgress {
+  sourceTabId: string;
+  total: number;
+  completed: number;
+  successCount: number;
+  failureCount: number;
+  skippedCount: number;
+  notExecutedCount: number;
+  status: "running" | "completed" | "cancelled";
+  startedAt: number;
+  finishedAt?: number;
+  elapsedMs?: number;
+  currentTarget?: { connectionId: string; catalog?: string; database: string; schema?: string };
+  errorMessage?: string;
+}
+
+export interface DataGenerationTaskProgress {
+  status: BackgroundTaskStatus;
+  tableIndex: number;
+  totalTables: number;
+  currentTable: string;
+  rowsGenerated: number;
+  totalRows: number;
+  errorMessage?: string | null;
+}
+
+export const MAX_TRANSFER_FAILURE_DETAILS = 100;
+export const MAX_TRANSFER_FAILURE_DETAIL_BYTES = 128 * 1024;
+export const MAX_TRANSFER_FAILURE_ERROR_BYTES = 8 * 1024;
+export const MAX_SQL_FILE_FAILURE_DETAILS = 500;
+export const MAX_SQL_FILE_FAILURE_DETAIL_BYTES = 2 * 1024 * 1024;
+export const MAX_SQL_FILE_FAILURE_ERROR_BYTES = 8 * 1024;
+export const MAX_SQL_FILE_FAILURE_SUMMARY_BYTES = 2 * 1024;
+const MAX_SQL_FILE_FAILURE_NAME_BYTES = 1024;
+const MAX_TRACKED_OMITTED_FAILURES = 4096;
+
+interface TransferFailureState {
+  indexes: Map<string, number>;
+  retainedBytes: number;
+  omittedHashes: Set<number>;
+  localOmittedCount: number;
+  replayOmittedCount: number;
+}
+
+interface SqlFileFailureState {
+  indexes: Map<string, number>;
+  retainedBytes: number;
+  omittedKeys: Set<string>;
+  omittedCount: number;
+}
+
+const taskMap = reactive<Map<string, ExportTask>>(new Map());
+const activeTransferRuns = new Set<string>();
+const taskCancelHandlers = new Map<string, () => void | Promise<void>>();
+const transferFailureStates = new Map<string, TransferFailureState>();
+const sqlFileFailureStates = new Map<string, SqlFileFailureState>();
+const textEncoder = new TextEncoder();
+
+function utf8ByteLength(value: string): number {
+  return textEncoder.encode(value).length;
+}
+
+function truncateUtf8(value: string, maxBytes: number): { value: string; bytes: number; truncated: boolean } {
+  const encodedBytes = utf8ByteLength(value);
+  if (encodedBytes <= maxBytes) return { value, bytes: encodedBytes, truncated: false };
+
+  let result = "";
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = utf8ByteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    result += character;
+    bytes += characterBytes;
+  }
+  return { value: result, bytes, truncated: true };
+}
+
+function failureTableHash(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+function getTransferFailureState(task: ExportTask): TransferFailureState {
+  let state = transferFailureStates.get(task.exportId);
+  if (state) return state;
+
+  const failures = task.transferFailures ?? [];
+  state = {
+    indexes: new Map(failures.map((failure, index) => [failure.table, index])),
+    retainedBytes: failures.reduce((total, failure) => total + utf8ByteLength(failure.table) + utf8ByteLength(failure.error), 0),
+    omittedHashes: new Set(),
+    localOmittedCount: task.transferFailuresOmitted ?? 0,
+    replayOmittedCount: 0,
+  };
+  transferFailureStates.set(task.exportId, state);
+  return state;
+}
+
+function syncTransferFailureOmittedCount(task: ExportTask, state: TransferFailureState) {
+  task.transferFailuresOmitted = state.localOmittedCount + state.replayOmittedCount;
+}
+
+function recordOmittedTransferFailure(task: ExportTask, state: TransferFailureState, table: string) {
+  const hash = failureTableHash(table);
+  if (state.omittedHashes.has(hash)) return;
+  if (state.omittedHashes.size >= MAX_TRACKED_OMITTED_FAILURES) return;
+  state.omittedHashes.add(hash);
+  state.localOmittedCount += 1;
+  syncTransferFailureOmittedCount(task, state);
+}
+
+function recordTransferFailure(task: ExportTask, table: string, error: string) {
+  task.transferFailures ??= [];
+  const state = getTransferFailureState(task);
+  const existingIndex = state.indexes.get(table);
+  if (existingIndex !== undefined) {
+    const existing = task.transferFailures[existingIndex];
+    const previousErrorBytes = utf8ByteLength(existing.error);
+    const availableBytes = Math.min(MAX_TRANSFER_FAILURE_ERROR_BYTES, MAX_TRANSFER_FAILURE_DETAIL_BYTES - (state.retainedBytes - previousErrorBytes));
+    const nextError = truncateUtf8(error, Math.max(0, availableBytes));
+    existing.error = nextError.value;
+    if (nextError.truncated) existing.truncated = true;
+    else delete existing.truncated;
+    state.retainedBytes += nextError.bytes - previousErrorBytes;
+    return;
+  }
+
+  const tableBytes = utf8ByteLength(table);
+  const availableBytes = Math.min(MAX_TRANSFER_FAILURE_ERROR_BYTES, MAX_TRANSFER_FAILURE_DETAIL_BYTES - state.retainedBytes - tableBytes);
+  if (task.transferFailures.length >= MAX_TRANSFER_FAILURE_DETAILS || availableBytes <= 0) {
+    recordOmittedTransferFailure(task, state, table);
+    return;
+  }
+
+  const retainedError = truncateUtf8(error, availableBytes);
+  const failure: DataTransferFailure = { table, error: retainedError.value };
+  if (retainedError.truncated) failure.truncated = true;
+  state.indexes.set(table, task.transferFailures.length);
+  state.retainedBytes += tableBytes + retainedError.bytes;
+  task.transferFailures.push(failure);
+}
+
+function sqlFileFailureKey(statementIndex: number, fileIndex?: number): string {
+  return `${fileIndex ?? -1}:${statementIndex}`;
+}
+
+function sqlFileFailureBytes(failure: SqlFileFailure): number {
+  return utf8ByteLength(failure.statementSummary) + utf8ByteLength(failure.error) + utf8ByteLength(failure.fileName ?? "");
+}
+
+function getSqlFileFailureState(task: ExportTask): SqlFileFailureState {
+  let state = sqlFileFailureStates.get(task.exportId);
+  if (state) return state;
+
+  const failures = task.sqlFileFailures ?? [];
+  state = {
+    indexes: new Map(failures.map((failure, index) => [sqlFileFailureKey(failure.statementIndex, failure.fileIndex), index])),
+    retainedBytes: failures.reduce((total, failure) => total + sqlFileFailureBytes(failure), 0),
+    omittedKeys: new Set(),
+    omittedCount: task.sqlFileFailuresOmitted ?? 0,
+  };
+  sqlFileFailureStates.set(task.exportId, state);
+  return state;
+}
+
+function recordOmittedSqlFileFailure(task: ExportTask, state: SqlFileFailureState, key: string) {
+  if (state.omittedKeys.has(key) || state.omittedKeys.size >= MAX_TRACKED_OMITTED_FAILURES) return;
+  state.omittedKeys.add(key);
+  state.omittedCount += 1;
+  task.sqlFileFailuresOmitted = state.omittedCount;
+}
+
+function buildSqlFileFailure(progress: api.SqlFileProgress, context?: SqlFileFailureContext, availableBytes = MAX_SQL_FILE_FAILURE_DETAIL_BYTES): SqlFileFailure | null {
+  const retainedName = truncateUtf8(context?.fileName ?? progress.fileName ?? "", MAX_SQL_FILE_FAILURE_NAME_BYTES);
+  const retainedSummary = truncateUtf8(progress.statementSummary, MAX_SQL_FILE_FAILURE_SUMMARY_BYTES);
+  const fixedBytes = retainedName.bytes + retainedSummary.bytes;
+  if (fixedBytes >= availableBytes) return null;
+
+  const retainedError = truncateUtf8(progress.error ?? "", Math.min(MAX_SQL_FILE_FAILURE_ERROR_BYTES, availableBytes - fixedBytes));
+  const failure: SqlFileFailure = {
+    statementIndex: progress.statementIndex,
+    statementSummary: retainedSummary.value,
+    error: retainedError.value,
+  };
+  const fileIndex = context?.fileIndex ?? progress.fileIndex;
+  if (fileIndex !== undefined) failure.fileIndex = fileIndex;
+  if (retainedName.value) failure.fileName = retainedName.value;
+  if (retainedName.truncated || retainedSummary.truncated || retainedError.truncated) failure.truncated = true;
+  return failure;
+}
+
+function recordSqlFileFailure(task: ExportTask, progress: api.SqlFileProgress, context?: SqlFileFailureContext) {
+  if (progress.status !== "statementFailed" || !progress.error) return;
+  task.sqlFileFailures ??= [];
+  const state = getSqlFileFailureState(task);
+  const fileIndex = context?.fileIndex ?? progress.fileIndex;
+  const key = sqlFileFailureKey(progress.statementIndex, fileIndex);
+  const existingIndex = state.indexes.get(key);
+  const previousBytes = existingIndex === undefined ? 0 : sqlFileFailureBytes(task.sqlFileFailures[existingIndex]!);
+  const availableBytes = MAX_SQL_FILE_FAILURE_DETAIL_BYTES - state.retainedBytes + previousBytes;
+  const failure = buildSqlFileFailure(progress, context, availableBytes);
+
+  if (!failure || (existingIndex === undefined && task.sqlFileFailures.length >= MAX_SQL_FILE_FAILURE_DETAILS)) {
+    recordOmittedSqlFileFailure(task, state, key);
+    return;
+  }
+
+  if (existingIndex !== undefined) {
+    task.sqlFileFailures[existingIndex] = failure;
+    state.retainedBytes += sqlFileFailureBytes(failure) - previousBytes;
+    return;
+  }
+
+  state.indexes.set(key, task.sqlFileFailures.length);
+  state.retainedBytes += sqlFileFailureBytes(failure);
+  task.sqlFileFailures.push(failure);
+}
+
+function normalizeExportStatus(status: string): BackgroundTaskStatus {
+  if (status === "Writing" || status === "Done" || status === "Error" || status === "Cancelled") return status;
+  return "Running";
+}
+
+function normalizeSqlFileStatus(status: api.SqlFileStatus): BackgroundTaskStatus {
+  if (status === "done") return "Done";
+  if (status === "error") return "Error";
+  if (status === "cancelled") return "Cancelled";
+  return "Running";
+}
+
+function normalizeTransferStatus(status: api.TransferProgress["status"], terminal: boolean): BackgroundTaskStatus {
+  if (status === "done") return "Done";
+  if (status === "error") return terminal ? "Error" : "Running";
+  if (status === "cancelled") return "Cancelled";
+  return "Running";
+}
+
+function finishDataTransferTask(task: ExportTask) {
+  // Preserve the first terminal timestamp so later completion events cannot change the displayed duration.
+  task.finishedAt ??= Date.now();
+}
+
+function finishExportTask(task: ExportTask) {
+  task.finishedAt ??= Date.now();
+}
+
+// Implementation lives in @/lib/format/duration (shared with the DataGrid
+// footer / history elapsed hints); the data-transfer name is kept for the
+// export/multi-db call sites.
+export { formatQueryDuration as formatDataTransferDuration };
+
+function targetTableName(table: string, nameCase: api.TransferTableNameCase): string {
+  if (nameCase === "lower") return table.toLowerCase();
+  if (nameCase === "upper") return table.toUpperCase();
+  return table;
+}
+
+function findActiveOverlappingTransfer(request: api.TransferRequest): string[] {
+  const requestedTables = new Set(request.tables.map((table) => targetTableName(table, request.targetTableNameCase)));
+  for (const task of taskMap.values()) {
+    if (task.exportId === request.transferId) continue;
+    if (task.kind !== "data-transfer") continue;
+    if (task.status !== "Running" && task.status !== "Writing") continue;
+    if (task.targetConnectionId !== request.targetConnectionId) continue;
+    if ((task.targetCatalog ?? "") !== (request.targetCatalog ?? "")) continue;
+    if (task.targetDatabase !== request.targetDatabase) continue;
+    if (task.targetSchema !== request.targetSchema) continue;
+
+    const overlappingTables = (task.targetTables ?? []).filter((table) => requestedTables.has(table));
+    if (overlappingTables.length > 0) return overlappingTables;
+  }
+  return [];
+}
+
+export function useExportTracker() {
+  const tasks = computed(() => Array.from(taskMap.values()));
+
+  const activeCount = computed(() => tasks.value.filter((t) => t.status === "Running" || t.status === "Writing" || t.status === "Cancelling").length);
+
+  const hasActive = computed(() => activeCount.value > 0);
+
+  function addTask(tableName: string, format: string, filePath: string, exportId?: string): ExportTask {
+    const id = exportId ?? uuid();
+    const task = reactive<ExportTask>({
+      exportId: id,
+      kind: "table-export",
+      tableName,
+      format,
+      filePath,
+      rowsExported: 0,
+      totalRows: null,
+      status: "Running",
+      errorMessage: null,
+      startedAt: Date.now(),
+    });
+    taskMap.set(id, task);
+    return task;
+  }
+
+  function addDatabaseExportTask(exportId: string, label: string, filePath: string, databaseExportSource: DatabaseExportSource = "manual"): ExportTask {
+    const task = reactive<ExportTask>({
+      exportId,
+      kind: "database-export",
+      tableName: label,
+      format: "sql",
+      filePath,
+      rowsExported: 0,
+      totalRows: null,
+      status: "Running",
+      errorMessage: null,
+      databaseExportSource,
+      currentObject: "",
+      preparing: true,
+      objectIndex: 0,
+      totalObjects: 0,
+      startedAt: Date.now(),
+    });
+    taskMap.set(exportId, task);
+    return task;
+  }
+
+  function addDataDictionaryTask(exportId: string, label: string, total: number): ExportTask {
+    const task = reactive<ExportTask>({
+      exportId,
+      kind: "data-dictionary",
+      tableName: label,
+      format: "pdf",
+      filePath: "",
+      rowsExported: 0,
+      totalRows: null,
+      status: "Running",
+      errorMessage: null,
+      dictionaryPhase: "preparing",
+      dictionaryCompleted: 0,
+      dictionaryTotal: total,
+      dictionaryProgressKnown: false,
+      canCancel: false,
+      startedAt: Date.now(),
+    });
+    taskMap.set(exportId, task);
+    return task;
+  }
+
+  function updateDataDictionaryTask(exportId: string, changes: Partial<ExportTask>): void {
+    const task = taskMap.get(exportId);
+    if (!task || task.kind !== "data-dictionary") return;
+    Object.assign(task, changes);
+    if (task.status === "Done" || task.status === "Error") finishExportTask(task);
+  }
+
+  function addSqlFileTask(executionId: string, fileName: string, filePath: string): ExportTask {
+    sqlFileFailureStates.delete(executionId);
+    const task = reactive<ExportTask>({
+      exportId: executionId,
+      kind: "sql-file",
+      tableName: fileName,
+      format: "sql",
+      filePath,
+      rowsExported: 0,
+      totalRows: null,
+      status: "Running",
+      errorMessage: null,
+      statementIndex: 0,
+      successCount: 0,
+      failureCount: 0,
+      affectedRows: 0,
+      elapsedMs: 0,
+      statementSummary: "",
+      sqlFileFailures: [],
+      sqlFileFailuresOmitted: 0,
+    });
+    taskMap.set(executionId, task);
+    return task;
+  }
+
+  function addDataTransferTask(transferId: string, label: string, totalTables: number): ExportTask {
+    transferFailureStates.delete(transferId);
+    const task = reactive<ExportTask>({
+      exportId: transferId,
+      kind: "data-transfer",
+      tableName: label,
+      format: "transfer",
+      filePath: "",
+      rowsExported: 0,
+      totalRows: null,
+      status: "Running",
+      errorMessage: null,
+      tableIndex: 0,
+      totalTables,
+      currentTable: "",
+      startedAt: Date.now(),
+      transferFailures: [],
+      transferFailuresOmitted: 0,
+    });
+    taskMap.set(transferId, task);
+    return task;
+  }
+
+  function addDataGenerationTask(executionId: string, label: string, totalRows: number, totalTables: number, onOpen?: () => void, onRemove?: () => void): ExportTask {
+    const task = reactive<ExportTask>({
+      exportId: executionId,
+      kind: "data-generation",
+      tableName: label,
+      format: "generate",
+      filePath: "",
+      rowsExported: 0,
+      totalRows,
+      status: "Running",
+      errorMessage: null,
+      tableIndex: 0,
+      totalTables,
+      currentTable: "",
+      canCancel: true,
+      onOpen,
+      onRemove,
+      startedAt: Date.now(),
+    });
+    taskMap.set(executionId, task);
+    return task;
+  }
+
+  function addCompareTask(kind: "schema-diff" | "data-compare", sessionId: string, label: string, onOpen?: () => void, onRemove?: () => void): ExportTask {
+    const task = reactive<ExportTask>({
+      exportId: sessionId,
+      kind,
+      tableName: label,
+      format: "compare",
+      filePath: "",
+      rowsExported: 0,
+      totalRows: null,
+      status: "Running",
+      errorMessage: null,
+      compareCurrent: 0,
+      compareTotal: 0,
+      compareCurrentObject: "",
+      canCancel: false,
+      onOpen,
+      onRemove,
+      startedAt: Date.now(),
+    });
+    taskMap.set(sessionId, task);
+    return task;
+  }
+
+  function addSchemaDiffTask(sessionId: string, label: string, onOpen?: () => void, onRemove?: () => void): ExportTask {
+    return addCompareTask("schema-diff", sessionId, label, onOpen, onRemove);
+  }
+
+  function addDataCompareTask(sessionId: string, label: string, onOpen?: () => void, onRemove?: () => void): ExportTask {
+    return addCompareTask("data-compare", sessionId, label, onOpen, onRemove);
+  }
+
+  function addMultiDbExecutionTask(batchId: string, label: string, sourceTabId: string, onOpen?: () => void): ExportTask {
+    const task = reactive<ExportTask>({
+      exportId: batchId,
+      kind: "multi-db-execution",
+      tableName: label,
+      format: "sql",
+      filePath: "",
+      rowsExported: 0,
+      totalRows: null,
+      status: "Running",
+      errorMessage: null,
+      multiDbSourceTabId: sourceTabId,
+      onOpen,
+      startedAt: Date.now(),
+    });
+    taskMap.set(batchId, task);
+    return task;
+  }
+
+  function updateMultiDbExecutionTask(batchId: string, progress: MultiDbExecutionTaskProgress): void {
+    const task = taskMap.get(batchId);
+    if (!task) return;
+    task.multiDbSourceTabId = progress.sourceTabId;
+    task.multiDbTotal = progress.total;
+    task.multiDbCompleted = progress.completed;
+    task.multiDbSuccessCount = progress.successCount;
+    task.multiDbFailureCount = progress.failureCount;
+    task.multiDbSkippedCount = progress.skippedCount;
+    task.multiDbNotExecutedCount = progress.notExecutedCount;
+    task.rowsExported = progress.completed;
+    task.totalRows = progress.total;
+    task.currentTarget = progress.currentTarget;
+    task.errorMessage = progress.errorMessage ?? null;
+    task.startedAt = progress.startedAt;
+    task.finishedAt = progress.finishedAt;
+    task.elapsedMs = progress.elapsedMs;
+    if (progress.status === "running") task.status = "Running";
+    else if (progress.status === "cancelled") task.status = "Cancelled";
+    else task.status = progress.failureCount > 0 ? "Error" : "Done";
+    if (task.status === "Done" || task.status === "Error" || task.status === "Cancelled") finishExportTask(task);
+  }
+
+  function startDataTransferTask(
+    request: api.TransferRequest,
+    label: string,
+    options: {
+      onStarted?: () => void;
+      onDone?: () => void | Promise<void>;
+      onOpen?: () => void;
+      formatOverlapError?: (tables: string[]) => string;
+    } = {},
+  ): ExportTask {
+    const existingTask = taskMap.get(request.transferId);
+    const task = existingTask ?? addDataTransferTask(request.transferId, label, request.tables.length);
+    task.onOpen = options.onOpen;
+    task.startedAt ??= Date.now();
+    task.targetConnectionId = request.targetConnectionId;
+    task.targetCatalog = request.targetCatalog;
+    task.targetDatabase = request.targetDatabase;
+    task.targetSchema = request.targetSchema;
+    task.targetTables = request.tables.map((table) => targetTableName(table, request.targetTableNameCase));
+    if (activeTransferRuns.has(request.transferId)) return task;
+
+    const overlappingTables = findActiveOverlappingTransfer(request);
+    if (overlappingTables.length > 0) {
+      task.status = "Error";
+      const visibleTables = overlappingTables.slice(0, 5);
+      task.errorMessage = options.formatOverlapError?.(visibleTables) ?? `Another data transfer is already running for target table(s): ${visibleTables.join(", ")}`;
+      finishDataTransferTask(task);
+      return task;
+    }
+
+    activeTransferRuns.add(request.transferId);
+    let terminalStatus: api.TransferProgress["status"] | null = null;
+    let startAcknowledged = false;
+    const acknowledgeStart = () => {
+      if (startAcknowledged) return;
+      startAcknowledged = true;
+      options.onStarted?.();
+    };
+
+    void (async () => {
+      try {
+        await api.startTransfer(
+          request,
+          (progress) => {
+            terminalStatus = isTerminalTransferProgress(progress) ? progress.status : terminalStatus;
+            updateDataTransferTask(progress.transferId, progress);
+          },
+          acknowledgeStart,
+        );
+
+        if (terminalStatus === "done" && task.status === "Done") {
+          await options.onDone?.();
+        }
+      } catch (e: any) {
+        updateDataTransferTask(request.transferId, {
+          transferId: request.transferId,
+          table: task.currentTable || "",
+          tableIndex: task.tableIndex ?? 0,
+          totalTables: task.totalTables ?? request.tables.length,
+          rowsTransferred: task.rowsExported,
+          totalRows: task.totalRows,
+          status: "error",
+          error: e?.message || String(e),
+          terminal: true,
+        });
+      } finally {
+        activeTransferRuns.delete(request.transferId);
+      }
+    })();
+
+    return task;
+  }
+
+  function updateTableExportTask(exportId: string, progress: api.TableExportProgress) {
+    const task = taskMap.get(exportId);
+    if (!task) return;
+    task.tableName = progress.tableName || task.tableName;
+    task.rowsExported = progress.rowsExported;
+    task.totalRows = progress.totalRows;
+    const nextStatus = normalizeExportStatus(progress.status);
+    task.status = task.status === "Cancelling" && (nextStatus === "Running" || nextStatus === "Writing") ? "Cancelling" : nextStatus;
+    task.errorMessage = progress.errorMessage || null;
+    if (task.status === "Done" || task.status === "Error" || task.status === "Cancelled") finishExportTask(task);
+  }
+
+  function updateDatabaseExportTask(exportId: string, progress: api.ExportProgress & { overallPercent?: number }) {
+    const task = taskMap.get(exportId);
+    if (!task) return;
+    task.currentObject = progress.currentObject;
+    task.preparing = !!progress.preparing;
+    task.rowsExported = progress.rowsExported;
+    task.totalRows = progress.totalRows;
+    const nextStatus = normalizeExportStatus(progress.status);
+    task.status = task.status === "Cancelling" && nextStatus === "Running" ? "Cancelling" : nextStatus;
+    task.errorMessage = progress.error || null;
+    task.objectIndex = progress.objectIndex;
+    task.totalObjects = progress.totalObjects;
+    if (progress.overallPercent !== undefined) {
+      task.overallPercent = Math.max(0, Math.min(100, Math.round(progress.overallPercent)));
+    }
+    if (task.status === "Done" || task.status === "Error" || task.status === "Cancelled") finishExportTask(task);
+  }
+
+  function markDatabaseExportTaskCancelling(exportId: string) {
+    const task = taskMap.get(exportId);
+    if (!task || task.kind !== "database-export" || task.status === "Done" || task.status === "Error" || task.status === "Cancelled") return;
+    task.status = "Cancelling";
+    task.preparing = false;
+  }
+
+  function markTableExportTaskCancelling(exportId: string) {
+    const task = taskMap.get(exportId);
+    if (!task || task.kind !== "table-export" || task.status === "Done" || task.status === "Error" || task.status === "Cancelled") return;
+    task.status = "Cancelling";
+  }
+
+  function restoreDatabaseExportTaskRunning(exportId: string) {
+    const task = taskMap.get(exportId);
+    if (task?.kind === "database-export" && task.status === "Cancelling") task.status = "Running";
+  }
+
+  function updateSqlFileTask(executionId: string, progress: api.SqlFileProgress, context?: SqlFileFailureContext) {
+    const task = taskMap.get(executionId);
+    if (!task) return;
+    recordSqlFileFailure(task, progress, context);
+    task.status = normalizeSqlFileStatus(progress.status);
+    task.errorMessage = progress.error || null;
+    task.statementIndex = progress.statementIndex;
+    task.successCount = progress.successCount;
+    task.failureCount = progress.failureCount;
+    task.affectedRows = progress.affectedRows;
+    task.elapsedMs = progress.elapsedMs;
+    task.bytesRead = progress.bytesRead ?? task.bytesRead;
+    task.totalBytes = progress.totalBytes ?? task.totalBytes;
+    task.sqlFilePhase = progress.phase ?? task.sqlFilePhase;
+    task.statementSummary = progress.statementSummary;
+    task.rowsExported = progress.successCount + progress.failureCount;
+    task.totalRows = null;
+  }
+
+  function updateDataTransferTask(transferId: string, progress: api.TransferProgress) {
+    const task = taskMap.get(transferId);
+    if (!task) return;
+    if (progress.transferFailuresOmitted !== undefined) {
+      const state = getTransferFailureState(task);
+      state.replayOmittedCount = Math.max(state.replayOmittedCount, progress.transferFailuresOmitted);
+      syncTransferFailureOmittedCount(task, state);
+    }
+    if (progress.status === "error" && !progress.terminal && progress.table && progress.error) {
+      recordTransferFailure(task, progress.table, progress.error);
+    }
+    const nextStatus = normalizeTransferStatus(progress.status, progress.terminal);
+    const hadError = task.status === "Error";
+    task.status = hadError && nextStatus === "Done" ? "Error" : nextStatus;
+    if (isTerminalTransferProgress(progress)) finishDataTransferTask(task);
+    task.errorMessage = progress.error || task.errorMessage || null;
+    task.tableIndex = progress.tableIndex;
+    task.totalTables = progress.totalTables;
+    task.currentTable = progress.table || task.currentTable;
+    if (progress.table || progress.rowsTransferred > 0 || task.rowsExported === 0) {
+      task.rowsExported = progress.rowsTransferred;
+    }
+    task.totalRows = progress.totalRows ?? task.totalRows;
+  }
+
+  function updateDataGenerationTask(executionId: string, progress: DataGenerationTaskProgress): void {
+    const task = taskMap.get(executionId);
+    if (!task || task.kind !== "data-generation") return;
+    task.status = progress.status;
+    task.tableIndex = progress.tableIndex;
+    task.totalTables = progress.totalTables;
+    task.currentTable = progress.currentTable;
+    task.rowsExported = progress.rowsGenerated;
+    task.totalRows = progress.totalRows;
+    task.errorMessage = progress.errorMessage ?? null;
+    if (task.status === "Done" || task.status === "Error" || task.status === "Cancelled") finishExportTask(task);
+  }
+
+  function updateCompareTask(sessionId: string, progress: CompareTaskProgress): void {
+    const task = taskMap.get(sessionId);
+    if (!task || (task.kind !== "schema-diff" && task.kind !== "data-compare")) return;
+    task.status = progress.status;
+    task.comparePhase = progress.comparePhase;
+    task.compareCurrent = progress.compareCurrent;
+    task.compareTotal = progress.compareTotal;
+    task.compareCurrentObject = progress.compareCurrentObject;
+    task.compareResultCount = progress.compareResultCount;
+    task.compareSameCount = progress.compareSameCount;
+    task.compareDifferentCount = progress.compareDifferentCount;
+    task.compareFailedCount = progress.compareFailedCount;
+    task.compareAddedCount = progress.compareAddedCount;
+    task.compareRemovedCount = progress.compareRemovedCount;
+    task.compareModifiedCount = progress.compareModifiedCount;
+    task.errorMessage = progress.errorMessage ?? null;
+    if (task.status === "Done" || task.status === "Error" || task.status === "Cancelled") finishExportTask(task);
+  }
+
+  function cleanupFinishedTask(task: ExportTask): void {
+    try {
+      task.onRemove?.();
+    } catch {
+      // cleanup hooks must not prevent the task from being removed
+    }
+  }
+
+  function removeTask(exportId: string) {
+    const task = taskMap.get(exportId);
+    if (task && (task.status === "Done" || task.status === "Error" || task.status === "Cancelled")) cleanupFinishedTask(task);
+    taskMap.delete(exportId);
+    taskCancelHandlers.delete(exportId);
+    transferFailureStates.delete(exportId);
+    sqlFileFailureStates.delete(exportId);
+  }
+
+  function clearFinished() {
+    for (const [id, task] of taskMap) {
+      if (task.status === "Done" || task.status === "Error" || task.status === "Cancelled") {
+        cleanupFinishedTask(task);
+        taskMap.delete(id);
+        taskCancelHandlers.delete(id);
+        transferFailureStates.delete(id);
+        sqlFileFailureStates.delete(id);
+      }
+    }
+  }
+
+  function registerTaskCancelHandler(exportId: string, handler: () => void | Promise<void>) {
+    taskCancelHandlers.set(exportId, handler);
+  }
+
+  function unregisterTaskCancelHandler(exportId: string) {
+    taskCancelHandlers.delete(exportId);
+  }
+
+  async function cancelTask(exportId: string) {
+    const task = taskMap.get(exportId);
+    if (task?.canCancel === false) return;
+    try {
+      const customHandler = taskCancelHandlers.get(exportId);
+      if (customHandler) {
+        await customHandler();
+      } else if (task?.kind === "database-export") {
+        await api.cancelDatabaseExport(exportId);
+      } else if (task?.kind === "sql-file") {
+        await api.cancelSqlFileExecution(exportId);
+      } else if (task?.kind === "data-transfer") {
+        await api.cancelTransfer(exportId);
+      } else {
+        markTableExportTaskCancelling(exportId);
+        await api.cancelTableExport(exportId);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return {
+    tasks,
+    activeCount,
+    hasActive,
+    addTask,
+    addDatabaseExportTask,
+    addDataDictionaryTask,
+    updateDataDictionaryTask,
+    addSqlFileTask,
+    addDataTransferTask,
+    addDataGenerationTask,
+    addSchemaDiffTask,
+    addDataCompareTask,
+    addMultiDbExecutionTask,
+    updateMultiDbExecutionTask,
+    startDataTransferTask,
+    updateTableExportTask,
+    updateDatabaseExportTask,
+    markDatabaseExportTaskCancelling,
+    restoreDatabaseExportTaskRunning,
+    updateSqlFileTask,
+    updateDataTransferTask,
+    updateDataGenerationTask,
+    updateCompareTask,
+    registerTaskCancelHandler,
+    unregisterTaskCancelHandler,
+    removeTask,
+    clearFinished,
+    cancelTask,
+  };
+}

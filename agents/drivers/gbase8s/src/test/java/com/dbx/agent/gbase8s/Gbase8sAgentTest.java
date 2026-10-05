@@ -1,0 +1,845 @@
+package com.dbx.agent.gbase8s;
+
+import com.dbx.agent.ConnectParams;
+import com.dbx.agent.ColumnInfo;
+import com.dbx.agent.DdlBuilder;
+import com.dbx.agent.IndexInfo;
+import com.dbx.agent.MetadataListConstraints;
+import com.dbx.agent.ObjectSource;
+import com.dbx.agent.TableInfo;
+import com.dbx.agent.test.TestSupport;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+class Gbase8sAgentTest {
+    @Test
+    void mapsMysqlCompatExtendedColumnTypes() {
+        Assertions.assertEquals("BIGINT UNSIGNED", Gbase8sAgent.mapColType(66));
+        Assertions.assertEquals("TINYINT", Gbase8sAgent.mapColType(67));
+        Assertions.assertEquals("MEDIUMINT", Gbase8sAgent.mapColType(68));
+        Assertions.assertEquals("BIT", Gbase8sAgent.mapColType(69));
+        // Nullable flag bits above the base type must not change the mapping.
+        Assertions.assertEquals("BIGINT UNSIGNED", Gbase8sAgent.mapColType(66 + 256));
+        Assertions.assertEquals("BIGINT", Gbase8sAgent.mapColType(43));
+        Assertions.assertEquals("UNKNOWN(99)", Gbase8sAgent.mapColType(99));
+    }
+
+    @Test
+    void declaresGbase8sProfile() {
+        Gbase8sAgent agent = new Gbase8sAgent();
+
+        Assertions.assertEquals("com.gbasedbt.jdbc.Driver", agent.getProfile().getDriverClass());
+        Assertions.assertEquals("jdbc:gbasedbt-sqli://{host}:{port}/{database}:GBASEDBTSERVER=gbase8s", agent.getProfile().getUrlTemplate());
+        Assertions.assertEquals(9088, agent.getProfile().getDefaultPort());
+        Assertions.assertTrue(agent.getProfile().getSkipExecutionContext());
+        Assertions.assertFalse(agent.supportsConnectionPooling());
+    }
+
+    @Test
+    void buildsGbase8sJdbcUrlWithExplicitServerAndLocaleParameters() {
+        String url = Gbase8sAgent.buildUrl(
+            new ConnectParams(
+                "172.26.128.159",
+                20013,
+                "testdb",
+                "",
+                "",
+                "GBASEDBTSERVER=gbase01;CLIENT_LOCALE=zh_cn.utf8;DB_LOCALE=zh_cn.utf8",
+                "",
+                false
+            )
+        );
+
+        Assertions.assertEquals(
+            "jdbc:gbasedbt-sqli://172.26.128.159:20013/testdb:GBASEDBTSERVER=gbase01;CLIENT_LOCALE=zh_cn.utf8;DB_LOCALE=zh_cn.utf8",
+            url
+        );
+    }
+
+    @Test
+    void fallsBackToHostAsGbaseServerWhenNoExplicitServerIsConfigured() {
+        String url = Gbase8sAgent.buildUrl(
+            new ConnectParams(
+                "gbase-host",
+                9088,
+                "sysmaster",
+                "",
+                "",
+                "",
+                "",
+                false
+            )
+        );
+
+        Assertions.assertEquals(
+            "jdbc:gbasedbt-sqli://gbase-host:9088/sysmaster:GBASEDBTSERVER=gbase-host",
+            url
+        );
+    }
+
+    @Test
+    void fallsBackToGbaseServerNameWhenHostIsAnIpAddress() {
+        String url = Gbase8sAgent.buildUrl(
+            new ConnectParams(
+                "172.26.128.159",
+                0,
+                "sysmaster",
+                "",
+                "",
+                "",
+                "",
+                false
+            )
+        );
+
+        Assertions.assertEquals(
+            "jdbc:gbasedbt-sqli://172.26.128.159:9088/sysmaster:GBASEDBTSERVER=gbase8s",
+            url
+        );
+    }
+
+    @Test
+    void usesConnectionStringWhenConfigured() {
+        String url = Gbase8sAgent.buildUrl(
+            new ConnectParams(
+                "ignored",
+                0,
+                "",
+                "",
+                "",
+                "",
+                "jdbc:gbasedbt-sqli://db.example.com:20013/app:GBASEDBTSERVER=gbase01",
+                false
+            )
+        );
+
+        Assertions.assertEquals("jdbc:gbasedbt-sqli://db.example.com:20013/app:GBASEDBTSERVER=gbase01", url);
+    }
+
+    @Test
+    void buildsSysmasterUrlWithoutChangingTheConfiguredDatabase() {
+        ConnectParams params = new ConnectParams(
+            "db.example.com",
+            20013,
+            "appdb",
+            "user",
+            "password",
+            "CLIENT_LOCALE=zh_cn.utf8",
+            "",
+            false
+        );
+        params.setGbase_server("gbase01");
+
+        Assertions.assertEquals(
+            "jdbc:gbasedbt-sqli://db.example.com:20013/sysmaster:GBASEDBTSERVER=gbase01;CLIENT_LOCALE=zh_cn.utf8",
+            Gbase8sAgent.buildUrlForDatabase(params, "sysmaster")
+        );
+    }
+
+    @Test
+    void replacesDatabaseInCustomConnectionStringForDatabaseListing() {
+        ConnectParams params = new ConnectParams(
+            "",
+            0,
+            "",
+            "user",
+            "password",
+            "",
+            "jdbc:gbasedbt-sqli://db.example.com:20013/appdb:GBASEDBTSERVER=gbase01;CLIENT_LOCALE=zh_cn.utf8",
+            false
+        );
+
+        Assertions.assertEquals(
+            "jdbc:gbasedbt-sqli://db.example.com:20013/sysmaster:GBASEDBTSERVER=gbase01;CLIENT_LOCALE=zh_cn.utf8",
+            Gbase8sAgent.buildUrlForDatabase(params, "sysmaster")
+        );
+    }
+
+    @Test
+    void overrideLocaleParamsRewritesBothLocalesPreservingOthers() {
+        Assertions.assertEquals(
+            "GBASEDBTSERVER=gbase01;CLIENT_LOCALE=en_US.819;DB_LOCALE=en_US.819;NEWCODESET=UTF8,utf8,57372",
+            Gbase8sAgent.overrideLocaleParams(
+                "GBASEDBTSERVER=gbase01;CLIENT_LOCALE=zh_CN.utf8;DB_LOCALE=zh_CN.utf8;NEWCODESET=UTF8,utf8,57372",
+                "en_US.819"
+            )
+        );
+        // Appends both when neither is present.
+        Assertions.assertEquals(
+            "GBASEDBTSERVER=gbase01;CLIENT_LOCALE=zh_CN.57372;DB_LOCALE=zh_CN.57372",
+            Gbase8sAgent.overrideLocaleParams("GBASEDBTSERVER=gbase01", "zh_CN.57372")
+        );
+        // Blank collate is a no-op.
+        Assertions.assertEquals(
+            "DB_LOCALE=zh_CN.utf8",
+            Gbase8sAgent.overrideLocaleParams("DB_LOCALE=zh_CN.utf8", "  ")
+        );
+    }
+
+    @Test
+    void overrideLocaleParamsRejectsUnsafeCollate() {
+        // A server-reported collation is concatenated into the JDBC URL, so anything outside the
+        // ordinary-locale whitelist must be ignored rather than injected.
+        Assertions.assertEquals(
+            "DB_LOCALE=zh_CN.utf8",
+            Gbase8sAgent.overrideLocaleParams("DB_LOCALE=zh_CN.utf8", "en_US.819;NEWCODESET=x")
+        );
+        Assertions.assertEquals(
+            "DB_LOCALE=zh_CN.utf8",
+            Gbase8sAgent.overrideLocaleParams("DB_LOCALE=zh_CN.utf8", "bad locale")
+        );
+        Assertions.assertEquals(
+            "DB_LOCALE=zh_CN.utf8",
+            Gbase8sAgent.overrideLocaleParams("DB_LOCALE=zh_CN.utf8", "a".repeat(200))
+        );
+    }
+
+    @Test
+    void rewritesLocaleToTargetDatabaseCollateSoCrossLocaleDatabaseOpens() {
+        // The reported connection pins DB_LOCALE=zh_CN.utf8 for `dcss`; opening the differently
+        // locale `gbase8s` database (real collate en_US.819) must rewrite the locale to en_US.819.
+        ConnectParams params = new ConnectParams(
+            "192.168.5.65",
+            9088,
+            "dcss",
+            "gbasedbt",
+            "secret",
+            "GBASEDBTSERVER=gbaseserver;DB_LOCALE=zh_CN.utf8;CLIENT_LOCALE=zh_CN.utf8;NEWCODESET=UTF8,utf8,57372;DELIMIDENT=y",
+            "",
+            false
+        );
+
+        String url = Gbase8sAgent.buildUrl(
+            new ConnectParams(
+                params.getHost(),
+                params.getPort(),
+                "gbase8s",
+                params.getUsername(),
+                params.getPassword(),
+                Gbase8sAgent.overrideLocaleParams(params.getUrl_params(), "en_US.819"),
+                params.getConnection_string(),
+                false
+            )
+        );
+
+        Assertions.assertEquals(
+            "jdbc:gbasedbt-sqli://192.168.5.65:9088/gbase8s:GBASEDBTSERVER=gbaseserver;DB_LOCALE=en_US.819;CLIENT_LOCALE=en_US.819;NEWCODESET=UTF8,utf8,57372;DELIMIDENT=y",
+            url
+        );
+    }
+
+    @Test
+    void createDatabaseLocaleDirectiveIsRoutedToLocaleSession() {
+        // The directive branch must fire only for a leading DBX_DB_LOCALE directive on a CREATE
+        // DATABASE statement; anything else returns null and falls through to the normal query
+        // path. Parsing is tested directly because both paths throw identically when unconnected.
+        Gbase8sAgent.CreateDatabaseLocaleDirective directive = Gbase8sAgent.parseCreateDatabaseLocaleDirective(
+            "-- DBX_DB_LOCALE=zh_CN.utf8\nCREATE DATABASE app_db;"
+        );
+        Assertions.assertNotNull(directive);
+        Assertions.assertEquals("zh_CN.utf8", directive.locale());
+        Assertions.assertEquals("CREATE DATABASE app_db;", directive.statement());
+        Assertions.assertNull(Gbase8sAgent.parseCreateDatabaseLocaleDirective("CREATE DATABASE app_db;"));
+        Assertions.assertNull(Gbase8sAgent.parseCreateDatabaseLocaleDirective(
+            "-- DBX_DB_LOCALE=zh_CN.utf8\nDROP DATABASE app_db;"));
+        Assertions.assertNull(Gbase8sAgent.parseCreateDatabaseLocaleDirective(null));
+    }
+
+    @Test
+    void parseDropDatabaseNameRecognizesBareDrop() {
+        Assertions.assertEquals("app_db", Gbase8sAgent.parseDropDatabaseName("DROP DATABASE app_db;"));
+        Assertions.assertEquals("app_db", Gbase8sAgent.parseDropDatabaseName("  drop database app_db  "));
+        Assertions.assertEquals("app_db", Gbase8sAgent.parseDropDatabaseName("Drop Database app_db"));
+        Assertions.assertNull(Gbase8sAgent.parseDropDatabaseName("SELECT * FROM t;"));
+        Assertions.assertNull(Gbase8sAgent.parseDropDatabaseName("CREATE DATABASE app_db;"));
+        Assertions.assertNull(Gbase8sAgent.parseDropDatabaseName("DROP DATABASE \"app db\";"));
+        Assertions.assertNull(Gbase8sAgent.parseDropDatabaseName(null));
+    }
+
+    @Test
+    void omitsOwnerSchemasWhenTheDatabaseCannotUseThemInDml() {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(
+            agent,
+            schemaConnection(false, sql, resultSet(new String[]{"owner"}, new Object[][]{{"gbasedbt"}}))
+        );
+
+        Assertions.assertTrue(agent.listSchemas().isEmpty());
+        Assertions.assertTrue(sql.isEmpty());
+    }
+
+    @Test
+    void listsOwnerSchemasWhenTheDatabaseSupportsThemInDml() {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(
+            agent,
+            schemaConnection(true, sql, resultSet(new String[]{"owner"}, new Object[][]{{"gbasedbt"}}))
+        );
+
+        Assertions.assertEquals(List.of("gbasedbt"), agent.listSchemas());
+        Assertions.assertEquals(1, sql.size());
+    }
+
+    @Test
+    void constrainedListTablesUsesGbase8sSystemTableQuery() {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(agent, preparedConnection(sql, resultSet(
+            new String[]{"tabname", "tabtype"},
+            new Object[][]{
+                {"user_order", "T"}
+            }
+        )));
+
+        List<TableInfo> tables = agent.listTables(
+            "app",
+            new MetadataListConstraints("user", 1, 1, List.of("TABLE"))
+        );
+
+        Assertions.assertEquals(1, tables.size());
+        Assertions.assertEquals("user_order", tables.get(0).getName());
+        Assertions.assertTrue(sql.get(0).contains("FROM systables"), sql.get(0));
+        Assertions.assertTrue(sql.get(0).contains("SELECT SKIP 1 FIRST 1"), sql.get(0));
+        Assertions.assertTrue(sql.get(0).contains("UPPER(t.tabname) LIKE ?"), sql.get(0));
+    }
+
+    @Test
+    void listTablesLoadsGbase8sTableComments() {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(agent, preparedConnection(sql, resultSet(
+            new String[]{"tabname", "tabtype", "comments"},
+            new Object[][]{
+                {"products", "T", "Product catalog"}
+            }
+        )));
+
+        List<TableInfo> tables = agent.listTables("root");
+
+        Assertions.assertEquals("Product catalog", tables.get(0).getComment());
+        Assertions.assertTrue(sql.get(0).contains("LEFT JOIN syscomms"), sql.get(0));
+        Assertions.assertTrue(sql.get(0).contains("t.owner = ?"), sql.get(0));
+    }
+
+    @Test
+    void extractsPrimaryKeyColumnNumbersFromGbase8sIndexParts() {
+        Assertions.assertEquals(
+            Set.of(1, 3, 5),
+            Gbase8sAgent.primaryKeyColumnNumbers(Arrays.asList(1, -3, 0, 5, null))
+        );
+    }
+
+    @Test
+    void getColumnsUsesGbase8sSystemCatalog() {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        Connection connection = preparedConnection(
+            sql,
+            resultSet(
+                new String[]{"part1", "part2", "part3", "part4", "part5", "part6", "part7", "part8", "part9", "part10", "part11", "part12", "part13", "part14", "part15", "part16"},
+                new Object[][]{
+                    {1, 0, null, null, null, null, null, null, null, null, null, null, null, null, null, null}
+                }
+            ),
+            resultSet(new String[]{"colname", "column_default"}, new Object[][]{}),
+            resultSet(
+                new String[]{"colname", "coltype", "colno", "collength", "comments"},
+                new Object[][]{
+                    {"product_id", 258, 1, 4, "Product identifier"},
+                    {"sku", 13, 2, 40, null},
+                    {"price", 5, 3, 3074, "Unit price"}
+                }
+            )
+        );
+        TestSupport.setPrivateConnection(agent, connection);
+        agent.afterConnect(new ConnectParams(
+            "", 0, "", "", "", "NOTSQLMODE=mysql;SQLMODE=ansi", "", false
+        ), connection);
+
+        List<ColumnInfo> columns = agent.getColumns("root", "products");
+
+        Assertions.assertEquals(3, sql.size());
+        Assertions.assertTrue(sql.get(0).contains("FROM sysconstraints"), sql.get(0));
+        Assertions.assertTrue(sql.get(0).contains("t.owner = ?"), sql.get(0));
+        Assertions.assertTrue(sql.get(1).contains("JOIN sysdefaultsexpr"), sql.get(1));
+        Assertions.assertTrue(sql.get(1).contains("e.default AS column_default"), sql.get(1));
+        Assertions.assertTrue(sql.get(2).contains("FROM syscolumns"), sql.get(2));
+        Assertions.assertTrue(sql.get(2).contains("t.owner = ?"), sql.get(2));
+        Assertions.assertEquals(3, columns.size());
+        Assertions.assertEquals("product_id", columns.get(0).getName());
+        Assertions.assertEquals("INTEGER", columns.get(0).getData_type());
+        Assertions.assertFalse(columns.get(0).getIs_nullable());
+        Assertions.assertTrue(columns.get(0).getIs_primary_key());
+        Assertions.assertEquals("VARCHAR", columns.get(1).getData_type());
+        Assertions.assertEquals(40, columns.get(1).getCharacter_maximum_length());
+        Assertions.assertEquals("DECIMAL", columns.get(2).getData_type());
+        Assertions.assertEquals(12, columns.get(2).getNumeric_precision());
+        Assertions.assertEquals(2, columns.get(2).getNumeric_scale());
+        Assertions.assertEquals("Product identifier", columns.get(0).getComment());
+        Assertions.assertEquals("Unit price", columns.get(2).getComment());
+        Assertions.assertTrue(sql.get(2).contains("LEFT JOIN syscolcomms"), sql.get(2));
+    }
+
+    @Test
+    void extendedCharacterColumnsPreserveTypeLengthAndNullabilityInDdl() {
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(agent, preparedConnection(
+            new ArrayList<>(),
+            resultSet(new String[]{"part1"}, new Object[][]{}),
+            resultSet(new String[]{"colname", "column_default"}, new Object[][]{}),
+            resultSet(
+                new String[]{"colname", "coltype", "colno", "collength", "comments"},
+                new Object[][]{
+                    {"channel_list", 63, 1, 1024, null},
+                    {"name", 63 + 256, 2, 4096, null},
+                    {"national_text", 64, 3, 64, null},
+                    {"required_text", 64 + 256, 4, 128, null}
+                }
+            )
+        ));
+
+        List<ColumnInfo> columns = agent.getColumns("root", "activity");
+        Assertions.assertEquals(List.of("VARCHAR2", "VARCHAR2", "NVARCHAR2", "NVARCHAR2"),
+            columns.stream().map(ColumnInfo::getData_type).toList());
+        Assertions.assertEquals(List.of(1024, 4096, 64, 128),
+            columns.stream().map(ColumnInfo::getCharacter_maximum_length).toList());
+        Assertions.assertEquals(List.of(true, false, true, false),
+            columns.stream().map(ColumnInfo::getIs_nullable).toList());
+        String ddl = DdlBuilder.buildTableDdl("root", "activity", columns, List.of(), List.of());
+        Assertions.assertEquals("""
+            CREATE TABLE "root"."activity" (
+              "channel_list" VARCHAR2(1024),
+              "name" VARCHAR2(4096) NOT NULL,
+              "national_text" NVARCHAR2(64),
+              "required_text" NVARCHAR2(128) NOT NULL
+            );
+            """, ddl);
+    }
+
+    @Test
+    void getColumnsLoadsDefaultsFromDefaultExpressionCatalogInMysqlCompatMode() throws Exception {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        Connection connection = preparedConnection(
+            sql,
+            resultSet(
+                new String[]{"part1", "part2", "part3", "part4", "part5", "part6", "part7", "part8", "part9", "part10", "part11", "part12", "part13", "part14", "part15", "part16"},
+                new Object[][]{{1, 0, null, null, null, null, null, null, null, null, null, null, null, null, null, null}}
+            ),
+            resultSet(
+                new String[]{"colname", "column_default"},
+                new Object[][]{{"op_id", "'0'"}, {"created_at", "current_timestamp"}}
+            ),
+            resultSet(
+                new String[]{"colname", "coltype", "colno", "collength", "comments"},
+                new Object[][]{
+                    {"id", 258, 1, 4, null},
+                    {"op_id", 2, 2, 4, null},
+                    {"created_at", 10, 3, 8, null}
+                }
+            )
+        );
+        TestSupport.setPrivateConnection(agent, connection);
+        agent.afterConnect(new ConnectParams(
+            "",
+            0,
+            "",
+            "",
+            "",
+            "GBASEDBTSERVER=gbase01;SQLMODE=mysql;CLIENT_LOCALE=zh_CN.57372;DB_LOCALE=zh_CN.57372;ifx_lock_mode_wait=60;",
+            "",
+            false
+        ), connection);
+
+        List<ColumnInfo> columns = agent.getColumns("root", "system_user");
+
+        Assertions.assertEquals(3, sql.size());
+        Assertions.assertTrue(sql.get(1).contains("JOIN sysdefaultsexpr"), sql.get(1));
+        Assertions.assertTrue(sql.get(1).contains("e.type = 'T'"), sql.get(1));
+        Assertions.assertTrue(sql.get(1).contains("e.`default` AS column_default"), sql.get(1));
+        Assertions.assertTrue(sql.get(1).contains("t.owner = ?"), sql.get(1));
+        Assertions.assertNull(columns.get(0).getColumn_default());
+        Assertions.assertEquals("'0'", columns.get(1).getColumn_default());
+        Assertions.assertEquals("current_timestamp", columns.get(2).getColumn_default());
+    }
+
+    @Test
+    void getColumnsUsesMysqlModeFromCustomConnectionStringBeforeUrlParams() {
+        String sql = defaultExpressionSql(
+            "SQLMODE=ansi",
+            "jdbc:gbasedbt-sqli://localhost:9088/appdb:GBASEDBTSERVER=gbase8s;SQLMODE=mysql"
+        );
+
+        Assertions.assertTrue(sql.contains("e.`default` AS column_default"), sql);
+    }
+
+    @Test
+    void getColumnsUsesAnsiModeFromCustomConnectionStringBeforeUrlParams() {
+        String sql = defaultExpressionSql(
+            "SQLMODE=mysql",
+            "jdbc:gbasedbt-sqli://localhost:9088/appdb:GBASEDBTSERVER=gbase8s;SQLMODE=ansi"
+        );
+
+        Assertions.assertTrue(sql.contains("e.default AS column_default"), sql);
+    }
+
+    @Test
+    void getColumnsIgnoresUrlParamsWhenCustomConnectionStringOmitsSqlMode() {
+        String sql = defaultExpressionSql(
+            "SQLMODE=mysql",
+            "jdbc:gbasedbt-sqli://localhost:9088/appdb:GBASEDBTSERVER=gbase8s"
+        );
+
+        Assertions.assertTrue(sql.contains("e.default AS column_default"), sql);
+    }
+
+    @Test
+    void getColumnsFallsBackWhenDefaultCatalogQueryFails() {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(agent, defaultQueryFailureConnection(
+            sql,
+            resultSet(
+                new String[]{"part1", "part2", "part3", "part4", "part5", "part6", "part7", "part8", "part9", "part10", "part11", "part12", "part13", "part14", "part15", "part16"},
+                new Object[][]{{1, 0, null, null, null, null, null, null, null, null, null, null, null, null, null, null}}
+            ),
+            resultSet(
+                new String[]{"colname", "coltype", "colno", "collength", "comments"},
+                new Object[][]{{"id", 258, 1, 4, null}, {"name", 13, 2, 64, null}}
+            )
+        ));
+
+        List<ColumnInfo> columns = agent.getColumns("root", "system_user");
+
+        Assertions.assertEquals(3, sql.size());
+        Assertions.assertTrue(sql.get(1).contains("JOIN sysdefaultsexpr"), sql.get(1));
+        Assertions.assertEquals(2, columns.size());
+        Assertions.assertNull(columns.get(0).getColumn_default());
+        Assertions.assertNull(columns.get(1).getColumn_default());
+    }
+
+    @Test
+    void listIndexesLoadsGbase8sSystemCatalogIndexes() {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(agent, preparedConnection(
+            sql,
+            resultSet(
+                new String[]{"colno", "colname"},
+                new Object[][]{
+                    {1, "product_id"},
+                    {2, "sku"},
+                    {3, "created_at"}
+                }
+            ),
+            resultSet(
+                new String[]{"idxname", "idxtype", "constrtype", "part1", "part2", "part3", "part4", "part5", "part6", "part7", "part8", "part9", "part10", "part11", "part12", "part13", "part14", "part15", "part16"},
+                new Object[][]{
+                    {"products_pk", "U", "P", 1, 0, null, null, null, null, null, null, null, null, null, null, null, null, null, null},
+                    {"products_sku_created", "D", null, 2, -3, 0, null, null, null, null, null, null, null, null, null, null, null, null, null}
+                }
+            )
+        ));
+
+        List<IndexInfo> indexes = agent.listIndexes("root", "products");
+
+        Assertions.assertEquals(2, indexes.size());
+        Assertions.assertEquals(List.of("product_id"), indexes.get(0).getColumns());
+        Assertions.assertTrue(indexes.get(0).getIs_unique());
+        Assertions.assertTrue(indexes.get(0).getIs_primary());
+        Assertions.assertEquals(List.of("sku", "created_at"), indexes.get(1).getColumns());
+        Assertions.assertFalse(indexes.get(1).getIs_unique());
+        Assertions.assertFalse(indexes.get(1).getIs_primary());
+        Assertions.assertTrue(sql.get(0).contains("FROM syscolumns"), sql.get(0));
+        Assertions.assertTrue(sql.get(1).contains("FROM sysindexes"), sql.get(1));
+        Assertions.assertTrue(sql.get(1).contains("LEFT JOIN sysconstraints"), sql.get(1));
+    }
+
+    @Test
+    void resolvesGbase8sIndexPartsInDeclaredOrder() {
+        Assertions.assertEquals(
+            List.of("sku", "created_at"),
+            Gbase8sAgent.resolveIndexColumns(List.of(2, -3, 0), Map.of(2, "sku", 3, "created_at"))
+        );
+    }
+
+    @Test
+    void getObjectSourceUsesGbase8sViewCatalog() {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(agent, preparedConnection(
+            sql,
+            resultSet(
+                new String[]{"viewtext"},
+                new Object[][]{
+                    {"create view \"gbasedbt\".demo_view as select "},
+                    {"* from products;   "}
+                }
+            ),
+            resultSet(
+                new String[]{"tabid", "owner", "system_boundary_tabid"},
+                new Object[][]{
+                    {1000, "gbasedbt", 614}
+                }
+            )
+        ));
+
+        ObjectSource source = agent.getObjectSource("gbasedbt", "demo_view", "VIEW");
+
+        Assertions.assertEquals("demo_view", source.getName());
+        Assertions.assertEquals("VIEW", source.getObject_type());
+        Assertions.assertEquals("gbasedbt", source.getSchema());
+        Assertions.assertEquals("create view \"gbasedbt\".demo_view as select * from products;", source.getSource());
+        Assertions.assertTrue(source.isEditable());
+        Assertions.assertEquals(2, sql.size());
+        Assertions.assertTrue(sql.get(0).contains("FROM sysviews"), sql.get(0));
+        Assertions.assertTrue(sql.get(0).contains("t.owner = ?"), sql.get(0));
+        Assertions.assertTrue(sql.get(0).contains("ORDER BY v.seqno"), sql.get(0));
+        Assertions.assertTrue(sql.get(1).contains("system_boundary_tabid"), sql.get(1));
+    }
+
+    @Test
+    void getObjectSourceMarksGbase8sSystemViewsReadOnly() {
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(agent, preparedConnection(
+            new ArrayList<>(),
+            resultSet(
+                new String[]{"viewtext"},
+                new Object[][]{
+                    {"create view \"gbasedbt\".dba_db_links as select * from user_db_links;"}
+                }
+            ),
+            resultSet(
+                new String[]{"tabid", "owner", "system_boundary_tabid"},
+                new Object[][]{
+                    {614, "gbasedbt", 614}
+                }
+            )
+        ));
+
+        ObjectSource source = agent.getObjectSource("gbasedbt", "dba_db_links", "VIEW");
+
+        Assertions.assertFalse(source.isEditable());
+    }
+
+    @Test
+    void getTableDdlReturnsViewSourceForGbase8sViews() {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        TestSupport.setPrivateConnection(agent, preparedConnection(
+            sql,
+            resultSet(
+                new String[]{"tabtype"},
+                new Object[][]{
+                    {"V"}
+                }
+            ),
+            resultSet(
+                new String[]{"viewtext"},
+                new Object[][]{
+                    {"create view demo_view as select 1 as id;   "}
+                }
+            )
+        ));
+
+        String ddl = agent.getTableDdl("gbasedbt", "demo_view");
+
+        Assertions.assertEquals("create view demo_view as select 1 as id;", ddl);
+        Assertions.assertEquals(2, sql.size());
+        Assertions.assertTrue(sql.get(0).contains("SELECT tabtype FROM systables"), sql.get(0));
+        Assertions.assertTrue(sql.get(1).contains("FROM sysviews"), sql.get(1));
+    }
+
+    private static Connection preparedConnection(List<String> sql, ResultSet... resultSets) {
+        int[] resultIndex = {0};
+        PreparedStatement statement = proxy(PreparedStatement.class, (method, args) -> {
+            if ("executeQuery".equals(method.getName())) {
+                int index = Math.min(resultIndex[0], resultSets.length - 1);
+                resultIndex[0] += 1;
+                return resultSets[index];
+            }
+            if ("setString".equals(method.getName()) || "close".equals(method.getName())) {
+                return null;
+            }
+            return defaultValue(method.getReturnType());
+        });
+        return proxy(Connection.class, (method, args) -> {
+            if ("getCatalog".equals(method.getName())) {
+                return "appdb";
+            }
+            if ("prepareStatement".equals(method.getName())) {
+                sql.add(String.valueOf(args[0]));
+                return statement;
+            }
+            if ("isClosed".equals(method.getName())) {
+                return false;
+            }
+            return defaultValue(method.getReturnType());
+        });
+    }
+
+    private static String defaultExpressionSql(String urlParams, String connectionString) {
+        List<String> sql = new ArrayList<>();
+        Gbase8sAgent agent = new Gbase8sAgent();
+        Connection connection = preparedConnection(
+            sql,
+            resultSet(
+                new String[]{"part1", "part2", "part3", "part4", "part5", "part6", "part7", "part8", "part9", "part10", "part11", "part12", "part13", "part14", "part15", "part16"},
+                new Object[][]{}
+            ),
+            resultSet(new String[]{"colname", "column_default"}, new Object[][]{}),
+            resultSet(new String[]{"colname", "coltype", "colno", "collength", "comments"}, new Object[][]{})
+        );
+        TestSupport.setPrivateConnection(agent, connection);
+        agent.afterConnect(new ConnectParams(
+            "localhost", 9088, "appdb", "", "", urlParams, connectionString, false
+        ), connection);
+
+        agent.getColumns("root", "system_user");
+
+        return sql.get(1);
+    }
+
+    private static Connection defaultQueryFailureConnection(List<String> sql, ResultSet... resultSets) {
+        int[] resultIndex = {0};
+        return proxy(Connection.class, (method, args) -> {
+            if ("getCatalog".equals(method.getName())) {
+                return "appdb";
+            }
+            if ("prepareStatement".equals(method.getName())) {
+                String query = String.valueOf(args[0]);
+                sql.add(query);
+                return proxy(PreparedStatement.class, (statementMethod, statementArgs) -> {
+                    if ("executeQuery".equals(statementMethod.getName())) {
+                        if (query.contains("sysdefaultsexpr")) {
+                            throw new SQLException("Backtick identifiers are not supported");
+                        }
+                        return resultSets[resultIndex[0]++];
+                    }
+                    return defaultValue(statementMethod.getReturnType());
+                });
+            }
+            if ("isClosed".equals(method.getName())) {
+                return false;
+            }
+            return defaultValue(method.getReturnType());
+        });
+    }
+
+    private static Connection schemaConnection(boolean supportsSchemasInDml, List<String> sql, ResultSet resultSet) {
+        DatabaseMetaData metadata = proxy(DatabaseMetaData.class, (method, args) -> {
+            if ("supportsSchemasInDataManipulation".equals(method.getName())) {
+                return supportsSchemasInDml;
+            }
+            return defaultValue(method.getReturnType());
+        });
+        PreparedStatement statement = proxy(PreparedStatement.class, (method, args) -> {
+            if ("executeQuery".equals(method.getName())) {
+                return resultSet;
+            }
+            return defaultValue(method.getReturnType());
+        });
+        return proxy(Connection.class, (method, args) -> {
+            if ("getCatalog".equals(method.getName())) {
+                return "appdb";
+            }
+            if ("getMetaData".equals(method.getName())) {
+                return metadata;
+            }
+            if ("prepareStatement".equals(method.getName())) {
+                sql.add(String.valueOf(args[0]));
+                return statement;
+            }
+            if ("isClosed".equals(method.getName())) {
+                return false;
+            }
+            return defaultValue(method.getReturnType());
+        });
+    }
+
+    private static ResultSet resultSet(String[] columns, Object[][] rows) {
+        int[] index = {-1};
+        Object[] lastValue = {null};
+        return proxy(ResultSet.class, (method, args) -> {
+            switch (method.getName()) {
+                case "next":
+                    index[0] += 1;
+                    return index[0] < rows.length;
+                case "getString":
+                    Object value = columnValue(columns, rows[index[0]], args[0]);
+                    lastValue[0] = value;
+                    return value == null ? null : String.valueOf(value);
+                case "getInt":
+                    Object intValue = columnValue(columns, rows[index[0]], args[0]);
+                    lastValue[0] = intValue;
+                    if (intValue == null) {
+                        return 0;
+                    }
+                    if (intValue instanceof Number) {
+                        return ((Number) intValue).intValue();
+                    }
+                    return Integer.parseInt(String.valueOf(intValue));
+                case "wasNull":
+                    return lastValue[0] == null;
+                case "close":
+                    return null;
+                default:
+                    return defaultValue(method.getReturnType());
+            }
+        });
+    }
+
+    private static Object columnValue(String[] columns, Object[] row, Object key) {
+        if (key instanceof Number) {
+            return row[((Number) key).intValue() - 1];
+        }
+        for (int i = 0; i < columns.length; i++) {
+            if (columns[i].equalsIgnoreCase(String.valueOf(key))) {
+                return row[i];
+            }
+        }
+        return null;
+    }
+
+    private static <T> T proxy(Class<T> type, MethodHandler handler) {
+        InvocationHandler invocationHandler = new InvocationHandler() {
+            @Override
+            public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+                return handler.handle(method, args == null ? new Object[0] : args);
+            }
+        };
+        return type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type}, invocationHandler));
+    }
+
+    private static Object defaultValue(Class<?> type) {
+        if (type == Boolean.TYPE) return false;
+        if (type == Byte.TYPE) return (byte) 0;
+        if (type == Short.TYPE) return (short) 0;
+        if (type == Integer.TYPE) return 0;
+        if (type == Long.TYPE) return 0L;
+        if (type == Float.TYPE) return 0f;
+        if (type == Double.TYPE) return 0d;
+        if (type == Character.TYPE) return (char) 0;
+        return null;
+    }
+
+    private interface MethodHandler {
+        Object handle(Method method, Object[] args) throws Throwable;
+    }
+}

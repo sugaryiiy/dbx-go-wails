@@ -1,0 +1,4422 @@
+package main
+
+import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"net/url"
+	"os"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	go_ora "github.com/sijms/go-ora/v2"
+	"github.com/sijms/go-ora/v2/configurations"
+)
+
+func TestHandshakeResponse(t *testing.T) {
+	s := newServer()
+	resp, shutdown := s.handleLine(`{"jsonrpc":"2.0","id":7,"method":"handshake","params":{"appVersion":"dev"}}`)
+	if shutdown {
+		t.Fatal("handshake should not shut down the server")
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+	data, err := json.Marshal(resp.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		ProtocolVersion      int      `json:"protocolVersion"`
+		AgentProtocolVersion int      `json:"agentProtocolVersion"`
+		Capabilities         []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ProtocolVersion != 1 || result.AgentProtocolVersion != 1 {
+		t.Fatalf("unexpected protocol versions: %+v", result)
+	}
+	contract := protocolContract(t)
+	if result.ProtocolVersion != contract.ProtocolVersion || result.AgentProtocolVersion != contract.ProtocolVersion {
+		t.Fatalf("handshake protocol versions do not match contract: result=%+v contract=%+v", result, contract)
+	}
+	for _, capability := range result.Capabilities {
+		if !contains(contract.AllCapabilities, capability) {
+			t.Fatalf("handshake returned capability %q outside protocol contract %v", capability, contract.AllCapabilities)
+		}
+	}
+	if !contains(result.Capabilities, "query") || !contains(result.Capabilities, "metadata") {
+		t.Fatalf("expected query and metadata capabilities, got %v", result.Capabilities)
+	}
+}
+
+func TestRuntimeHandshakeAdvertisesMultiSessionProtocol(t *testing.T) {
+	runtime := newRuntimeServer()
+	resp, shutdown := runtime.handleLine(`{"jsonrpc":"2.0","id":7,"method":"handshake","params":{"appVersion":"dev"}}`)
+	if shutdown || resp.Error != nil {
+		t.Fatalf("unexpected handshake response: shutdown=%v error=%v", shutdown, resp.Error)
+	}
+	data, err := json.Marshal(resp.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		ProtocolVersion      int      `json:"protocolVersion"`
+		AgentProtocolVersion int      `json:"agentProtocolVersion"`
+		Capabilities         []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.ProtocolVersion != 2 || result.AgentProtocolVersion != 2 {
+		t.Fatalf("unexpected protocol versions: %+v", result)
+	}
+	if !contains(result.Capabilities, "multi_session") {
+		t.Fatalf("expected multi_session capability, got %v", result.Capabilities)
+	}
+}
+
+func TestRuntimeMissingAgentSessionDoesNotUseQueryCursorSessionID(t *testing.T) {
+	runtime := newRuntimeServer()
+	resp, shutdown := runtime.handleLine(`{"jsonrpc":"2.0","id":8,"method":"fetch_query_page","params":{"sessionId":"cursor-1","pageSize":10}}`)
+	if shutdown {
+		t.Fatal("fetch_query_page should not shut down the runtime")
+	}
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, legacyAgentSessionID) {
+		t.Fatalf("expected missing legacy agent session error, got %#v", resp.Error)
+	}
+}
+
+func TestRuntimeCloseOneSessionKeepsOtherSessionRegistered(t *testing.T) {
+	runtime := newRuntimeServer()
+	runtime.sessions["a"] = &agentSession{server: newServer()}
+	runtime.sessions["b"] = &agentSession{server: newServer()}
+
+	if err := runtime.closeSession("a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.session("a"); err == nil {
+		t.Fatal("closed session should be removed")
+	}
+	if _, err := runtime.session("b"); err != nil {
+		t.Fatalf("other session should remain registered: %v", err)
+	}
+}
+
+func TestRuntimeCancelSessionOnlyCancelsTargetSession(t *testing.T) {
+	runtime := newRuntimeServer()
+	serverA := newServer()
+	serverB := newServer()
+	ctxA, cancelA := context.WithCancel(context.Background())
+	ctxB, cancelB := context.WithCancel(context.Background())
+	serverA.activeCancel = cancelA
+	serverB.activeCancel = cancelB
+	runtime.sessions["a"] = &agentSession{server: serverA}
+	runtime.sessions["b"] = &agentSession{server: serverB}
+
+	resp, shutdown := runtime.handleLine(`{"jsonrpc":"2.0","id":9,"method":"cancel_session","params":{"agentSessionId":"a"}}`)
+	if shutdown || resp.Error != nil {
+		t.Fatalf("unexpected cancel response: shutdown=%v error=%v", shutdown, resp.Error)
+	}
+	select {
+	case <-ctxA.Done():
+	default:
+		t.Fatal("target session was not canceled")
+	}
+	select {
+	case <-ctxB.Done():
+		t.Fatal("canceling session a should not cancel session b")
+	default:
+	}
+	cancelB()
+}
+
+func TestCloseMissingQuerySessionReturnsFalse(t *testing.T) {
+	s := newServer()
+	resp, shutdown := s.handleLine(`{"jsonrpc":"2.0","id":8,"method":"close_query_session","params":{"sessionId":"missing"}}`)
+	if shutdown {
+		t.Fatal("close_query_session should not shut down the server")
+	}
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+	if resp.Result != false {
+		t.Fatalf("expected false result, got %#v", resp.Result)
+	}
+}
+
+func TestMissingTableReadSessionMethodsReturnEmptyOrFalse(t *testing.T) {
+	s := newServer()
+
+	fetchResp, shutdown := s.handleLine(`{"jsonrpc":"2.0","id":9,"method":"fetch_table_read_page","params":{"sessionId":"missing","pageSize":10}}`)
+	if shutdown {
+		t.Fatal("fetch_table_read_page should not shut down the server")
+	}
+	if fetchResp.Error != nil {
+		t.Fatalf("unexpected fetch error: %v", fetchResp.Error)
+	}
+	data, err := json.Marshal(fetchResp.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page queryPageResult
+	if err := json.Unmarshal(data, &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Columns) != 0 || len(page.ColumnTypes) != 0 || len(page.Rows) != 0 || page.HasMore || page.SessionID != nil {
+		t.Fatalf("missing table read session should return empty page, got %+v", page)
+	}
+
+	closeResp, shutdown := s.handleLine(`{"jsonrpc":"2.0","id":10,"method":"close_table_read_session","params":{"sessionId":"missing"}}`)
+	if shutdown {
+		t.Fatal("close_table_read_session should not shut down the server")
+	}
+	if closeResp.Error != nil {
+		t.Fatalf("unexpected close error: %v", closeResp.Error)
+	}
+	if closeResp.Result != false {
+		t.Fatalf("expected false result, got %#v", closeResp.Result)
+	}
+}
+
+func TestEmptyResultSlicesMarshalAsArrays(t *testing.T) {
+	data, err := json.Marshal(queryResult{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, `"columns":null`) || strings.Contains(text, `"column_types":null`) || strings.Contains(text, `"rows":null`) {
+		t.Fatalf("query result should marshal nil slices as arrays: %s", text)
+	}
+	if !strings.Contains(text, `"column_types":[]`) {
+		t.Fatalf("query result should marshal empty column types array: %s", text)
+	}
+
+	data, err = json.Marshal(indexInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(data)
+	if strings.Contains(text, `"columns":null`) || strings.Contains(text, `"included_columns":null`) {
+		t.Fatalf("index info should marshal nil slices as arrays: %s", text)
+	}
+
+	data, err = json.Marshal(constraintInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(data)
+	if strings.Contains(text, `"columns":null`) || strings.Contains(text, `"ref_columns":null`) {
+		t.Fatalf("constraint info should marshal nil slices as arrays: %s", text)
+	}
+}
+
+func TestGetTableDDLResultMarshalsAsString(t *testing.T) {
+	data, err := json.Marshal("CREATE TABLE HR.ORDERS (ID NUMBER)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ddl string
+	if err := json.Unmarshal(data, &ddl); err != nil {
+		t.Fatalf("get_table_ddl result must deserialize as a string: %v", err)
+	}
+}
+
+func TestNormalizeValueFormatsOracleBinaryColumnsAsHex(t *testing.T) {
+	tests := map[string]string{
+		"RAW":            "0x000f10ff",
+		"raw":            "0x000f10ff",
+		"LongRaw":        "0x000f10ff",
+		"LONG RAW":       "0x000f10ff",
+		"LongVarRaw":     "0x000f10ff",
+		"OCIBlobLocator": "0x000f10ff",
+	}
+
+	for columnType, want := range tests {
+		if got := normalizeValue([]byte{0x00, 0x0f, 0x10, 0xff}, columnType); got != want {
+			t.Fatalf("normalizeValue RAW bytes for %q = %#v, want %q", columnType, got, want)
+		}
+	}
+}
+
+func TestNormalizeValueKeepsNonBinaryBytesAsText(t *testing.T) {
+	if got := normalizeValue([]byte("hello"), "VARCHAR2"); got != "hello" {
+		t.Fatalf("normalizeValue text bytes = %#v, want %q", got, "hello")
+	}
+	if got := normalizeValue([]byte("legacy"), ""); got != "legacy" {
+		t.Fatalf("normalizeValue bytes without metadata = %#v, want %q", got, "legacy")
+	}
+}
+
+func TestQueryResultsMarshalNonFiniteFloatsAsStrings(t *testing.T) {
+	result := queryResult{Rows: [][]any{{math.NaN(), math.Inf(1), math.Inf(-1), 1234.56}}}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("non-finite Oracle floats must remain JSON-safe: %v", err)
+	}
+	if !strings.Contains(string(data), `[["NaN","+Inf","-Inf",1234.56]]`) {
+		t.Fatalf("unexpected query result JSON: %s", data)
+	}
+	if !math.IsNaN(result.Rows[0][0].(float64)) {
+		t.Fatalf("marshaling must not mutate the original rows: %#v", result.Rows)
+	}
+
+	data, err = json.Marshal(queryPageResult{Rows: [][]any{{math.NaN()}}})
+	if err != nil {
+		t.Fatalf("paged non-finite Oracle floats must remain JSON-safe: %v", err)
+	}
+	if !strings.Contains(string(data), `[["NaN"]]`) {
+		t.Fatalf("unexpected query page JSON: %s", data)
+	}
+}
+
+func TestNormalizeValueFormatsOracleTimezoneLessDateTimesAsWallClock(t *testing.T) {
+	value := time.Date(2026, time.July, 23, 13, 42, 13, 123456000, time.FixedZone("CST", 8*60*60))
+	tests := []string{
+		"DATE",
+		"TIMESTAMP",
+		"TIMESTAMP(6)",
+		"TimeStampDTY",
+	}
+
+	for _, columnType := range tests {
+		if got := normalizeValue(value, columnType); got != "2026-07-23T13:42:13.123456" {
+			t.Fatalf("normalizeValue time for %q = %#v, want wall-clock value", columnType, got)
+		}
+	}
+}
+
+func TestNormalizeValueKeepsOracleZonedDateTimeOffsets(t *testing.T) {
+	value := time.Date(2026, time.July, 23, 13, 42, 13, 123456000, time.FixedZone("CST", 8*60*60))
+	tests := []string{
+		"TimeStampTZ_DTY",
+		"TIMESTAMP WITH TIME ZONE",
+	}
+
+	for _, columnType := range tests {
+		if got := normalizeValue(value, columnType); got != "2026-07-23T13:42:13.123456+08:00" {
+			t.Fatalf("normalizeValue time for %q = %#v, want RFC3339 offset", columnType, got)
+		}
+	}
+}
+
+func TestExecuteOracleSelectRetriesXMLTypeDecodeFailures(t *testing.T) {
+	originalSQL := `SELECT * FROM (SELECT * FROM "DBX"."TEST_LOBS") WHERE ROWNUM <= 100`
+	rewrittenSQL := `SELECT * FROM (SELECT "ID", XMLSERIALIZE(CONTENT "XML_CONTENT" AS CLOB) AS "XML_CONTENT" FROM "DBX"."TEST_LOBS") WHERE ROWNUM <= 100`
+	calls := []string{}
+
+	result, err := executeOracleSelectWithXMLTypeRetry(
+		originalSQL,
+		func(sqlText string) (queryResult, error) {
+			calls = append(calls, sqlText)
+			if sqlText == originalSQL {
+				return queryResult{}, errors.New("abnormal data representation for date")
+			}
+			return queryResult{Columns: []string{"ID", "XML_CONTENT"}, Rows: [][]any{{"1", "<root/>"}}}, nil
+		},
+		func(sqlText string) (string, error) {
+			if sqlText != originalSQL {
+				t.Fatalf("rewrite input = %q, want original SQL", sqlText)
+			}
+			return rewrittenSQL, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(calls, []string{originalSQL, rewrittenSQL}) {
+		t.Fatalf("execute calls = %#v, want original and rewritten SQL", calls)
+	}
+	if len(result.Rows) != 1 || result.Rows[0][1] != "<root/>" {
+		t.Fatalf("unexpected retry result: %#v", result)
+	}
+}
+
+func TestExecuteOracleSelectDoesNotRewriteSuccessfulQueries(t *testing.T) {
+	calls := 0
+	rewriteCalled := false
+	want := queryResult{Columns: []string{"ID"}, Rows: [][]any{{"1"}}}
+
+	result, err := executeOracleSelectWithXMLTypeRetry(
+		`SELECT ID FROM TEST_TABLE`,
+		func(string) (queryResult, error) {
+			calls++
+			return want, nil
+		},
+		func(sqlText string) (string, error) {
+			rewriteCalled = true
+			return sqlText, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result, want) {
+		t.Fatalf("result = %#v, want %#v", result, want)
+	}
+	if calls != 1 || rewriteCalled {
+		t.Fatalf("successful query should not rewrite: calls=%d rewriteCalled=%t", calls, rewriteCalled)
+	}
+}
+
+func TestExecuteOracleSelectDoesNotRetryOrdinaryErrors(t *testing.T) {
+	calls := 0
+	rewriteCalled := false
+	originalErr := errors.New("ORA-00942: table or view does not exist")
+
+	_, err := executeOracleSelectWithXMLTypeRetry(
+		`SELECT * FROM MISSING_TABLE`,
+		func(string) (queryResult, error) {
+			calls++
+			return queryResult{}, originalErr
+		},
+		func(sqlText string) (string, error) {
+			rewriteCalled = true
+			return sqlText, nil
+		},
+	)
+	if !errors.Is(err, originalErr) {
+		t.Fatalf("error = %v, want original error", err)
+	}
+	if calls != 1 || rewriteCalled {
+		t.Fatalf("ordinary error should not retry: calls=%d rewriteCalled=%t", calls, rewriteCalled)
+	}
+}
+
+func TestExecuteOracleSelectKeepsDecodeErrorWhenNoXMLTypeRewriteApplies(t *testing.T) {
+	calls := 0
+	originalErr := errors.New("TTC error: received code 36 during response reading")
+	sqlText := `SELECT * FROM TEST_DATES`
+
+	_, err := executeOracleSelectWithXMLTypeRetry(
+		sqlText,
+		func(string) (queryResult, error) {
+			calls++
+			return queryResult{}, originalErr
+		},
+		func(input string) (string, error) {
+			return input, nil
+		},
+	)
+	if !errors.Is(err, originalErr) {
+		t.Fatalf("error = %v, want original error", err)
+	}
+	if calls != 1 {
+		t.Fatalf("unchanged SQL should not retry, got %d executions", calls)
+	}
+}
+
+func TestNormalizeDDLObjectType(t *testing.T) {
+	tests := map[string]string{
+		"":                  "",
+		"table":             "TABLE",
+		"VIEW":              "VIEW",
+		"materialized view": "MATERIALIZED_VIEW",
+		"MATERIALIZED_VIEW": "MATERIALIZED_VIEW",
+		"procedure":         "",
+	}
+	for input, want := range tests {
+		if got := normalizeDDLObjectType(input); got != want {
+			t.Fatalf("normalizeDDLObjectType(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestGetTableDDLPreservesQuotedObjectName(t *testing.T) {
+	const schema = "ZTZS_ERP2"
+	const table = "ZGJ_FlowSealTemplate"
+	const ddl = `CREATE TABLE "ZTZS_ERP2"."ZGJ_FlowSealTemplate" ("FlowId" NUMBER)`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_OBJECTS",
+			args:          []driver.Value{schema, table},
+			rows:          [][]driver.Value{{"TABLE"}},
+		},
+		{
+			queryContains: "DBMS_METADATA.GET_DDL",
+			args:          []driver.Value{"TABLE", table, schema},
+			rows:          [][]driver.Value{{ddl}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.getTableDDL(schema, table, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != ddl {
+		t.Fatalf("getTableDDL() = %q, want %q", got, ddl)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetTableDDLUppercaseObjectDoesNotAddFallbackQuery(t *testing.T) {
+	const schema = "ZTZS_ERP2"
+	const table = "ORDERS"
+	const ddl = `CREATE TABLE "ZTZS_ERP2"."ORDERS" ("ID" NUMBER)`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_OBJECTS",
+			args:          []driver.Value{schema, table},
+			rows:          [][]driver.Value{{"TABLE"}},
+		},
+		{
+			queryContains: "DBMS_METADATA.GET_DDL",
+			args:          []driver.Value{"TABLE", table, schema},
+			rows:          [][]driver.Value{{ddl}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.getTableDDL(schema, table, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != ddl {
+		t.Fatalf("getTableDDL() = %q, want %q", got, ddl)
+	}
+	if scripted.next != 2 {
+		t.Fatalf("uppercase object should use two queries, got %d", scripted.next)
+	}
+}
+
+func TestGetTableDDLFallsBackToUppercaseAfterExactMiss(t *testing.T) {
+	const schema = "ZTZS_ERP2"
+	const ddl = `CREATE TABLE "ZTZS_ERP2"."ORDERS" ("ID" NUMBER)`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_OBJECTS",
+			args:          []driver.Value{schema, "orders"},
+			rows:          nil,
+		},
+		{
+			queryContains: "FROM ALL_OBJECTS",
+			args:          []driver.Value{schema, "ORDERS"},
+			rows:          [][]driver.Value{{"TABLE"}},
+		},
+		{
+			queryContains: "DBMS_METADATA.GET_DDL",
+			args:          []driver.Value{"TABLE", "ORDERS", schema},
+			rows:          [][]driver.Value{{ddl}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.getTableDDL(schema, "orders", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != ddl {
+		t.Fatalf("getTableDDL() = %q, want %q", got, ddl)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetTableDDLFallbackPreservesQuotedColumnNames(t *testing.T) {
+	const schema = "ZTZS_ERP2"
+	const table = "ZGJ_FlowSealTemplate"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_OBJECTS",
+			args:          []driver.Value{schema, table},
+			rows:          [][]driver.Value{{"TABLE"}},
+		},
+		{
+			queryContains: "DBMS_METADATA.GET_DDL",
+			args:          []driver.Value{"TABLE", table, schema},
+			err:           errors.New("ORA-31603: object not found"),
+		},
+		{
+			queryContains: "FROM ALL_TAB_COLUMNS",
+			args:          []driver.Value{schema, table},
+			columns: []string{
+				"COLUMN_NAME", "DATA_TYPE", "NULLABLE", "DATA_DEFAULT", "IS_PRIMARY_KEY",
+				"COMMENTS", "DATA_PRECISION", "DATA_SCALE", "CHAR_LENGTH", "CHAR_USED",
+			},
+			rows: [][]driver.Value{{"FlowId", "VARCHAR2", "N", nil, int64(1), nil, nil, nil, int64(50), "C"}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.getTableDDL(schema, table, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `CREATE TABLE "ZTZS_ERP2"."ZGJ_FlowSealTemplate" (
+  "FlowId" VARCHAR2(50 CHAR) NOT NULL,
+  PRIMARY KEY ("FlowId")
+)`
+	if got != want {
+		t.Fatalf("getTableDDL() = %q, want %q", got, want)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetTableDDLAppendsIndexesTriggersAndComments(t *testing.T) {
+	const schema = "HR"
+	const table = "ORDERS"
+	const tableDDL = `CREATE TABLE "HR"."ORDERS" ("ID" NUMBER DEFAULT 42, PRIMARY KEY ("ID"))`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "DBMS_METADATA.GET_DDL(:1, :2, :3)",
+			args:          []driver.Value{"TABLE", table, schema},
+			rows:          [][]driver.Value{{tableDDL}},
+		},
+		{
+			queryContains: "FROM ALL_INDEXES",
+			args:          []driver.Value{schema, table, schema, table},
+			rows:          [][]driver.Value{{`CREATE INDEX "HR"."IDX_ORDERS_STATUS" ON "HR"."ORDERS" ("STATUS")`}},
+		},
+		{
+			queryContains: "FROM ALL_TRIGGERS",
+			args:          []driver.Value{schema, table},
+			rows:          [][]driver.Value{{`CREATE OR REPLACE TRIGGER "HR"."TRG_ORDERS" BEFORE INSERT ON "HR"."ORDERS" BEGIN NULL; END;`}},
+		},
+		{
+			queryContains: "FROM ALL_TAB_COMMENTS",
+			args:          []driver.Value{schema, table},
+			rows:          [][]driver.Value{{"Owner's orders"}},
+		},
+		{
+			queryContains: "FROM ALL_COL_COMMENTS",
+			args:          []driver.Value{schema, table},
+			columns:       []string{"COLUMN_NAME", "COMMENTS"},
+			rows:          [][]driver.Value{{"STATUS", "Order's state"}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.getTableDDL(schema, table, "TABLE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		tableDDL,
+		`CREATE INDEX "HR"."IDX_ORDERS_STATUS"`,
+		`CREATE OR REPLACE TRIGGER "HR"."TRG_ORDERS"`,
+		`COMMENT ON TABLE "HR"."ORDERS" IS 'Owner''s orders';`,
+		`COMMENT ON COLUMN "HR"."ORDERS"."STATUS" IS 'Order''s state';`,
+	} {
+		if !strings.Contains(got, fragment) {
+			t.Fatalf("getTableDDL() missing %q:\n%s", fragment, got)
+		}
+	}
+	if !strings.Contains(got, tableDDL+";\n\nCREATE INDEX") {
+		t.Fatalf("base table DDL should be terminated before dependent DDL:\n%s", got)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestBuildViewDDLAppendsComments(t *testing.T) {
+	const schema = "HR"
+	const view = "ACTIVE_ORDERS"
+	const viewText = `SELECT "ID", "STATUS" FROM "HR"."ORDERS" WHERE "STATUS" = 'OPEN'`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_VIEWS",
+			args:          []driver.Value{schema, view},
+			rows:          [][]driver.Value{{viewText}},
+		},
+		{
+			queryContains: "FROM ALL_TAB_COMMENTS",
+			args:          []driver.Value{schema, view},
+			rows:          [][]driver.Value{{"Open orders view"}},
+		},
+		{
+			queryContains: "FROM ALL_COL_COMMENTS",
+			args:          []driver.Value{schema, view},
+			columns:       []string{"COLUMN_NAME", "COMMENTS"},
+			rows:          [][]driver.Value{{"STATUS", "Order status"}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.buildViewDDL(schema, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`CREATE OR REPLACE VIEW "HR"."ACTIVE_ORDERS" AS`,
+		viewText,
+		`COMMENT ON TABLE "HR"."ACTIVE_ORDERS" IS 'Open orders view';`,
+		`COMMENT ON COLUMN "HR"."ACTIVE_ORDERS"."STATUS" IS 'Order status';`,
+	} {
+		if !strings.Contains(got, fragment) {
+			t.Fatalf("buildViewDDL() missing %q:\n%s", fragment, got)
+		}
+	}
+	if !strings.Contains(got, viewText+";\n\nCOMMENT ON TABLE") {
+		t.Fatalf("view DDL should be terminated before comment DDL:\n%s", got)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestBuildViewDDLCommentBoundaries(t *testing.T) {
+	const query = `SELECT 1 AS "ID" FROM DUAL`
+	for _, test := range []struct {
+		name             string
+		source           string
+		terminated       string
+		noComments       bool
+		tableError       bool
+		columnError      bool
+		columnOnly       bool
+		tableOnly        bool
+		metadataFallback bool
+	}{
+		{name: "plain", source: query, terminated: query + ";"},
+		{name: "line comment", source: query + " -- trailing", terminated: query + " -- trailing\n;"},
+		{name: "semicolon in comment", source: query + " -- trailing;", terminated: query + " -- trailing;\n;"},
+		{name: "slash in comment", source: query + " -- trailing /", terminated: query + " -- trailing /\n;"},
+		{name: "existing terminator", source: query + ";", terminated: query + ";"},
+		{name: "slash delimiter", source: query + "\n/", terminated: query + "\n/"},
+		{name: "terminated before line comment", source: query + "; -- trailing;", terminated: query + "; -- trailing;"},
+		{name: "terminated before block comment", source: query + "; /* trailing; */", terminated: query + "; /* trailing; */"},
+		{name: "block comment", source: query + " /* trailing; */", terminated: query + " /* trailing; */;"},
+		{name: "quoted comment markers", source: `SELECT '--;', q'[owner's --;]' AS "--ID" FROM DUAL -- tail`, terminated: `SELECT '--;', q'[owner's --;]' AS "--ID" FROM DUAL -- tail` + "\n;"},
+		{name: "full create", source: `CREATE VIEW "HR"."ACTIVE_ORDERS" AS ` + query + " -- tail", terminated: `CREATE VIEW "HR"."ACTIVE_ORDERS" AS ` + query + " -- tail\n;"},
+		{name: "metadata fallback", source: `CREATE VIEW "HR"."ACTIVE_ORDERS" AS ` + query + " -- tail;", terminated: `CREATE VIEW "HR"."ACTIVE_ORDERS" AS ` + query + " -- tail;\n;", metadataFallback: true},
+		{name: "column only", source: query + " -- tail;", terminated: query + " -- tail;\n;", columnOnly: true},
+		{name: "table only", source: query + " -- tail;", terminated: query + " -- tail;\n;", tableOnly: true},
+		{name: "no comments", source: query, noComments: true},
+		{name: "no comments with trailing comment", source: query + " -- tail;\n", noComments: true},
+		{name: "table lookup failure", source: query + " -- tail", tableError: true},
+		{name: "column lookup failure", source: query + " -- tail", columnError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tableStep := oracleViewSourceQueryStep{queryContains: "FROM ALL_TAB_COMMENTS", args: []driver.Value{"HR", "ACTIVE_ORDERS"}}
+			columnStep := oracleViewSourceQueryStep{queryContains: "FROM ALL_COL_COMMENTS", args: []driver.Value{"HR", "ACTIVE_ORDERS"}, columns: []string{"COLUMN_NAME", "COMMENTS"}}
+			if !test.noComments {
+				if !test.columnOnly {
+					tableStep.rows = [][]driver.Value{{"View's comment"}}
+				}
+				if !test.tableOnly {
+					columnStep.rows = [][]driver.Value{{"ID", "Column's comment"}}
+				}
+			}
+			if test.tableError {
+				tableStep.err = errors.New("dictionary denied")
+			}
+			if test.columnError {
+				columnStep.err = errors.New("dictionary denied")
+			}
+			steps := []oracleViewSourceQueryStep{
+				{queryContains: "FROM ALL_VIEWS", args: []driver.Value{"HR", "ACTIVE_ORDERS"}, rows: [][]driver.Value{{test.source}}},
+			}
+			if test.metadataFallback {
+				steps[0].err = errors.New("view text unavailable")
+				steps = append(steps, oracleViewSourceQueryStep{
+					queryContains: "DBMS_METADATA.GET_DDL('VIEW'", args: []driver.Value{"ACTIVE_ORDERS", "HR"}, rows: [][]driver.Value{{test.source}},
+				})
+			}
+			steps = append(steps, tableStep)
+			if !test.tableError {
+				steps = append(steps, columnStep)
+			}
+			database, scripted := openOracleViewSourceTestDB(t, steps)
+			server := newServer()
+			server.db = database
+			got, err := server.buildViewDDL("HR", "ACTIVE_ORDERS")
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := test.terminated
+			if test.noComments || test.tableError || test.columnError {
+				want = strings.TrimSpace(test.source)
+			} else {
+				if !test.columnOnly {
+					want += "\n\nCOMMENT ON TABLE \"HR\".\"ACTIVE_ORDERS\" IS 'View''s comment';"
+				}
+				if !test.tableOnly {
+					want += "\n\nCOMMENT ON COLUMN \"HR\".\"ACTIVE_ORDERS\".\"ID\" IS 'Column''s comment';"
+				}
+			}
+			if !strings.HasPrefix(want, "CREATE ") {
+				want = "CREATE OR REPLACE VIEW \"HR\".\"ACTIVE_ORDERS\" AS\n" + want
+			}
+			if got != want {
+				t.Fatalf("buildViewDDL() = %q, want %q", got, want)
+			}
+			if scripted.next != len(scripted.steps) {
+				t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+			}
+		})
+	}
+}
+
+func TestGetTableDDLForViewAppendsComments(t *testing.T) {
+	const schema = "HR"
+	const view = "ACTIVE_ORDERS"
+	const viewText = `SELECT 1 AS "ID" FROM DUAL`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_VIEWS",
+			args:          []driver.Value{schema, view},
+			rows:          [][]driver.Value{{viewText}},
+		},
+		{
+			queryContains: "FROM ALL_TAB_COMMENTS",
+			args:          []driver.Value{schema, view},
+			rows:          [][]driver.Value{{"Active orders"}},
+		},
+		{
+			queryContains: "FROM ALL_COL_COMMENTS",
+			args:          []driver.Value{schema, view},
+			columns:       []string{"COLUMN_NAME", "COMMENTS"},
+			rows:          [][]driver.Value{{"ID", "Row id"}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.getTableDDL(schema, view, "VIEW")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, `CREATE OR REPLACE VIEW "HR"."ACTIVE_ORDERS" AS`) {
+		t.Fatalf("expected view create DDL, got:\n%s", got)
+	}
+	if !strings.Contains(got, `COMMENT ON TABLE "HR"."ACTIVE_ORDERS" IS 'Active orders';`) {
+		t.Fatalf("expected view table comment, got:\n%s", got)
+	}
+	if !strings.Contains(got, `COMMENT ON COLUMN "HR"."ACTIVE_ORDERS"."ID" IS 'Row id';`) {
+		t.Fatalf("expected view column comment, got:\n%s", got)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetPortableTableDDLDisablesAndRestoresSegmentAttributes(t *testing.T) {
+	const schema = "HR"
+	const table = "ORDERS"
+	const tableDDL = `CREATE TABLE "HR"."ORDERS" ("ID" NUMBER)`
+	const indexDDL = `CREATE INDEX "HR"."IDX_ORDERS" ON "HR"."ORDERS" ("ID")`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "'SEGMENT_ATTRIBUTES', FALSE",
+			exec:          true,
+		},
+		{
+			queryContains: "DBMS_METADATA.GET_DDL(:1, :2, :3)",
+			args:          []driver.Value{"TABLE", table, schema},
+			rows:          [][]driver.Value{{tableDDL}},
+		},
+		{
+			queryContains: "FROM ALL_INDEXES",
+			args:          []driver.Value{schema, table, schema, table},
+			rows:          [][]driver.Value{{indexDDL}},
+		},
+		{
+			queryContains: "'SEGMENT_ATTRIBUTES', TRUE",
+			exec:          true,
+		},
+		{
+			queryContains: "FROM ALL_TRIGGERS",
+			args:          []driver.Value{schema, table},
+			rows:          nil,
+		},
+		{
+			queryContains: "FROM ALL_TAB_COMMENTS",
+			args:          []driver.Value{schema, table},
+			rows:          nil,
+		},
+		{
+			queryContains: "FROM ALL_COL_COMMENTS",
+			args:          []driver.Value{schema, table},
+			rows:          nil,
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.getTableDDLWithOptions(schema, table, "TABLE", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, tableDDL) || !strings.Contains(got, indexDDL) {
+		t.Fatalf("portable DDL should include table and index definitions:\n%s", got)
+	}
+	if strings.Contains(got, "TABLESPACE") || strings.Contains(got, "STORAGE") {
+		t.Fatalf("portable DDL should omit physical storage attributes:\n%s", got)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestListIndexesSeparatesQuotedCloneTableNamesByCase(t *testing.T) {
+	const schema = "HR"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_INDEXES",
+			args:          []driver.Value{schema, "ORDERS_COPY"},
+			columns:       []string{"INDEX_NAME", "COLUMN_NAME", "UNIQUENESS", "IS_PRIMARY", "INDEX_TYPE", "COLUMN_POSITION"},
+			rows:          [][]driver.Value{{"ORDERS_COPY_IDX1", "STATUS", "NONUNIQUE", int64(0), "NORMAL", int64(1)}},
+		},
+		{
+			queryContains: "FROM ALL_INDEXES",
+			args:          []driver.Value{schema, "ORDERS_copy"},
+			columns:       []string{"INDEX_NAME", "COLUMN_NAME", "UNIQUENESS", "IS_PRIMARY", "INDEX_TYPE", "COLUMN_POSITION"},
+			rows:          [][]driver.Value{{"ORDERS_copy_IDX1", "STATUS", "NONUNIQUE", int64(0), "NORMAL", int64(1)}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	uppercaseIndexes, err := s.listIndexes(schema, "ORDERS_COPY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mixedCaseIndexes, err := s.listIndexes(schema, "ORDERS_copy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uppercaseIndexes) != 1 || uppercaseIndexes[0].Name != "ORDERS_COPY_IDX1" {
+		t.Fatalf("listIndexes(ORDERS_COPY) = %#v, want uppercase table index", uppercaseIndexes)
+	}
+	if len(mixedCaseIndexes) != 1 || mixedCaseIndexes[0].Name != "ORDERS_copy_IDX1" || !reflect.DeepEqual(mixedCaseIndexes[0].Columns, []string{"STATUS"}) {
+		t.Fatalf("listIndexes(ORDERS_copy) = %#v, want quoted clone index", mixedCaseIndexes)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetTableCommentPreservesQuotedObjectName(t *testing.T) {
+	const schema = "HR"
+	const table = "OrderDetails"
+	const comment = "Quoted table comment"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_TAB_COMMENTS",
+			args:          []driver.Value{schema, table},
+			rows:          [][]driver.Value{{comment}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.getTableComment(schema, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != comment {
+		t.Fatalf("getTableComment() = %#v, want %q", got, comment)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetTableCommentFallsBackToUppercase(t *testing.T) {
+	const schema = "HR"
+	const comment = "Orders comment"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_TAB_COMMENTS",
+			args:          []driver.Value{schema, "orders"},
+			rows:          nil,
+		},
+		{
+			queryContains: "FROM ALL_TAB_COMMENTS",
+			args:          []driver.Value{schema, "ORDERS"},
+			rows:          [][]driver.Value{{comment}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.getTableComment(schema, "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != comment {
+		t.Fatalf("getTableComment() = %#v, want %q", got, comment)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestListForeignKeysIncludesReferencedSchemaAndDeleteRule(t *testing.T) {
+	const schema = "HR"
+	const table = "ORDERS"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_CONSTRAINTS ac",
+			args:          []driver.Value{schema, table},
+			columns:       []string{"CONSTRAINT_NAME", "COLUMN_NAME", "REF_SCHEMA", "REF_TABLE", "REF_COLUMN", "DELETE_RULE"},
+			rows:          [][]driver.Value{{"FK_ORDERS_CUSTOMER", "CUSTOMER_ID", "CRM", "CUSTOMERS", "ID", "CASCADE"}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.listForeignKeys(schema, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []foreignKeyInfo{{
+		Name:      "FK_ORDERS_CUSTOMER",
+		Column:    "CUSTOMER_ID",
+		RefSchema: "CRM",
+		RefTable:  "CUSTOMERS",
+		RefColumn: "ID",
+		OnDelete:  "CASCADE",
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("listForeignKeys() = %#v, want %#v", got, want)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestListConstraintsGroupsMultiColumnPrimaryKeyAndMapsTypes(t *testing.T) {
+	const schema = "HR"
+	const table = "ORDERS"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_CONSTRAINTS ac",
+			args:          []driver.Value{schema, table},
+			columns:       []string{"CONSTRAINT_NAME", "CONSTRAINT_TYPE", "SEARCH_CONDITION", "GENERATED", "STATUS", "DEFERRABLE", "DEFERRED", "VALIDATED", "COLUMN_NAME", "POSITION", "NULLABLE"},
+			rows: [][]driver.Value{
+				{"PK_ORDERS", "P", nil, "USER NAME", "ENABLED", "NOT DEFERRABLE", "IMMEDIATE", "VALIDATED", "TENANT_ID", int64(1), "N"},
+				{"PK_ORDERS", "P", nil, "USER NAME", "ENABLED", "NOT DEFERRABLE", "IMMEDIATE", "VALIDATED", "ORDER_ID", int64(2), "N"},
+				{"UQ_ORDERS_CODE", "U", nil, "USER NAME", "ENABLED", "DEFERRABLE", "DEFERRED", "VALIDATED", "ORDER_CODE", int64(1), "Y"},
+				{"CK_ORDERS_AMOUNT", "C", "AMOUNT > 0", "USER NAME", "DISABLED", "NOT DEFERRABLE", "IMMEDIATE", "NOT VALIDATED", nil, nil, nil},
+			},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.listConstraints(schema, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []constraintInfo{
+		{Name: "PK_ORDERS", ConstraintType: "PRIMARY KEY", Definition: "", Columns: []string{"TENANT_ID", "ORDER_ID"}, RefColumns: []string{}, Enabled: true, Valid: true},
+		{Name: "UQ_ORDERS_CODE", ConstraintType: "UNIQUE", Definition: "", Columns: []string{"ORDER_CODE"}, RefColumns: []string{}, Deferrable: true, InitiallyDeferred: true, Enabled: true, Valid: true},
+		{Name: "CK_ORDERS_AMOUNT", ConstraintType: "CHECK", Definition: "AMOUNT > 0", Columns: []string{}, RefColumns: []string{}, Enabled: false, Valid: false},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("listConstraints() = %#v, want %#v", got, want)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestListConstraintsExcludesGeneratedNotNullChecksButKeepsRealChecks(t *testing.T) {
+	const schema = "HR"
+	const table = "ORDERS"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_CONSTRAINTS ac",
+			args:          []driver.Value{schema, table},
+			columns:       []string{"CONSTRAINT_NAME", "CONSTRAINT_TYPE", "SEARCH_CONDITION", "GENERATED", "STATUS", "DEFERRABLE", "DEFERRED", "VALIDATED", "COLUMN_NAME", "POSITION", "NULLABLE"},
+			rows: [][]driver.Value{
+				{"SYS_C008648", "C", `"ORDER_CODE" IS NOT NULL`, "GENERATED NAME", "ENABLED", "NOT DEFERRABLE", "IMMEDIATE", "VALIDATED", "ORDER_CODE", int64(1), "N"},
+				{"SYS_C008649", "C", `"OPTIONAL_CODE" IS NOT NULL`, "GENERATED NAME", "ENABLED", "NOT DEFERRABLE", "IMMEDIATE", "VALIDATED", "OPTIONAL_CODE", int64(1), "Y"},
+				{"CK_REQUIRED_CODE", "C", `"REQUIRED_CODE" IS NOT NULL`, "USER NAME", "ENABLED", "NOT DEFERRABLE", "IMMEDIATE", "VALIDATED", "REQUIRED_CODE", int64(1), "N"},
+				{"CK_ORDERS_AMOUNT", "C", "AMOUNT > 0", "USER NAME", "ENABLED", "NOT DEFERRABLE", "IMMEDIATE", "VALIDATED", nil, nil, nil},
+			},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	got, err := s.listConstraints(schema, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []constraintInfo{
+		{Name: "SYS_C008649", ConstraintType: "CHECK", Definition: `"OPTIONAL_CODE" IS NOT NULL`, Columns: []string{"OPTIONAL_CODE"}, RefColumns: []string{}, Enabled: true, Valid: true},
+		{Name: "CK_REQUIRED_CODE", ConstraintType: "CHECK", Definition: `"REQUIRED_CODE" IS NOT NULL`, Columns: []string{"REQUIRED_CODE"}, RefColumns: []string{}, Enabled: true, Valid: true},
+		{Name: "CK_ORDERS_AMOUNT", ConstraintType: "CHECK", Definition: "AMOUNT > 0", Columns: []string{}, RefColumns: []string{}, Enabled: true, Valid: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("listConstraints() = %#v, want %#v (system-generated NOT NULL check must be excluded, real CHECK must survive)", got, want)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestListConstraintsPreservesQuotedMixedCaseSchema(t *testing.T) {
+	const schema = "AppOwner"
+	const table = "Orders"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_CONSTRAINTS ac",
+			args:          []driver.Value{schema, table},
+			columns:       []string{"CONSTRAINT_NAME", "CONSTRAINT_TYPE", "SEARCH_CONDITION", "GENERATED", "STATUS", "DEFERRABLE", "DEFERRED", "VALIDATED", "COLUMN_NAME", "POSITION", "NULLABLE"},
+			rows:          [][]driver.Value{},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	constraints, err := s.listConstraints(schema, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(constraints) != 0 {
+		t.Fatalf("listConstraints(%q) = %#v, want empty result", schema, constraints)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestListForeignKeysAndTriggersPreserveQuotedCloneTableName(t *testing.T) {
+	const schema = "HR"
+	const table = "ORDERS_copy"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_CONSTRAINTS ac",
+			args:          []driver.Value{schema, table},
+			columns:       []string{"CONSTRAINT_NAME", "COLUMN_NAME", "REF_SCHEMA", "REF_TABLE", "REF_COLUMN", "DELETE_RULE"},
+			rows:          [][]driver.Value{{"ORDERS_copy_FK1", "CUSTOMER_ID", "CRM", "CUSTOMERS", "ID", "CASCADE"}},
+		},
+		{
+			queryContains: "FROM ALL_TRIGGERS",
+			args:          []driver.Value{schema, table},
+			columns:       []string{"TRIGGER_NAME", "TRIGGERING_EVENT", "TRIGGER_TYPE", "DESCRIPTION", "LINE", "TEXT"},
+			rows:          [][]driver.Value{{"ORDERS_copy_TRG1", "INSERT", "BEFORE EACH ROW", nil, nil, nil}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	foreignKeys, err := s.listForeignKeys(schema, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	triggers, err := s.listTriggers(schema, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(foreignKeys) != 1 || foreignKeys[0].Name != "ORDERS_copy_FK1" {
+		t.Fatalf("listForeignKeys(%q) = %#v, want quoted clone foreign key", table, foreignKeys)
+	}
+	if len(triggers) != 1 || triggers[0].Name != "ORDERS_copy_TRG1" {
+		t.Fatalf("listTriggers(%q) = %#v, want quoted clone trigger", table, triggers)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestIsQuerySQLSkipsLeadingComments(t *testing.T) {
+	tests := []string{
+		"-- 测试\nSELECT * FROM (SELECT * FROM \"DBX_TEST\".\"ORDERS_10K\") WHERE ROWNUM <= 100",
+		"/* explain */\nSELECT * FROM dual",
+		"-- comment\r\nWITH rows AS (SELECT 1 FROM dual) SELECT * FROM rows",
+	}
+	for _, sqlText := range tests {
+		if !isQuerySQL(sqlText) {
+			t.Fatalf("expected SQL to be treated as query: %s", sqlText)
+		}
+	}
+}
+
+func TestIsQuerySQLRequiresKeywordBoundary(t *testing.T) {
+	tests := []string{
+		"-- comment only",
+		"selectivity FROM stats",
+		"withdraw FROM account",
+		"/* unterminated comment",
+	}
+	for _, sqlText := range tests {
+		if isQuerySQL(sqlText) {
+			t.Fatalf("expected SQL not to be treated as query: %s", sqlText)
+		}
+	}
+}
+
+func TestTrimStatementSQLPreservesAnonymousPLSQLBlockTerminator(t *testing.T) {
+	sqlText := `DECLARE
+   PRE_TRD_DATE   INTEGER ;
+BEGIN
+   SELECT 1 + 2 INTO PRE_TRD_DATE FROM DUAL;
+END;`
+
+	if got := trimStatementSQL(sqlText); got != sqlText {
+		t.Fatalf("trimStatementSQL() = %q, want full PL/SQL block %q", got, sqlText)
+	}
+}
+
+func TestTrimStatementSQLStripsSlashDelimiterAfterPLSQLBlock(t *testing.T) {
+	sqlText := "BEGIN\n  NULL;\nEND;\n/"
+	want := "BEGIN\n  NULL;\nEND;"
+
+	if got := trimStatementSQL(sqlText); got != want {
+		t.Fatalf("trimStatementSQL() = %q, want %q", got, want)
+	}
+}
+
+func TestTrimStatementSQLPreservesCreatePLSQLObjectTerminator(t *testing.T) {
+	tests := []string{
+		"CREATE OR REPLACE PROCEDURE p AS\nBEGIN\n  NULL;\nEND;",
+		"CREATE OR REPLACE FUNCTION f RETURN NUMBER AS\nBEGIN\n  RETURN 1;\nEND;",
+		"CREATE OR REPLACE PACKAGE pkg_utils AS\n  FUNCTION get_version RETURN VARCHAR2;\nEND pkg_utils;",
+	}
+	for _, sqlText := range tests {
+		if got := trimStatementSQL(sqlText); got != sqlText {
+			t.Fatalf("trimStatementSQL() = %q, want full PL/SQL object %q", got, sqlText)
+		}
+	}
+}
+
+func TestTrimStatementSQLStripsSlashDelimiterAfterCreatePLSQLObject(t *testing.T) {
+	sqlText := "CREATE OR REPLACE PROCEDURE p AS\nBEGIN\n  NULL;\nEND;\n/"
+	want := "CREATE OR REPLACE PROCEDURE p AS\nBEGIN\n  NULL;\nEND;"
+
+	if got := trimStatementSQL(sqlText); got != want {
+		t.Fatalf("trimStatementSQL() = %q, want %q", got, want)
+	}
+}
+
+func TestTrimStatementSQLRemovesRegularStatementSemicolon(t *testing.T) {
+	if got := trimStatementSQL("SELECT 1 FROM DUAL;"); got != "SELECT 1 FROM DUAL" {
+		t.Fatalf("trimStatementSQL() = %q, want regular statement without semicolon", got)
+	}
+}
+
+func TestOracleExplainPlanBindParamsIncludesNamedParameters(t *testing.T) {
+	sqlText := `
+SELECT *
+FROM orders
+WHERE id = :id
+  AND status = :status
+  AND parent_id = :id`
+
+	want := []oracleBindParam{
+		{Name: "id"},
+		{Name: "status"},
+	}
+	if got := oracleExplainPlanBindParams(sqlText); !reflect.DeepEqual(got, want) {
+		t.Fatalf("oracleExplainPlanBindParams() = %#v, want %#v", got, want)
+	}
+}
+
+func TestOracleExplainPlanBindParamsSkipsQuotedTextAndComments(t *testing.T) {
+	sqlText := `
+SELECT ':literal' AS literal_value,
+       q'[not :q_param]' AS q_literal,
+       "COL:NAME" AS quoted_identifier
+FROM orders
+WHERE id = :id
+  -- ignored :comment_param
+  AND note <> 'escaped '' :text_param'
+  /* ignored :block_param */`
+
+	want := []oracleBindParam{{Name: "id"}}
+	if got := oracleExplainPlanBindParams(sqlText); !reflect.DeepEqual(got, want) {
+		t.Fatalf("oracleExplainPlanBindParams() = %#v, want %#v", got, want)
+	}
+}
+
+func TestOracleExplainPlanBindParamsIncludesPositionalParameters(t *testing.T) {
+	sqlText := "SELECT * FROM orders WHERE id = :1 AND status = :status"
+
+	want := []oracleBindParam{
+		{Name: "1", Positional: true},
+		{Name: "status"},
+	}
+	if got := oracleExplainPlanBindParams(sqlText); !reflect.DeepEqual(got, want) {
+		t.Fatalf("oracleExplainPlanBindParams() = %#v, want %#v", got, want)
+	}
+}
+
+func TestOracleExplainPlanBindArgsUsesNamedArguments(t *testing.T) {
+	args := oracleExplainPlanBindArgs("SELECT * FROM orders WHERE id = :id")
+
+	if len(args) != 1 {
+		t.Fatalf("expected one bind argument, got %#v", args)
+	}
+	named, ok := args[0].(sql.NamedArg)
+	if !ok {
+		t.Fatalf("expected sql.NamedArg, got %#v", args[0])
+	}
+	if named.Name != "id" || named.Value != nil {
+		t.Fatalf("unexpected named bind argument: %#v", named)
+	}
+}
+
+func TestOracleExplainTargetSchemaIgnoresSysDBAServicePrefix(t *testing.T) {
+	if got := oracleExplainTargetSchema("ORCLPDB1", "", "SYSDBA:ORCLPDB1"); got != "" {
+		t.Fatalf("oracleExplainTargetSchema() = %q, want no schema switch", got)
+	}
+}
+
+func TestOracleExplainTargetSchemaKeepsSelectedSchema(t *testing.T) {
+	if got := oracleExplainTargetSchema("APP", "", "SYSDBA:ORCLPDB1"); got != "APP" {
+		t.Fatalf("oracleExplainTargetSchema() = %q, want APP", got)
+	}
+	if got := oracleExplainTargetSchema("ORCLPDB1", "REPORTING", "SYSDBA:ORCLPDB1"); got != "REPORTING" {
+		t.Fatalf("oracleExplainTargetSchema() = %q, want REPORTING", got)
+	}
+}
+
+func protocolContract(t *testing.T) struct {
+	ProtocolVersion int      `json:"protocolVersion"`
+	AllCapabilities []string `json:"allCapabilities"`
+} {
+	t.Helper()
+	data, err := os.ReadFile("../../common/src/main/resources/agent-protocol-v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contract struct {
+		ProtocolVersion int      `json:"protocolVersion"`
+		AllCapabilities []string `json:"allCapabilities"`
+	}
+	if err := json.Unmarshal(data, &contract); err != nil {
+		t.Fatal(err)
+	}
+	return contract
+}
+
+func TestOracleColumnTypeDDL(t *testing.T) {
+	charLen := 64
+	precision := 10
+	scale := 2
+	zeroScale := 0
+	byteUnit := "B"
+	charUnit := "C"
+
+	tests := []struct {
+		name   string
+		column columnInfo
+		want   string
+	}{
+		{name: "varchar", column: columnInfo{DataType: "VARCHAR2", CharacterMaximumLength: &charLen}, want: "VARCHAR2(64)"},
+		{name: "varchar byte semantics", column: columnInfo{DataType: "VARCHAR2", CharacterMaximumLength: &charLen, CharacterLengthUnit: &byteUnit}, want: "VARCHAR2(64 BYTE)"},
+		{name: "varchar char semantics", column: columnInfo{DataType: "VARCHAR2", CharacterMaximumLength: &charLen, CharacterLengthUnit: &charUnit}, want: "VARCHAR2(64 CHAR)"},
+		{name: "national character type ignores unit", column: columnInfo{DataType: "NVARCHAR2", CharacterMaximumLength: &charLen, CharacterLengthUnit: &charUnit}, want: "NVARCHAR2(64)"},
+		{name: "number scale", column: columnInfo{DataType: "NUMBER", NumericPrecision: &precision, NumericScale: &scale}, want: "NUMBER(10,2)"},
+		{name: "number zero scale", column: columnInfo{DataType: "NUMBER", NumericPrecision: &precision, NumericScale: &zeroScale}, want: "NUMBER(10)"},
+		{name: "timestamp preserves precision", column: columnInfo{DataType: "TIMESTAMP(6)"}, want: "TIMESTAMP(6)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := oracleColumnTypeDDL(tt.column); got != tt.want {
+				t.Fatalf("oracleColumnTypeDDL() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildDSNUsesConnectionStringWhenProvided(t *testing.T) {
+	dsn := buildDSN(connectParams{ConnectionString: "oracle://scott:tiger@db.example.com:1521/ORCLPDB1"})
+
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Query().Get("PREFETCH_ROWS") != oracleDefaultPrefetchRows {
+		t.Fatalf("raw Oracle DSN should use the DBX prefetch default, got: %s", dsn)
+	}
+}
+
+func TestBuildDSNUsesStableDefaultPrefetchRows(t *testing.T) {
+	dsn := buildDSN(connectParams{
+		Host:     "db.example.com",
+		Port:     1521,
+		Database: "XE",
+		Username: "scott",
+		Password: "tiger",
+	})
+
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Query().Get("PREFETCH_ROWS") != oracleDefaultPrefetchRows {
+		t.Fatalf("generated Oracle DSN should use the DBX prefetch default, got: %s", dsn)
+	}
+}
+
+func TestReadQuerySessionPageDoesNotLookAheadAfterFullPage(t *testing.T) {
+	db, _ := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{{
+		queryContains: "SELECT * FROM TEST_VIEW",
+		args:          []driver.Value{},
+		columns:       []string{"ID"},
+		rows:          [][]driver.Value{{int64(1)}, {int64(2)}},
+	}})
+	s := newServer()
+	s.db = db
+	result, err := s.executeQueryPage(queryOptions{SQL: "SELECT * FROM TEST_VIEW"}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Rows) != 2 || !result.HasMore || result.SessionID == nil {
+		t.Fatalf("full page should keep a lazy session without look-ahead: %+v", result)
+	}
+	if !s.closeQuerySession(*result.SessionID) {
+		t.Fatal("expected the query session to close")
+	}
+}
+
+func TestBuildDSNPreservesConfiguredPrefetchRows(t *testing.T) {
+	tests := []connectParams{
+		{
+			Host:      "db.example.com",
+			Port:      1521,
+			Database:  "XE",
+			Username:  "scott",
+			Password:  "tiger",
+			URLParams: "prefetch_rows=20",
+		},
+		{ConnectionString: "oracle://scott:tiger@db.example.com:1521/XE?prefetch_rows=50"},
+	}
+
+	for _, params := range tests {
+		dsn := buildDSN(params)
+		parsed, err := url.Parse(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parsed.Query().Get("prefetch_rows") == "" {
+			t.Fatalf("configured prefetch rows should be preserved, got: %s", dsn)
+		}
+		if parsed.Query().Get("PREFETCH_ROWS") != "" {
+			t.Fatalf("default prefetch rows should not be added beside a configured value, got: %s", dsn)
+		}
+	}
+}
+
+func TestBuildDSNPreservesBastionUsernameAndEncodesCredentials(t *testing.T) {
+	dsn := buildDSN(connectParams{
+		Host:     "db.example.com",
+		Port:     1521,
+		Database: "XE",
+		Username: "9008888:reader",
+		Password: "dbx:pass",
+	})
+
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := parsed.User.Password()
+	if parsed.User.Username() != "9008888:reader" || password != "dbx:pass" {
+		t.Fatalf("credentials should survive URL parsing, dsn=%s username=%q password=%q", dsn, parsed.User.Username(), password)
+	}
+	if !strings.HasPrefix(parsed.User.String(), "9008888%3Areader:") {
+		t.Fatalf("bastion username should be escaped without being quoted, dsn=%s", dsn)
+	}
+}
+
+func TestBuildDSNEncodesColonInCredentialsFromJDBCServiceURL(t *testing.T) {
+	dsn := buildDSN(connectParams{
+		Username:         "9008888:reader",
+		Password:         "dbx:pass",
+		ConnectionString: "jdbc:oracle:thin:@//db.example.com:1521/XE",
+	})
+
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password, _ := parsed.User.Password()
+	if parsed.User.Username() != "9008888:reader" || password != "dbx:pass" {
+		t.Fatalf("credentials should survive JDBC URL conversion, dsn=%s username=%q password=%q", dsn, parsed.User.Username(), password)
+	}
+	if parsed.Host != "db.example.com:1521" || strings.TrimPrefix(parsed.Path, "/") != "XE" {
+		t.Fatalf("JDBC host/service should survive conversion, dsn=%s", dsn)
+	}
+}
+
+func TestBuildDSNPreservesExplicitlyQuotedUsername(t *testing.T) {
+	dsn := buildDSN(connectParams{
+		Host:     "db.example.com",
+		Port:     1521,
+		Database: "XE",
+		Username: `"abc:def"`,
+		Password: "dbx:pass",
+	})
+
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.User.Username() != `"abc:def"` {
+		t.Fatalf("explicitly quoted username should remain unchanged, dsn=%s username=%q", dsn, parsed.User.Username())
+	}
+}
+
+func TestBuildDSNUsesJdbcServiceHostAndPort(t *testing.T) {
+	dsn := buildDSN(connectParams{
+		Host:             "127.0.0.1",
+		Port:             11521,
+		Database:         "ORCLPDB1",
+		Username:         "scott",
+		Password:         "tiger",
+		ConnectionString: "jdbc:oracle:thin:@//oracle.example.com:1521/ORCLPDB1",
+	})
+
+	if strings.Contains(strings.ToLower(dsn), "jdbc:") {
+		t.Fatalf("dsn should be go-ora format, got: %s", dsn)
+	}
+	if !strings.Contains(dsn, "oracle.example.com:1521") || !strings.Contains(dsn, "ORCLPDB1") {
+		t.Fatalf("dsn should use JDBC host/port/database fields, got: %s", dsn)
+	}
+}
+
+func TestBuildDSNUsesRewrittenJdbcServiceHostAndPort(t *testing.T) {
+	dsn := buildDSN(connectParams{
+		Host:             "127.0.0.1",
+		Port:             11521,
+		Database:         "ORCLPDB1",
+		Username:         "scott",
+		Password:         "tiger",
+		ConnectionString: "jdbc:oracle:thin:@//127.0.0.1:11521/ORCLPDB1",
+	})
+
+	if strings.Contains(strings.ToLower(dsn), "jdbc:") {
+		t.Fatalf("dsn should be go-ora format, got: %s", dsn)
+	}
+	if !strings.Contains(dsn, "127.0.0.1:11521") || !strings.Contains(dsn, "ORCLPDB1") {
+		t.Fatalf("dsn should use rewritten JDBC host/port/database fields, got: %s", dsn)
+	}
+}
+
+func TestBuildDSNConvertsJdbcSID(t *testing.T) {
+	dsn := buildDSN(connectParams{
+		Host:             "127.0.0.1",
+		Port:             11521,
+		Database:         "ORCL",
+		Username:         "scott",
+		Password:         "tiger",
+		ConnectionString: "jdbc:oracle:thin:@oracle.example.com:1521:ORCL",
+	})
+
+	if strings.Contains(strings.ToLower(dsn), "jdbc:") {
+		t.Fatalf("dsn should be go-ora format, got: %s", dsn)
+	}
+	upperDSN := strings.ToUpper(dsn)
+	if !strings.Contains(dsn, "oracle.example.com:1521") || !strings.Contains(upperDSN, "SID=ORCL") {
+		t.Fatalf("dsn should use JDBC host/port and SID option, got: %s", dsn)
+	}
+}
+
+func TestBuildDSNConvertsJdbcDescriptor(t *testing.T) {
+	dsn := buildDSN(connectParams{
+		Username:         "scott",
+		Password:         "tiger",
+		ConnectionString: "jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=db.example.com)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=ORCLPDB1)))",
+	})
+
+	if !strings.HasPrefix(dsn, "oracle://scott:tiger@") {
+		t.Fatalf("descriptor should become go-ora url, got: %s", dsn)
+	}
+	if !strings.Contains(dsn, "connStr=") {
+		t.Fatalf("descriptor should be passed via connStr option, got: %s", dsn)
+	}
+}
+
+func TestBuildDSNAddsSysDbaOption(t *testing.T) {
+	dsn := buildDSN(connectParams{
+		Host:      "127.0.0.1",
+		Port:      1521,
+		Database:  "SYSDBA:ORCLPDB1",
+		Username:  "sys",
+		Password:  "secret",
+		SysDBA:    true,
+		URLParams: "TRACE FILE=trace.log",
+	})
+
+	if strings.Contains(dsn, "SYSDBA:") {
+		t.Fatalf("dsn should strip SYSDBA prefix: %s", dsn)
+	}
+	if !strings.Contains(dsn, "ORCLPDB1") {
+		t.Fatalf("dsn should include service name: %s", dsn)
+	}
+	upperDSN := strings.ToUpper(dsn)
+	if !strings.Contains(upperDSN, "AUTH TYPE=SYSDBA") &&
+		!strings.Contains(upperDSN, "AUTH+TYPE=SYSDBA") &&
+		!strings.Contains(upperDSN, "AUTH%20TYPE=SYSDBA") {
+		t.Fatalf("dsn should include SYSDBA auth option: %s", dsn)
+	}
+}
+
+func TestParseOracleMajorVersion(t *testing.T) {
+	tests := []struct {
+		version string
+		major   int
+		ok      bool
+	}{
+		{version: "10.2.0.4.0", major: 10, ok: true},
+		{version: "11.2.0.4.0 Production", major: 11, ok: true},
+		{version: "Oracle Database 10g Enterprise Edition Release 10.2.0.4.0 - 64bit Production", major: 10, ok: true},
+		{version: "19.0.0.0.0", major: 19, ok: true},
+		{version: "", ok: false},
+		{version: "Oracle Database 10g", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.version, func(t *testing.T) {
+			major, ok := parseOracleMajorVersion(tt.version)
+			if major != tt.major || ok != tt.ok {
+				t.Fatalf("parseOracleMajorVersion(%q) = (%d, %t), want (%d, %t)", tt.version, major, ok, tt.major, tt.ok)
+			}
+		})
+	}
+}
+
+func TestParseOracleAuthVersionNumber(t *testing.T) {
+	tests := []struct {
+		value string
+		major int
+		ok    bool
+	}{
+		{value: "169870336", major: 10, ok: true},
+		{value: "186647040", major: 11, ok: true},
+		{value: "301989888", major: 18, ok: true},
+		{value: "", ok: false},
+		{value: "not-a-version", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			major, ok := parseOracleAuthVersionNumber(tt.value)
+			if major != tt.major || ok != tt.ok {
+				t.Fatalf("parseOracleAuthVersionNumber(%q) = (%d, %t), want (%d, %t)", tt.value, major, ok, tt.major, tt.ok)
+			}
+		})
+	}
+}
+
+func TestOracleServerMajorVersionUsesDriverSessionProperties(t *testing.T) {
+	major, ok := oracleServerMajorVersionFromDriverConn(&go_ora.Connection{
+		SessionProperties: map[string]string{"AUTH_VERSION_NO": "186647040"},
+	})
+	if !ok || major != 11 {
+		t.Fatalf("oracleServerMajorVersionFromDriverConn() = (%d, %t), want (11, true)", major, ok)
+	}
+	if _, ok := oracleServerMajorVersionFromDriverConn(struct{}{}); ok {
+		t.Fatal("non-Oracle connections should not expose a server version")
+	}
+}
+
+func TestOracleServerMajorVersionUsesProductComponentVersion(t *testing.T) {
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "PRODUCT_COMPONENT_VERSION",
+			args:          []driver.Value{},
+			rows:          [][]driver.Value{{"10.2.0.4.0"}},
+		},
+	})
+
+	major, ok := oracleServerMajorVersion(db, time.Second)
+	if !ok || major != 10 {
+		t.Fatalf("oracleServerMajorVersion() = (%d, %t), want (10, true)", major, ok)
+	}
+	if scripted.next != 1 {
+		t.Fatalf("expected one version query, got %d", scripted.next)
+	}
+}
+
+func TestOracleServerMajorVersionFallsBackToVersionBanner(t *testing.T) {
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "PRODUCT_COMPONENT_VERSION",
+			args:          []driver.Value{},
+			err:           errors.New("view unavailable"),
+		},
+		{
+			queryContains: "V$VERSION",
+			args:          []driver.Value{},
+			rows: [][]driver.Value{{
+				"Oracle Database 11g Enterprise Edition Release 11.2.0.4.0 - 64bit Production",
+			}},
+		},
+	})
+
+	major, ok := oracleServerMajorVersion(db, time.Second)
+	if !ok || major != 11 {
+		t.Fatalf("oracleServerMajorVersion() = (%d, %t), want (11, true)", major, ok)
+	}
+	if scripted.next != 2 {
+		t.Fatalf("expected both version queries, got %d", scripted.next)
+	}
+}
+
+func TestWithOracleLOBFetchPostUsesURLParamsForGeneratedDSN(t *testing.T) {
+	params := withOracleLOBFetchPost(connectParams{
+		Host:      "db.example.com",
+		Port:      1521,
+		Database:  "ORCL",
+		Username:  "scott",
+		Password:  "tiger",
+		URLParams: "CHARSET=ZHS16GBK",
+	})
+
+	values, err := url.ParseQuery(params.URLParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.Get("LOB FETCH") != "POST" || values.Get("CHARSET") != "ZHS16GBK" {
+		t.Fatalf("legacy LOB mode should preserve URL parameters, got: %s", params.URLParams)
+	}
+	config, err := configurations.ParseConfig(buildDSN(params))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Lob != configurations.STREAM {
+		t.Fatalf("generated DSN should enable streamed LOB reads, got: %s", buildDSN(params))
+	}
+}
+
+func TestWithOracleLOBFetchPostUpdatesRawOracleURL(t *testing.T) {
+	params := withOracleLOBFetchPost(connectParams{
+		ConnectionString: "oracle://scott:tiger@db.example.com:1521/ORCL?CHARSET=ZHS16GBK",
+	})
+	parsed, err := url.Parse(params.ConnectionString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Query().Get("LOB FETCH") != "POST" || parsed.Query().Get("CHARSET") != "ZHS16GBK" {
+		t.Fatalf("raw Oracle URL should preserve query parameters, got: %s", params.ConnectionString)
+	}
+	config, err := configurations.ParseConfig(params.ConnectionString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Lob != configurations.STREAM {
+		t.Fatalf("raw Oracle URL should enable streamed LOB reads, got: %s", params.ConnectionString)
+	}
+}
+
+func TestHasOracleLOBFetchOptionHonorsExplicitModes(t *testing.T) {
+	tests := []connectParams{
+		{URLParams: "lob+fetch=inline"},
+		{URLParams: "LOB%20FETCH=POST"},
+		{ConnectionString: "oracle://scott:tiger@db.example.com:1521/ORCL?lob+fetch=stream"},
+	}
+	for _, params := range tests {
+		if !hasOracleLOBFetchOption(params) {
+			t.Fatalf("explicit LOB fetch mode should be detected: %+v", params)
+		}
+	}
+	if hasOracleLOBFetchOption(connectParams{URLParams: "CHARSET=ZHS16GBK"}) {
+		t.Fatal("unrelated URL parameters should not be treated as an explicit LOB fetch mode")
+	}
+}
+
+func TestShouldUseLegacyOracleLOBFetchOnlyForLegacyServers(t *testing.T) {
+	params := connectParams{URLParams: "CHARSET=ZHS16GBK"}
+	if !shouldUseLegacyOracleLOBFetch(params, 10, true) {
+		t.Fatal("Oracle 10g should use streamed LOB reads")
+	}
+	if shouldUseLegacyOracleLOBFetch(params, 11, true) || shouldUseLegacyOracleLOBFetch(params, 19, true) {
+		t.Fatal("Oracle 11g and newer should retain the driver's default LOB mode")
+	}
+	if shouldUseLegacyOracleLOBFetch(params, 0, false) {
+		t.Fatal("unknown Oracle versions should retain the driver's default LOB mode")
+	}
+	if shouldUseLegacyOracleLOBFetch(connectParams{URLParams: "LOB+FETCH=INLINE"}, 10, true) {
+		t.Fatal("an explicit user LOB mode should not be overridden")
+	}
+}
+
+func TestOracleMethodMayReadLOB(t *testing.T) {
+	for _, method := range []string{"get_table_ddl", "execute_query", "execute_query_page", "start_table_read", "execute_transaction"} {
+		if !oracleMethodMayReadLOB(method) {
+			t.Fatalf("%s should enable deferred legacy LOB reads", method)
+		}
+	}
+	for _, method := range []string{"list_schemas", "list_tables", "list_objects", "get_columns", "list_indexes", "list_triggers"} {
+		if oracleMethodMayReadLOB(method) {
+			t.Fatalf("%s should not reconnect while loading metadata", method)
+		}
+	}
+}
+
+func TestOracleGB18030ConverterRoundTrip(t *testing.T) {
+	converter := oracleGB18030Converter{}
+	input := "DBX \u4e2d\u6587 \U00020000"
+
+	encoded := converter.Encode(input)
+	if string(encoded) == input {
+		t.Fatalf("GB18030 converter should encode non-ASCII text away from UTF-8 bytes")
+	}
+	if decoded := converter.Decode(encoded); decoded != input {
+		t.Fatalf("GB18030 round trip = %q, want %q", decoded, input)
+	}
+	if converter.GetLangID() != oracleCharsetZHS32GB18030 {
+		t.Fatalf("GB18030 converter lang id = %d, want %d", converter.GetLangID(), oracleCharsetZHS32GB18030)
+	}
+	if clone := converter.Clone(); clone.GetLangID() != oracleCharsetZHS32GB18030 {
+		t.Fatalf("GB18030 converter clone lang id = %d, want %d", clone.GetLangID(), oracleCharsetZHS32GB18030)
+	}
+}
+
+func TestOpenDBUsesIndependentOracleDrivers(t *testing.T) {
+	params := connectParams{
+		Host:     "127.0.0.1",
+		Port:     1521,
+		Database: "ORCL",
+		Username: "dbx",
+		Password: "secret",
+	}
+	first, err := openDB(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := openDB(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	if first.Driver() == second.Driver() {
+		t.Fatal("Oracle connections must not share the driver's cached charset converters")
+	}
+}
+
+func TestOracleStringConverterForUnsupportedCharsetError(t *testing.T) {
+	err := errors.New("the server use charset with id: 854 which is not supported by the driver")
+	converter, ok := oracleStringConverterForUnsupportedCharsetError(err)
+	if !ok {
+		t.Fatalf("expected GB18030 server charset error to have a converter")
+	}
+	if converter.GetLangID() != oracleCharsetZHS32GB18030 {
+		t.Fatalf("converter lang id = %d, want %d", converter.GetLangID(), oracleCharsetZHS32GB18030)
+	}
+	ncharsetErr := errors.New("the server use ncharset with id: 854 which is not supported by the driver")
+	if _, ok := oracleStringConverterForUnsupportedCharsetError(ncharsetErr); ok {
+		t.Fatalf("ncharset errors should not have a server charset converter")
+	}
+	otherCharsetErr := errors.New("the server use charset with id: 852 which is not supported by the driver")
+	if charsetID, ok := unsupportedOracleServerCharsetID(otherCharsetErr); !ok || charsetID != 852 {
+		t.Fatalf("other server charset should still be parsed, got id=%d ok=%v", charsetID, ok)
+	}
+	if _, ok := oracleStringConverterForUnsupportedCharsetError(otherCharsetErr); ok {
+		t.Fatalf("unknown charset ids should not get a guessed converter")
+	}
+}
+
+func TestListDatabasesSQLUsesUserDictionaryInsteadOfObjectDictionary(t *testing.T) {
+	sqlText := strings.ToUpper(oracleListDatabasesSQL)
+
+	if !strings.Contains(sqlText, "ALL_USERS") {
+		t.Fatalf("database listing should query ALL_USERS, got: %s", oracleListDatabasesSQL)
+	}
+	if strings.Contains(sqlText, "ALL_TABLES") || strings.Contains(sqlText, "ALL_VIEWS") {
+		t.Fatalf("database listing should not scan object dictionaries, got: %s", oracleListDatabasesSQL)
+	}
+	if strings.Contains(sqlText, "'DIP'") {
+		t.Fatalf("database listing should not hide an existing user named DIP, got: %s", oracleListDatabasesSQL)
+	}
+	if !strings.Contains(sqlText, "'SYS','SYSTEM'") || !strings.Contains(sqlText, "USERNAME NOT LIKE 'APEX_%'") {
+		t.Fatalf("database listing should retain system schema filtering, got: %s", oracleListDatabasesSQL)
+	}
+}
+
+func TestListDatabasesSQLCanApplyVisibleSchemaFilter(t *testing.T) {
+	sqlText, args := oracleListDatabasesSQLWithVisibleSchemas([]string{"APP", "REPORTING"})
+	upperSQL := strings.ToUpper(sqlText)
+
+	if !strings.Contains(upperSQL, "ALL_USERS") {
+		t.Fatalf("database listing should query ALL_USERS, got: %s", sqlText)
+	}
+	if !strings.Contains(upperSQL, "USERNAME IN (:1,:2)") {
+		t.Fatalf("database listing should apply visible schema filter, got: %s", sqlText)
+	}
+	if len(args) != 2 || args[0] != "APP" || args[1] != "REPORTING" {
+		t.Fatalf("visible schema args were not preserved: %#v", args)
+	}
+	if strings.Contains(upperSQL, "ALL_TABLES") || strings.Contains(upperSQL, "ALL_VIEWS") {
+		t.Fatalf("database listing should not scan object dictionaries, got: %s", sqlText)
+	}
+	if !strings.Contains(upperSQL, "'SYS','SYSTEM'") {
+		t.Fatalf("database visible-schema filtering should retain system exclusions, got: %s", sqlText)
+	}
+}
+
+func TestListSchemasSQLIncludesSystemUsersWithoutSynthesizingPublic(t *testing.T) {
+	sqlText := strings.ToUpper(oracleListSchemasSQL)
+
+	if !strings.Contains(sqlText, "FROM ALL_USERS") {
+		t.Fatalf("schema listing should query ALL_USERS, got: %s", oracleListSchemasSQL)
+	}
+	if strings.Contains(sqlText, "NOT IN") || strings.Contains(sqlText, "'SYS'") || strings.Contains(sqlText, "'SYSTEM'") {
+		t.Fatalf("schema listing should not hard-exclude SYS or SYSTEM, got: %s", oracleListSchemasSQL)
+	}
+	if strings.Contains(sqlText, "PUBLIC") || strings.Contains(sqlText, "UNION") {
+		t.Fatalf("schema listing should not synthesize PUBLIC, got: %s", oracleListSchemasSQL)
+	}
+	if !strings.Contains(sqlText, "CURRENT_SCHEMA') THEN 0") || !strings.Contains(sqlText, "SESSION_USER') THEN 1") {
+		t.Fatalf("schema listing should prioritize CURRENT_SCHEMA then SESSION_USER, got: %s", oracleListSchemasSQL)
+	}
+}
+
+func TestListSchemasSQLCanApplyVisibleSchemaFilter(t *testing.T) {
+	sqlText, args := oracleListSchemasSQLWithVisibleSchemas([]string{"SYS", "SYSTEM"})
+	upperSQL := strings.ToUpper(sqlText)
+
+	if !strings.Contains(upperSQL, "USERNAME IN (:1,:2)") {
+		t.Fatalf("schema listing should parameterize visible schemas, got: %s", sqlText)
+	}
+	if len(args) != 2 || args[0] != "SYS" || args[1] != "SYSTEM" {
+		t.Fatalf("visible schema args were not preserved: %#v", args)
+	}
+	if strings.Contains(upperSQL, "NOT IN") || strings.Contains(upperSQL, "'SYS'") || strings.Contains(upperSQL, "'SYSTEM'") {
+		t.Fatalf("visible schema query should not hard-exclude SYS or SYSTEM, got: %s", sqlText)
+	}
+	if !strings.Contains(upperSQL, "CURRENT_SCHEMA') THEN 0") || !strings.Contains(upperSQL, "SESSION_USER') THEN 1") {
+		t.Fatalf("visible schema query should preserve schema ordering, got: %s", sqlText)
+	}
+}
+
+func TestResolveOracleSchemaPrefersCurrentSchemaOverSessionUser(t *testing.T) {
+	currentCalls := 0
+	sessionUserCalls := 0
+	schema, err := resolveOracleSchema(
+		"",
+		func() (string, error) {
+			currentCalls++
+			return "REPORTING", nil
+		},
+		func() (string, error) {
+			sessionUserCalls++
+			return "APP", nil
+		},
+	)
+
+	if err != nil || schema != "REPORTING" {
+		t.Fatalf("resolved schema = %q, err = %v; want REPORTING", schema, err)
+	}
+	if currentCalls != 1 || sessionUserCalls != 0 {
+		t.Fatalf("unexpected resolver calls: current=%d session_user=%d", currentCalls, sessionUserCalls)
+	}
+}
+
+func TestResolveOracleSchemaFallsBackToSessionUser(t *testing.T) {
+	schema, err := resolveOracleSchema(
+		"",
+		func() (string, error) { return "", errors.New("CURRENT_SCHEMA unavailable") },
+		func() (string, error) { return "APP", nil },
+	)
+
+	if err != nil || schema != "APP" {
+		t.Fatalf("resolved schema = %q, err = %v; want APP", schema, err)
+	}
+}
+
+func TestListTablesSQLUsesSplitDictionaryQuery(t *testing.T) {
+	sqlText := strings.ToUpper(oracleListTablesSQL)
+
+	if !strings.Contains(sqlText, "ALL_TABLES") || !strings.Contains(sqlText, "ALL_VIEWS") || !strings.Contains(sqlText, "ALL_MVIEWS") {
+		t.Fatalf("table listing should split tables and views, got: %s", oracleListTablesSQL)
+	}
+	if strings.Contains(sqlText, "ALL_OBJECTS") {
+		t.Fatalf("table listing should avoid sorting the expensive ALL_OBJECTS view, got: %s", oracleListTablesSQL)
+	}
+	if !strings.Contains(sqlText, "UNION ALL") {
+		t.Fatalf("table listing should union table and view metadata, got: %s", oracleListTablesSQL)
+	}
+	if strings.Contains(sqlText, "ALL_TAB_COMMENTS") {
+		t.Fatalf("table listing should not load comments during refresh, got: %s", oracleListTablesSQL)
+	}
+}
+
+func TestOracleMetadataQueriesClassifyMaterializedViews(t *testing.T) {
+	tests := []struct {
+		name       string
+		sqlText    string
+		tableView  string
+		objectView string
+		objectName string
+		objectType bool
+		ownerMatch string
+	}{
+		{
+			name:       "all list tables",
+			sqlText:    oracleListTablesBaseSQL,
+			tableView:  "ALL_TABLES",
+			objectView: "ALL_MVIEWS",
+			objectName: "MV.MVIEW_NAME",
+			ownerMatch: "MV.OWNER = T.OWNER",
+		},
+		{
+			name:       "user list tables",
+			sqlText:    oracleListTablesSessionUserBaseSQL,
+			tableView:  "USER_TABLES",
+			objectView: "USER_MVIEWS",
+			objectName: "MV.MVIEW_NAME",
+		},
+		{
+			name:       "all list objects",
+			sqlText:    oracleListObjectsBaseSQL,
+			tableView:  "ALL_TABLES",
+			objectView: "ALL_OBJECTS",
+			objectName: "MV.OBJECT_NAME",
+			objectType: true,
+			ownerMatch: "MV.OWNER = T.OWNER",
+		},
+		{
+			name:       "user list objects",
+			sqlText:    oracleListObjectsSessionUserBaseSQL,
+			tableView:  "USER_TABLES",
+			objectView: "USER_OBJECTS",
+			objectName: "MV.OBJECT_NAME",
+			objectType: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sqlText := strings.ToUpper(test.sqlText)
+			if !strings.Contains(sqlText, "FROM "+test.tableView+" T") || !strings.Contains(sqlText, "FROM "+test.objectView+" MV") {
+				t.Fatalf("metadata query should classify tables against materialized-view objects: %s", test.sqlText)
+			}
+			if !strings.Contains(sqlText, "NOT EXISTS") || !strings.Contains(sqlText, test.objectName+" = T.TABLE_NAME") {
+				t.Fatalf("metadata query should exclude materialized-view storage tables: %s", test.sqlText)
+			}
+			if test.objectType && !strings.Contains(sqlText, "MV.OBJECT_TYPE = 'MATERIALIZED VIEW'") {
+				t.Fatalf("object query should identify materialized views by object type: %s", test.sqlText)
+			}
+			if test.ownerMatch != "" && !strings.Contains(sqlText, test.ownerMatch) {
+				t.Fatalf("cross-schema metadata query should keep materialized-view classification owner-scoped: %s", test.sqlText)
+			}
+			if !strings.Contains(sqlText, "'MATERIALIZED_VIEW'") {
+				t.Fatalf("metadata query should return the normalized materialized-view type: %s", test.sqlText)
+			}
+			if test.objectType && !strings.Contains(sqlText, "'MATERIALIZED VIEW'") {
+				t.Fatalf("object query should select materialized-view objects: %s", test.sqlText)
+			}
+		})
+	}
+}
+
+func TestListTablesQueryAppliesMetadataConstraints(t *testing.T) {
+	query := oracleListTablesQuery("APP", metadataListConstraints{
+		Filter:      "u_r",
+		Limit:       501,
+		Offset:      10,
+		ObjectTypes: []string{"view", "TABLE", "TABLE"},
+	})
+	sqlText := strings.ToUpper(query.SQL)
+
+	if !strings.Contains(sqlText, "UPPER(OBJECT_NAME) LIKE :4 ESCAPE '\\'") {
+		t.Fatalf("table listing should push filter predicate, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "TABLE_TYPE IN (:5,:6)") {
+		t.Fatalf("table listing should push table type predicate, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "ROWNUM <= :7") || !strings.Contains(sqlText, "DBX_RN > :8") {
+		t.Fatalf("table listing should use rownum pagination, got: %s", query.SQL)
+	}
+	if len(query.Args) != 8 {
+		t.Fatalf("unexpected args: %#v", query.Args)
+	}
+	if query.Args[0] != "APP" || query.Args[1] != "APP" || query.Args[2] != "APP" || query.Args[3] != "%U%\\_%R%" || query.Args[4] != "TABLE" || query.Args[5] != "VIEW" || query.Args[6] != 511 || query.Args[7] != 10 {
+		t.Fatalf("constraints args were not normalized: %#v", query.Args)
+	}
+}
+
+func TestListSessionUserTablesQueryUsesUserDictionary(t *testing.T) {
+	query := oracleListSessionUserTablesQuery(metadataListConstraints{
+		Filter:      "u_r",
+		Limit:       501,
+		Offset:      10,
+		ObjectTypes: []string{"view", "TABLE", "TABLE"},
+	})
+	sqlText := strings.ToUpper(query.SQL)
+
+	if !strings.Contains(sqlText, "USER_TABLES") || !strings.Contains(sqlText, "USER_VIEWS") || !strings.Contains(sqlText, "USER_MVIEWS") {
+		t.Fatalf("session-user table listing should use USER_* dictionaries, got: %s", query.SQL)
+	}
+	if strings.Contains(sqlText, "ALL_TABLES") || strings.Contains(sqlText, "ALL_VIEWS") || strings.Contains(sqlText, "ALL_MVIEWS") || strings.Contains(sqlText, "USER_OBJECTS") {
+		t.Fatalf("session-user table listing should avoid ALL_* dictionaries, got: %s", query.SQL)
+	}
+	if strings.Contains(sqlText, "OWNER =") {
+		t.Fatalf("session-user table listing should not add owner predicates, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "UPPER(OBJECT_NAME) LIKE :1 ESCAPE '\\'") {
+		t.Fatalf("table listing should push filter predicate, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "TABLE_TYPE IN (:2,:3)") {
+		t.Fatalf("table listing should push table type predicate, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "ROWNUM <= :4") || !strings.Contains(sqlText, "DBX_RN > :5") {
+		t.Fatalf("table listing should use rownum pagination, got: %s", query.SQL)
+	}
+	if len(query.Args) != 5 {
+		t.Fatalf("unexpected args: %#v", query.Args)
+	}
+	if query.Args[0] != "%U%\\_%R%" || query.Args[1] != "TABLE" || query.Args[2] != "VIEW" || query.Args[3] != 511 || query.Args[4] != 10 {
+		t.Fatalf("constraints args were not normalized: %#v", query.Args)
+	}
+}
+
+func TestListObjectsSQLUsesSplitDictionaryQuery(t *testing.T) {
+	sqlText := strings.ToUpper(oracleListObjectsSQL)
+
+	if !strings.Contains(sqlText, "ALL_TABLES") || !strings.Contains(sqlText, "ALL_OBJECTS") {
+		t.Fatalf("object listing should split tables from other objects, got: %s", oracleListObjectsSQL)
+	}
+	if !strings.Contains(sqlText, "UNION ALL") {
+		t.Fatalf("object listing should union object metadata, got: %s", oracleListObjectsSQL)
+	}
+	if strings.Contains(sqlText, "ALL_TAB_COMMENTS") {
+		t.Fatalf("object listing should not load comments during refresh, got: %s", oracleListObjectsSQL)
+	}
+	if !strings.Contains(sqlText, "'PACKAGE BODY'") || !strings.Contains(sqlText, "PACKAGE_BODY") {
+		t.Fatalf("object listing should include package bodies with normalized type, got: %s", oracleListObjectsSQL)
+	}
+	if !strings.Contains(sqlText, "'SEQUENCE'") {
+		t.Fatalf("object listing should include sequences, got: %s", oracleListObjectsSQL)
+	}
+	if !strings.Contains(sqlText, "ALL_SYNONYMS") || !strings.Contains(sqlText, "'SYNONYM' AS OBJECT_TYPE") {
+		t.Fatalf("object listing should include schema synonyms, got: %s", oracleListObjectsSQL)
+	}
+}
+
+func TestListSessionUserObjectsSQLIncludesSequences(t *testing.T) {
+	sqlText := strings.ToUpper(oracleListObjectsSessionUserBaseSQL)
+	if !strings.Contains(sqlText, "FROM USER_OBJECTS") || !strings.Contains(sqlText, "'SEQUENCE'") {
+		t.Fatalf("session-user object listing should include sequences, got: %s", oracleListObjectsSessionUserBaseSQL)
+	}
+}
+
+func TestListObjectsQueryAppliesMetadataConstraints(t *testing.T) {
+	query := oracleListObjectsQuery("APP", metadataListConstraints{
+		Filter:      "pkg%",
+		Limit:       25,
+		ObjectTypes: []string{"FUNCTION", "package"},
+	})
+	sqlText := strings.ToUpper(query.SQL)
+
+	if !strings.Contains(sqlText, "UPPER(OBJECT_NAME) LIKE :4 ESCAPE '\\'") {
+		t.Fatalf("object listing should push filter predicate, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "OBJECT_TYPE IN (:5,:6)") {
+		t.Fatalf("object listing should push object type predicate, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "ROWNUM <= :7") || !strings.Contains(sqlText, "DBX_RN > :8") {
+		t.Fatalf("object listing should use rownum pagination, got: %s", query.SQL)
+	}
+	if len(query.Args) != 8 {
+		t.Fatalf("unexpected args: %#v", query.Args)
+	}
+	if query.Args[0] != "APP" || query.Args[1] != "APP" || query.Args[2] != "APP" || query.Args[3] != "%P%K%G%\\%%" || query.Args[4] != "FUNCTION" || query.Args[5] != "PACKAGE" || query.Args[6] != 25 || query.Args[7] != 0 {
+		t.Fatalf("object constraints args were not normalized: %#v", query.Args)
+	}
+}
+
+func TestListSessionUserObjectsQueryUsesUserDictionary(t *testing.T) {
+	query := oracleListSessionUserObjectsQuery(metadataListConstraints{
+		Filter:      "pkg%",
+		Limit:       25,
+		ObjectTypes: []string{"FUNCTION", "package"},
+	})
+	sqlText := strings.ToUpper(query.SQL)
+
+	if !strings.Contains(sqlText, "USER_TABLES") || !strings.Contains(sqlText, "USER_OBJECTS") {
+		t.Fatalf("session-user object listing should use USER_* dictionaries, got: %s", query.SQL)
+	}
+	if strings.Contains(sqlText, "ALL_TABLES") || strings.Contains(sqlText, "ALL_OBJECTS") {
+		t.Fatalf("session-user object listing should avoid ALL_* dictionaries, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "USER_SYNONYMS") {
+		t.Fatalf("session-user object listing should include owned synonyms, got: %s", query.SQL)
+	}
+	if strings.Contains(sqlText, "OWNER =") {
+		t.Fatalf("session-user object listing should not add owner predicates, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "UPPER(OBJECT_NAME) LIKE :1 ESCAPE '\\'") {
+		t.Fatalf("object listing should push filter predicate, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "OBJECT_TYPE IN (:2,:3)") {
+		t.Fatalf("object listing should push object type predicate, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "ROWNUM <= :4") || !strings.Contains(sqlText, "DBX_RN > :5") {
+		t.Fatalf("object listing should use rownum pagination, got: %s", query.SQL)
+	}
+	if len(query.Args) != 5 {
+		t.Fatalf("unexpected args: %#v", query.Args)
+	}
+	if query.Args[0] != "%P%K%G%\\%%" || query.Args[1] != "FUNCTION" || query.Args[2] != "PACKAGE" || query.Args[3] != 25 || query.Args[4] != 0 {
+		t.Fatalf("object constraints args were not normalized: %#v", query.Args)
+	}
+}
+
+func TestListObjectsQuerySupportsSynonymOnlyFiltering(t *testing.T) {
+	query := oracleListObjectsQuery("AP", metadataListConstraints{
+		Filter:      "spec",
+		Limit:       10,
+		Offset:      20,
+		ObjectTypes: []string{"synonym"},
+	})
+	sqlText := strings.ToUpper(query.SQL)
+
+	if !strings.Contains(sqlText, "FROM ALL_SYNONYMS") || !strings.Contains(sqlText, "S.OWNER = :3") {
+		t.Fatalf("cross-schema synonym listing should use the selected owner, got: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "OBJECT_TYPE IN (:5)") {
+		t.Fatalf("synonym filtering should be pushed into the constrained query, got: %s", query.SQL)
+	}
+	if len(query.Args) != 7 || query.Args[2] != "AP" || query.Args[3] != "%S%P%E%C%" || query.Args[4] != "SYNONYM" || query.Args[5] != 30 || query.Args[6] != 20 {
+		t.Fatalf("unexpected synonym query args: %#v", query.Args)
+	}
+}
+
+func TestOracleListTriggersSQLLoadsSourceWithoutLongColumns(t *testing.T) {
+	sqlText := strings.ToUpper(oracleListTriggersSQL)
+
+	if !strings.Contains(sqlText, "FROM ALL_TRIGGERS") || !strings.Contains(sqlText, "LEFT JOIN ALL_SOURCE") {
+		t.Fatalf("trigger listing should join metadata with line-based source, got: %s", oracleListTriggersSQL)
+	}
+	if !strings.Contains(sqlText, "T.DESCRIPTION") || !strings.Contains(sqlText, "S.TEXT") {
+		t.Fatalf("trigger listing should load the declaration and source text, got: %s", oracleListTriggersSQL)
+	}
+	if strings.Contains(sqlText, "TRIGGER_BODY") {
+		t.Fatalf("trigger listing should avoid Oracle LONG trigger bodies, got: %s", oracleListTriggersSQL)
+	}
+	if !strings.Contains(sqlText, "T.OWNER = :1") || !strings.Contains(sqlText, "T.TABLE_NAME = :2") {
+		t.Fatalf("trigger listing should stay scoped to the selected schema and table, got: %s", oracleListTriggersSQL)
+	}
+}
+
+func TestOracleTriggerBodyStripsDictionaryDeclaration(t *testing.T) {
+	source := "TRIGGER DBX_TRIGGER_4320_AUDIT\n" +
+		"AFTER INSERT OR UPDATE OR DELETE ON DBX_TRIGGER_4320\n" +
+		"FOR EACH ROW\n" +
+		"DECLARE\n" +
+		"  V_EVENT VARCHAR2(10);\n" +
+		"BEGIN\n" +
+		"  V_EVENT := CASE WHEN INSERTING THEN 'INSERT' WHEN UPDATING THEN 'UPDATE' ELSE 'DELETE' END;\n" +
+		"END;\n"
+	description := "DBX_TRIGGER_4320_AUDIT\n" +
+		"AFTER INSERT OR UPDATE OR DELETE ON DBX_TRIGGER_4320\n" +
+		"FOR EACH ROW\n"
+
+	body, ok := oracleTriggerBody(source, description)
+	if !ok {
+		t.Fatal("expected Oracle trigger source to produce a body")
+	}
+	want := "DECLARE\n  V_EVENT VARCHAR2(10);\nBEGIN\n  V_EVENT := CASE WHEN INSERTING THEN 'INSERT' WHEN UPDATING THEN 'UPDATE' ELSE 'DELETE' END;\nEND;"
+	if body != want {
+		t.Fatalf("trigger body = %q, want %q", body, want)
+	}
+}
+
+func TestOracleTriggerBodyFallsBackToVisibleSource(t *testing.T) {
+	body, ok := oracleTriggerBody("TRIGGER APP.AUDIT\nBEGIN\n  NULL;\nEND;\n", "differently formatted declaration")
+	if !ok {
+		t.Fatal("expected differently formatted Oracle source to remain visible")
+	}
+	if body != "TRIGGER APP.AUDIT\nBEGIN\n  NULL;\nEND;" {
+		t.Fatalf("unexpected fallback source: %q", body)
+	}
+}
+
+func TestOracleFuzzyLikePatternEscapesSpecialCharacters(t *testing.T) {
+	got := oracleFuzzyLikePattern(`a_%\b`)
+	want := `%a%\_%\%%\\%b%`
+	if got != want {
+		t.Fatalf("oracleFuzzyLikePattern() = %q, want %q", got, want)
+	}
+}
+
+func TestOracleCompletionTablesQuerySearchesAcrossSchemasWithPriority(t *testing.T) {
+	query := oracleCompletionTablesQuery(completionAssistantRequest{
+		Database:     "ORCL",
+		Schema:       "APP",
+		ObjectKinds:  []string{"table", "view"},
+		Mask:         "dept_d",
+		GlobalSearch: true,
+		MatchMode:    "prefix",
+	}, "APP", 201)
+	sqlText := strings.ToUpper(query.SQL)
+
+	if !strings.Contains(sqlText, "ALL_OBJECTS") || !strings.Contains(sqlText, "ALL_SYNONYMS") {
+		t.Fatalf("global completion should include objects and synonyms: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "S.TABLE_OWNER AS TARGET_OWNER") || !strings.Contains(sqlText, "S.TABLE_NAME AS TARGET_NAME") || !strings.Contains(sqlText, "S.DB_LINK IS NULL") {
+		t.Fatalf("table completion should return local synonym targets for bounded validation: %s", query.SQL)
+	}
+	if strings.Contains(sqlText, "JOIN ALL_OBJECTS TARGET") {
+		t.Fatalf("Oracle 11g completion must not join full dictionary views before applying the result limit: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "SELECT OWNER, OBJECT_NAME, OBJECT_TYPE, TARGET_OWNER, TARGET_NAME\nFROM (\nSELECT O.OWNER") {
+		t.Fatalf("Oracle 11g requires the union to be wrapped before expression-based ordering: %s", query.SQL)
+	}
+	if strings.Contains(sqlText, "WHERE UPPER(OBJECT_NAME) LIKE UPPER(:1) ESCAPE '\\' AND OWNER =") {
+		t.Fatalf("global completion must not restrict results to one owner: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "WHEN OWNER = :3 THEN 0") || !strings.Contains(sqlText, "WHERE ROWNUM <= :5") {
+		t.Fatalf("completion should prioritize the current schema and use Oracle 11g rownum limiting: %s", query.SQL)
+	}
+	if len(query.Args) != 5 || query.Args[0] != `dept\_d%` || query.Args[1] != `dept\_d%` || query.Args[2] != "APP" || query.Args[3] != "dept_d" || query.Args[4] != 201 {
+		t.Fatalf("unexpected completion args: %#v", query.Args)
+	}
+}
+
+func TestOracleCompletionSynonymTargetsQueryIsBoundedToCandidates(t *testing.T) {
+	query := oracleCompletionSynonymTargetsQuery([]oracleCompletionSynonymTarget{{Owner: "DBX_TEST", Name: "DEPT_DICT"}, {Owner: "HR", Name: "EMP_VIEW"}}, []string{"'TABLE'", "'VIEW'"})
+	sqlText := strings.ToUpper(query.SQL)
+
+	if !strings.Contains(sqlText, "O.OBJECT_TYPE IN ('TABLE','VIEW')") || !strings.Contains(sqlText, "(O.OWNER = :1 AND O.OBJECT_NAME = :2)") || !strings.Contains(sqlText, "(O.OWNER = :3 AND O.OBJECT_NAME = :4)") {
+		t.Fatalf("synonym target validation should query only returned targets: %s", query.SQL)
+	}
+	wantArgs := []any{"DBX_TEST", "DEPT_DICT", "HR", "EMP_VIEW"}
+	if !reflect.DeepEqual(query.Args, wantArgs) {
+		t.Fatalf("unexpected synonym target args: %#v", query.Args)
+	}
+}
+
+func TestOracleCompletionTablesQueryScopesExplicitSchema(t *testing.T) {
+	query := oracleCompletionTablesQuery(completionAssistantRequest{
+		Schema:       "APP",
+		ParentSchema: "HR",
+		ObjectKinds:  []string{"table"},
+		Mask:         "EMP",
+	}, "APP", 50)
+
+	if !strings.Contains(strings.ToUpper(query.SQL), "AND O.OWNER = :2") || !strings.Contains(strings.ToUpper(query.SQL), "AND S.OWNER = :4") {
+		t.Fatalf("explicit schema completion should restrict owner: %s", query.SQL)
+	}
+	if len(query.Args) != 7 || query.Args[1] != "HR" || query.Args[3] != "HR" || query.Args[4] != "APP" {
+		t.Fatalf("unexpected scoped completion args: %#v", query.Args)
+	}
+}
+
+func TestOracleCompletionRoutinesQueryUsesPublicPackageMetadata(t *testing.T) {
+	query := oracleCompletionPackageRoutinesQuery(completionAssistantRequest{
+		Schema:       "HR",
+		ParentSchema: "HR",
+		ParentName:   "PAYROLL",
+		ObjectKinds:  []string{"routine"},
+		Mask:         "CALC",
+	}, "HR")
+	sqlText := strings.ToUpper(query.SQL)
+
+	if !strings.Contains(sqlText, "ALL_PROCEDURES") || !strings.Contains(sqlText, "ALL_ARGUMENTS") {
+		t.Fatalf("package completion should use callable procedure metadata: %s", query.SQL)
+	}
+	if strings.Contains(sqlText, "ALL_SOURCE") || strings.Contains(sqlText, "PACKAGE BODY") {
+		t.Fatalf("package completion must not expose private package body source: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "P.OWNER = :1") || !strings.Contains(sqlText, "P.OBJECT_NAME = :2") || !strings.Contains(sqlText, "UPPER(P.PROCEDURE_NAME) LIKE UPPER(:3)") {
+		t.Fatalf("package completion should scope package and owner: %s", query.SQL)
+	}
+	if !strings.Contains(sqlText, "A.OBJECT_ID = P.OBJECT_ID") || !strings.Contains(sqlText, "A.SUBPROGRAM_ID = P.SUBPROGRAM_ID") || !strings.Contains(sqlText, "A.DATA_LEVEL = 0") {
+		t.Fatalf("package completion should join complete top-level argument metadata: %s", query.SQL)
+	}
+	if strings.Contains(sqlText, "ROWNUM") {
+		t.Fatalf("package completion must not truncate argument rows before overload grouping: %s", query.SQL)
+	}
+	wantArgs := []any{"HR", "PAYROLL", "CALC%"}
+	if !reflect.DeepEqual(query.Args, wantArgs) {
+		t.Fatalf("unexpected package completion args: %#v", query.Args)
+	}
+}
+
+func TestOracleCompletionPackageCandidatesPreserveOverloadsAndReturnTypes(t *testing.T) {
+	rows := []oraclePackageRoutineRow{
+		{
+			owner: "HR", parentName: "PAYROLL", name: "CALCULATE", objectID: 42, subprogramID: 1,
+			position: sql.NullInt64{Int64: 1, Valid: true}, sequence: sql.NullInt64{Int64: 1, Valid: true},
+			argumentName: sql.NullString{String: "P_VALUE", Valid: true}, inOut: sql.NullString{String: "IN", Valid: true}, dataType: sql.NullString{String: "NUMBER", Valid: true},
+		},
+		{
+			owner: "HR", parentName: "PAYROLL", name: "CALCULATE", objectID: 42, subprogramID: 2,
+			position: sql.NullInt64{Int64: 1, Valid: true}, sequence: sql.NullInt64{Int64: 1, Valid: true},
+			argumentName: sql.NullString{String: "P_VALUE", Valid: true}, inOut: sql.NullString{String: "IN", Valid: true}, dataType: sql.NullString{String: "VARCHAR2", Valid: true},
+		},
+		{
+			owner: "HR", parentName: "PAYROLL", name: "ITEM_COUNT", objectID: 42, subprogramID: 3,
+			position: sql.NullInt64{Int64: 0, Valid: true}, sequence: sql.NullInt64{Int64: 1, Valid: true}, dataType: sql.NullString{String: "NUMBER", Valid: true},
+		},
+		{
+			owner: "HR", parentName: "PAYROLL", name: "ITEM_COUNT", objectID: 42, subprogramID: 3,
+			position: sql.NullInt64{Int64: 1, Valid: true}, sequence: sql.NullInt64{Int64: 2, Valid: true},
+			argumentName: sql.NullString{String: "P_ACTIVE", Valid: true}, inOut: sql.NullString{String: "IN/OUT", Valid: true}, dataType: sql.NullString{String: "NUMBER", Valid: true},
+		},
+	}
+
+	response := oracleCompletionPackageCandidates(rows, "XE", 10)
+	if response.Incomplete {
+		t.Fatal("complete package metadata should not be marked incomplete")
+	}
+	if len(response.Candidates) != 3 {
+		t.Fatalf("overloads should remain distinct candidates: %#v", response.Candidates)
+	}
+	want := []struct {
+		name       string
+		kind       string
+		signature  string
+		returnType string
+	}{
+		{name: "CALCULATE", kind: "procedure", signature: "P_VALUE IN NUMBER"},
+		{name: "CALCULATE", kind: "procedure", signature: "P_VALUE IN VARCHAR2"},
+		{name: "ITEM_COUNT", kind: "function", signature: "P_ACTIVE IN OUT NUMBER", returnType: "NUMBER"},
+	}
+	for index, expected := range want {
+		candidate := response.Candidates[index]
+		if candidate.Name != expected.name || candidate.Kind != expected.kind || candidate.Signature == nil || *candidate.Signature != expected.signature {
+			t.Fatalf("candidate %d = %#v, want name=%q kind=%q signature=%q", index, candidate, expected.name, expected.kind, expected.signature)
+		}
+		if expected.returnType == "" {
+			if candidate.DataType != nil {
+				t.Fatalf("candidate %d return type = %#v, want nil", index, candidate.DataType)
+			}
+		} else if candidate.DataType == nil || *candidate.DataType != expected.returnType {
+			t.Fatalf("candidate %d return type = %#v, want %q", index, candidate.DataType, expected.returnType)
+		}
+		if candidate.ParentSchema == nil || *candidate.ParentSchema != "HR" || candidate.ParentName == nil || *candidate.ParentName != "PAYROLL" {
+			t.Fatalf("candidate %d lost package identity: %#v", index, candidate)
+		}
+	}
+
+	limited := oracleCompletionPackageCandidates(rows, "XE", 2)
+	if !limited.Incomplete || len(limited.Candidates) != 2 {
+		t.Fatalf("member limit should apply after overload grouping: %#v", limited)
+	}
+}
+
+func TestOracleCompletionLikePatternSupportsPrefixAndContains(t *testing.T) {
+	if got := oracleCompletionLikePattern(`A_%`, "prefix"); got != `A\_\%%` {
+		t.Fatalf("prefix pattern = %q", got)
+	}
+	if got := oracleCompletionLikePattern("DEPT", "contains"); got != "%DEPT%" {
+		t.Fatalf("contains pattern = %q", got)
+	}
+}
+
+func TestIsOraclePGALimitError(t *testing.T) {
+	if !isOraclePGALimitError(errors.New("ORA-04036: PGA memory used by the instance exceeds PGA_AGGREGATE_LIMIT")) {
+		t.Fatal("expected ORA-04036 to be detected")
+	}
+	if isOraclePGALimitError(errors.New("ORA-00942: table or view does not exist")) {
+		t.Fatal("unexpected ORA-00942 match")
+	}
+}
+
+func TestRewriteOracleXMLTypeSelectStar(t *testing.T) {
+	sqlText, err := rewriteOracleXMLTypeSelectSQL(
+		`SELECT * FROM TEST_LOBS`,
+		fakeOracleColumnLoader([]oracleColumnMeta{
+			{Name: "ID", DataType: "NUMBER"},
+			{Name: "XML_CONTENT", DataType: "XMLTYPE"},
+			{Name: "TEST_NAME", DataType: "VARCHAR2"},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT "ID", XMLSERIALIZE(CONTENT "XML_CONTENT" AS CLOB) AS "XML_CONTENT", "TEST_NAME" FROM TEST_LOBS`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleXMLTypeSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleXMLTypeExplicitColumn(t *testing.T) {
+	sqlText, err := rewriteOracleXMLTypeSelectSQL(
+		`SELECT t.ID, t.XML_CONTENT AS xml_doc FROM TEST_LOBS t WHERE t.ID = 1`,
+		fakeOracleColumnLoader([]oracleColumnMeta{
+			{Name: "ID", DataType: "NUMBER"},
+			{Name: "XML_CONTENT", DataType: "SYS.XMLTYPE"},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT t.ID, XMLSERIALIZE(CONTENT t."XML_CONTENT" AS CLOB) AS xml_doc FROM TEST_LOBS t WHERE t.ID = 1`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleXMLTypeSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleXMLTypeNestedRownumQuery(t *testing.T) {
+	sqlText, err := rewriteOracleXMLTypeSelectSQL(
+		`SELECT * FROM (SELECT "ID", "XML_CONTENT" FROM "DBX"."TEST_LOBS") WHERE ROWNUM <= 100`,
+		fakeOracleColumnLoader([]oracleColumnMeta{
+			{Name: "ID", DataType: "NUMBER"},
+			{Name: "XML_CONTENT", DataType: "XMLTYPE"},
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sqlText, `XMLSERIALIZE(CONTENT "XML_CONTENT" AS CLOB) AS "XML_CONTENT"`) {
+		t.Fatalf("expected nested XMLTYPE column to be serialized, got: %s", sqlText)
+	}
+}
+
+func TestRewriteOracleSTGeometrySelectStar(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT * FROM TEST_GEOM`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "GEOM", DataType: "ST_GEOMETRY", DataTypeOwner: "SDE"},
+				{Name: "NOTE", DataType: "VARCHAR2"},
+			}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT "ID", SDE.ST_AsText("GEOM") AS "GEOM", "NOTE" FROM TEST_GEOM`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleSTGeometryExplicitColumn(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.GEOM AS shape FROM TEST_GEOM t`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{{Name: "GEOM", DataType: "ST_GEOMETRY", DataTypeOwner: "sde"}}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT SDE.ST_AsText(t."GEOM") AS shape FROM TEST_GEOM t`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleSTGeometryAsDeferredValue(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.ID, t.GEOM FROM TEST_GEOM t`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "GEOM", DataType: "ST_GEOMETRY", DataTypeOwner: "SDE"},
+			}, nil
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT t.ID, CASE WHEN t."GEOM" IS NULL THEN NULL ELSE '<ST_GEOMETRY>' END AS "GEOM", CASE WHEN t."GEOM" IS NULL THEN NULL ELSE 'D:1' END AS "__DBX_LARGE_VALUE_BYTES_C_1" FROM TEST_GEOM t`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestOracleSTGeometryRequiresSDEOwner(t *testing.T) {
+	if !isOracleSTGeometry(oracleColumnMeta{DataType: "ST_GEOMETRY", DataTypeOwner: "sDe"}) {
+		t.Fatal("expected SDE.ST_GEOMETRY to be recognized")
+	}
+	if isOracleSTGeometry(oracleColumnMeta{DataType: "ST_GEOMETRY", DataTypeOwner: "OTHER"}) {
+		t.Fatal("unexpected rewrite for an unrelated ST_GEOMETRY type")
+	}
+	if isOracleSTGeometry(oracleColumnMeta{DataType: "ST_GEOMETRY"}) {
+		t.Fatal("unexpected rewrite when the type owner is unknown")
+	}
+}
+
+func TestRewriteOracleSTGeometrySkipsSetQueries(t *testing.T) {
+	input := `SELECT GEOM FROM TEST_GEOM UNION ALL SELECT GEOM FROM TEST_GEOM`
+	sqlText, err := rewriteOracleSelectSQL(
+		input,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{{Name: "GEOM", DataType: "ST_GEOMETRY", DataTypeOwner: "SDE"}}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlText != input {
+		t.Fatalf("set query should remain unchanged, got: %s", sqlText)
+	}
+}
+
+func TestRewriteOracleSDOGeometrySelectStar(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT * FROM TEST_GEOM`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "GEOM", DataType: "SDO_GEOMETRY", DataTypeOwner: "PUBLIC"},
+				{Name: "NOTE", DataType: "VARCHAR2"},
+			}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT "ID", SDO_UTIL.TO_WKTGEOMETRY("GEOM") AS "GEOM", "NOTE" FROM TEST_GEOM`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleSDOGeometryExplicitColumn(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.GEOM AS shape FROM TEST_GEOM t`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{{Name: "GEOM", DataType: "SDO_GEOMETRY", DataTypeOwner: "PUBLIC"}}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT SDO_UTIL.TO_WKTGEOMETRY(t."GEOM") AS shape FROM TEST_GEOM t`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleSDOGeometryAsDeferredValue(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.ID, t.GEOM FROM TEST_GEOM t`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "GEOM", DataType: "SDO_GEOMETRY", DataTypeOwner: "PUBLIC"},
+			}, nil
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT t.ID, CASE WHEN t."GEOM" IS NULL THEN NULL ELSE '<SDO_GEOMETRY>' END AS "GEOM", CASE WHEN t."GEOM" IS NULL THEN NULL ELSE 'D:1' END AS "__DBX_LARGE_VALUE_BYTES_C_1" FROM TEST_GEOM t`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestOracleSDOGeometryDoesNotRequireOwner(t *testing.T) {
+	if !isOracleSDOGeometry(oracleColumnMeta{DataType: "SDO_GEOMETRY", DataTypeOwner: "PUBLIC"}) {
+		t.Fatal("expected SDO_GEOMETRY via PUBLIC synonym to be recognized")
+	}
+	if !isOracleSDOGeometry(oracleColumnMeta{DataType: "sdo_geometry"}) {
+		t.Fatal("expected SDO_GEOMETRY to be recognized regardless of owner or case")
+	}
+	if isOracleSDOGeometry(oracleColumnMeta{DataType: "VARCHAR2"}) {
+		t.Fatal("unexpected rewrite for an unrelated data type")
+	}
+}
+
+func TestIsOracleExtprocAgentFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "ORA-28595 with SDE package context",
+			err:  errors.New(`ORA-28595: Extproc agent: Invalid DLL Path SDE.ST_GEOMETRY_SHAPELIB_PKG`),
+			want: true,
+		},
+		{
+			name: "ORA-28595 with operator package context",
+			err:  errors.New(`ORA-28595: Extproc agent: Invalid DLL Path SDE.ST_GEOMETRY_OPERATORS`),
+			want: true,
+		},
+		{
+			name: "lowercase ORA-28595",
+			err:  errors.New("ora-28595: extproc agent: invalid dll path"),
+			want: true,
+		},
+		{
+			name: "bare ORA code",
+			err:  errors.New("28595: Extproc agent: Invalid DLL Path"),
+			want: true,
+		},
+		{
+			name: "wrapped ORA-28595",
+			err:  fmt.Errorf("query failed: %w", errors.New("ORA-28595: Extproc agent: Invalid DLL Path")),
+			want: true,
+		},
+		{
+			name: "unrelated ORA error",
+			err:  errors.New("ORA-00942: table or view does not exist"),
+			want: false,
+		},
+		{
+			name: "connection error",
+			err:  errors.New("ORA-12170: TNS:Connect timeout occurred"),
+			want: false,
+		},
+		{
+			name: "SDE package without ORA-28595",
+			err:  errors.New("SDE.ST_GEOMETRY_SHAPELIB_PKG raised an error"),
+			want: false,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isOracleExtprocAgentFailure(tc.err); got != tc.want {
+				t.Fatalf("isOracleExtprocAgentFailure(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOracleExtprocFallbackSQL(t *testing.T) {
+	sdeColumns := func(schema, table string) ([]oracleColumnMeta, error) {
+		return []oracleColumnMeta{
+			{Name: "ID", DataType: "NUMBER"},
+			{Name: "GEOM", DataType: "ST_GEOMETRY", DataTypeOwner: "SDE"},
+		}, nil
+	}
+	t.Run("returns placeholder projection for extproc failure", func(t *testing.T) {
+		sqlText, ok := oracleExtprocFallbackSQL(
+			`SELECT * FROM SDE.TEST_GEOM`,
+			sdeColumns,
+			errors.New("ORA-28595: Extproc agent: Invalid DLL Path"),
+		)
+		if !ok {
+			t.Fatal("expected placeholder fallback SQL")
+		}
+		if !strings.Contains(sqlText, "'<ST_GEOMETRY>'") {
+			t.Fatalf("expected placeholder expression, got %s", sqlText)
+		}
+		if strings.Contains(sqlText, "SDE.ST_AsText") {
+			t.Fatalf("placeholder projection must not call SDE.ST_AsText, got %s", sqlText)
+		}
+	})
+	t.Run("keeps ST_AsText error for unrelated failures", func(t *testing.T) {
+		sqlText, ok := oracleExtprocFallbackSQL(
+			`SELECT * FROM SDE.TEST_GEOM`,
+			sdeColumns,
+			errors.New("ORA-12170: TNS:Connect timeout occurred"),
+		)
+		if ok {
+			t.Fatalf("unexpected fallback SQL: %s", sqlText)
+		}
+	})
+	t.Run("no fallback without rewriteable columns", func(t *testing.T) {
+		sqlText, ok := oracleExtprocFallbackSQL(
+			`SELECT * FROM SDE.TEST_GEOM`,
+			func(schema, table string) ([]oracleColumnMeta, error) {
+				return []oracleColumnMeta{{Name: "ID", DataType: "NUMBER"}}, nil
+			},
+			errors.New("ORA-28595: Extproc agent: Invalid DLL Path"),
+		)
+		if ok {
+			t.Fatalf("unexpected fallback SQL: %s", sqlText)
+		}
+	})
+	t.Run("no fallback when column metadata fails", func(t *testing.T) {
+		sqlText, ok := oracleExtprocFallbackSQL(
+			`SELECT * FROM SDE.TEST_GEOM`,
+			func(schema, table string) ([]oracleColumnMeta, error) {
+				return nil, errors.New("ORA-00942: table or view does not exist")
+			},
+			errors.New("ORA-28595: Extproc agent: Invalid DLL Path"),
+		)
+		if ok {
+			t.Fatalf("unexpected fallback SQL: %s", sqlText)
+		}
+	})
+}
+
+func TestRewriteOracleXMLTypeSkipsJoins(t *testing.T) {
+	called := false
+	sqlText, err := rewriteOracleXMLTypeSelectSQL(
+		`SELECT * FROM TEST_LOBS l JOIN OTHER_TABLE o ON o.ID = l.ID`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			called = true
+			return nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("join query should not load table metadata")
+	}
+	if sqlText != `SELECT * FROM TEST_LOBS l JOIN OTHER_TABLE o ON o.ID = l.ID` {
+		t.Fatalf("join query should not be rewritten, got: %s", sqlText)
+	}
+}
+
+func TestRewriteOracleLOBSelectStarAsDeferredValues(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.* FROM TEST_LOBS t ORDER BY t.ID DESC`,
+		fakeOracleColumnLoader([]oracleColumnMeta{
+			{Name: "ID", DataType: "NUMBER"},
+			{Name: "PAYLOAD", DataType: "CLOB"},
+			{Name: "NATIONAL_TEXT", DataType: "NCLOB"},
+			{Name: "BINARY_DATA", DataType: "BLOB"},
+			{Name: "FILE_DATA", DataType: "BFILE"},
+		}),
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT t."ID", CASE WHEN t."PAYLOAD" IS NULL THEN NULL ELSE '<CLOB>' END AS "PAYLOAD", CASE WHEN t."PAYLOAD" IS NULL THEN NULL ELSE 'D:1' END AS "__DBX_LARGE_VALUE_BYTES_C_1", CASE WHEN t."NATIONAL_TEXT" IS NULL THEN NULL ELSE '<NCLOB>' END AS "NATIONAL_TEXT", CASE WHEN t."NATIONAL_TEXT" IS NULL THEN NULL ELSE 'D:1' END AS "__DBX_LARGE_VALUE_BYTES_N_2", CASE WHEN t."BINARY_DATA" IS NULL THEN NULL ELSE '<BLOB>' END AS "BINARY_DATA", CASE WHEN t."BINARY_DATA" IS NULL THEN NULL ELSE 'D:1' END AS "__DBX_LARGE_VALUE_BYTES_L_3", CASE WHEN t."FILE_DATA" IS NULL THEN NULL ELSE '<BFILE>' END AS "FILE_DATA", CASE WHEN t."FILE_DATA" IS NULL THEN NULL ELSE 'D:1' END AS "__DBX_LARGE_VALUE_BYTES_F_4" FROM TEST_LOBS t ORDER BY t.ID DESC`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleXMLTypeAsDeferredValue(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.ID, t.XML_CONTENT FROM TEST_LOBS t WHERE t.ID = 1`,
+		fakeOracleColumnLoader([]oracleColumnMeta{
+			{Name: "ID", DataType: "NUMBER"},
+			{Name: "XML_CONTENT", DataType: "SYS.XMLTYPE"},
+		}),
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT t.ID, CASE WHEN t."XML_CONTENT" IS NULL THEN NULL ELSE '<XMLTYPE>' END AS "XML_CONTENT", CASE WHEN t."XML_CONTENT" IS NULL THEN NULL ELSE 'D:1' END AS "__DBX_LARGE_VALUE_BYTES_C_1" FROM TEST_LOBS t WHERE t.ID = 1`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleLOBExplicitColumnUsesVisibleResultIndex(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.ID, t.PAYLOAD AS body, LENGTH(t.PAYLOAD) AS payload_length FROM TEST_LOBS t`,
+		fakeOracleColumnLoader([]oracleColumnMeta{
+			{Name: "ID", DataType: "NUMBER"},
+			{Name: "PAYLOAD", DataType: "CLOB"},
+		}),
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT t.ID, CASE WHEN t."PAYLOAD" IS NULL THEN NULL ELSE '<CLOB>' END AS body, CASE WHEN t."PAYLOAD" IS NULL THEN NULL ELSE 'D:1' END AS "__DBX_LARGE_VALUE_BYTES_C_1", LENGTH(t.PAYLOAD) AS payload_length FROM TEST_LOBS t`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleLOBNestedRownumQuery(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT * FROM (SELECT ID, PAYLOAD FROM TEST_LOBS ORDER BY ID DESC) WHERE ROWNUM <= 10`,
+		fakeOracleColumnLoader([]oracleColumnMeta{
+			{Name: "ID", DataType: "NUMBER"},
+			{Name: "PAYLOAD", DataType: "CLOB"},
+		}),
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sqlText, `CASE WHEN "PAYLOAD" IS NULL THEN NULL ELSE '<CLOB>' END AS "PAYLOAD"`) ||
+		!strings.Contains(sqlText, `"__DBX_LARGE_VALUE_BYTES_C_1"`) {
+		t.Fatalf("expected nested CLOB column to be deferred, got: %s", sqlText)
+	}
+}
+
+func TestRewriteOracleLOBSkipsDerivedProjectionThatDropsMarkers(t *testing.T) {
+	called := false
+	input := `SELECT PAYLOAD FROM (SELECT PAYLOAD FROM TEST_LOBS)`
+	sqlText, err := rewriteOracleSelectSQL(
+		input,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			called = true
+			return []oracleColumnMeta{{Name: "PAYLOAD", DataType: "CLOB"}}, nil
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if called {
+		t.Fatal("derived projection should not load table metadata")
+	}
+	if sqlText != input {
+		t.Fatalf("derived projection should remain unchanged, got: %s", sqlText)
+	}
+}
+
+func TestRewriteOracleLOBPreservesUnsafeQueries(t *testing.T) {
+	columns := []oracleColumnMeta{{Name: "ID", DataType: "NUMBER"}, {Name: "PAYLOAD", DataType: "CLOB"}}
+	tests := []string{
+		`SELECT DISTINCT PAYLOAD FROM TEST_LOBS`,
+		`SELECT l.PAYLOAD FROM TEST_LOBS l JOIN OTHER_TABLE o ON o.ID = l.ID`,
+		`SELECT PAYLOAD FROM TEST_LOBS UNION ALL SELECT PAYLOAD FROM OTHER_TABLE`,
+	}
+	for _, input := range tests {
+		sqlText, err := rewriteOracleSelectSQL(input, fakeOracleColumnLoader(columns), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sqlText != input {
+			t.Fatalf("unsafe query should not be rewritten: %s", sqlText)
+		}
+	}
+}
+
+func TestRewriteOracleLOBRequiresDeferredModeAndSafeMarkerNames(t *testing.T) {
+	input := `SELECT * FROM TEST_LOBS`
+	tests := []struct {
+		deferLOBs bool
+		columns   []oracleColumnMeta
+	}{
+		{deferLOBs: false, columns: []oracleColumnMeta{{Name: "ID", DataType: "NUMBER"}, {Name: "PAYLOAD", DataType: "CLOB"}}},
+		{deferLOBs: true, columns: []oracleColumnMeta{{Name: "PAYLOAD", DataType: "CLOB"}, {Name: "__DBX_LARGE_VALUE_BYTES_C_0", DataType: "VARCHAR2"}}},
+	}
+	for _, test := range tests {
+		sqlText, err := rewriteOracleSelectSQL(input, fakeOracleColumnLoader(test.columns), test.deferLOBs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sqlText != input {
+			t.Fatalf("query should remain unchanged, got: %s", sqlText)
+		}
+	}
+}
+
+func TestOracleColumnTypeNamesContainXMLType(t *testing.T) {
+	tests := []struct {
+		name      string
+		typeNames []string
+		want      bool
+	}{
+		{name: "plain xmltype", typeNames: []string{"NUMBER", "XMLTYPE"}, want: true},
+		{name: "qualified xmltype", typeNames: []string{"SYS.XMLTYPE"}, want: true},
+		{name: "case and spaces", typeNames: []string{" varchar2 ", "sys.xmltype"}, want: true},
+		{name: "ordinary columns", typeNames: []string{"NUMBER", "VARCHAR2", "DATE"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := oracleColumnTypeNamesContainXMLType(tt.typeNames); got != tt.want {
+				t.Fatalf("oracleColumnTypeNamesContainXMLType(%v) = %v, want %v", tt.typeNames, got, tt.want)
+			}
+		})
+	}
+}
+
+func fakeOracleColumnLoader(columns []oracleColumnMeta) oracleColumnMetaLoader {
+	return func(schema, table string) ([]oracleColumnMeta, error) {
+		if strings.ToUpper(table) != "TEST_LOBS" {
+			return nil, nil
+		}
+		return columns, nil
+	}
+}
+
+func TestGetObjectSourceUsesOriginalViewNameWithAllViews(t *testing.T) {
+	for _, viewName := range []string{"vEnginWJZ", "V_ENGINE_WJZ"} {
+		t.Run(viewName, func(t *testing.T) {
+			source := `SELECT source_id FROM "ZTZS_ERP2"."SOURCE_TABLE"`
+			db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+				{
+					queryContains: "FROM ALL_VIEWS",
+					args:          []driver.Value{"ZTZS_ERP2", viewName},
+					rows:          [][]driver.Value{{source}},
+				},
+			})
+			s := newServer()
+			s.db = db
+
+			result, err := s.getObjectSource("ZTZS_ERP2", viewName, "VIEW")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result["source"] != source {
+				t.Fatalf("unexpected view source: %#v", result["source"])
+			}
+			if scripted.next != len(scripted.steps) {
+				t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+			}
+		})
+	}
+}
+
+func TestGetObjectSourceUsesDBMSMetadataForSynonym(t *testing.T) {
+	const ddl = `CREATE OR REPLACE EDITIONABLE SYNONYM "AP"."S_SPECS" FOR "ADM"."S_SPECS"`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "DBMS_METADATA.GET_DDL(:1, :2, :3)",
+			args:          []driver.Value{"SYNONYM", "S_SPECS", "AP"},
+			rows:          [][]driver.Value{{ddl}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("AP", "S_SPECS", "SYNONYM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["source"] != ddl || result["object_type"] != "SYNONYM" {
+		t.Fatalf("unexpected synonym source: %#v", result)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetObjectSourceUsesDBMSMetadataForSequence(t *testing.T) {
+	const ddl = `CREATE SEQUENCE "HR"."ORDER_SEQ" MINVALUE 1 MAXVALUE 9999999999999999999999999999 INCREMENT BY 1 START WITH 42 CACHE 20 NOORDER NOCYCLE NOKEEP NOSCALE GLOBAL`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "DBMS_METADATA.GET_DDL(:1, :2, :3)",
+			args:          []driver.Value{"SEQUENCE", "ORDER_SEQ", "HR"},
+			rows:          [][]driver.Value{{ddl}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("HR", "ORDER_SEQ", "SEQUENCE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["source"] != ddl || result["object_type"] != "SEQUENCE" {
+		t.Fatalf("unexpected sequence source: %#v", result)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetObjectSourceUsesDBMSMetadataForMaterializedView(t *testing.T) {
+	const ddl = `CREATE MATERIALIZED VIEW "HR"."SALES_MV" AS SELECT * FROM "HR"."SALES"`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "DBMS_METADATA.GET_DDL(:1, :2, :3)",
+			args:          []driver.Value{"MATERIALIZED_VIEW", "SALES_MV", "HR"},
+			rows:          [][]driver.Value{{ddl}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("HR", "SALES_MV", "MATERIALIZED_VIEW")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["source"] != ddl || result["object_type"] != "MATERIALIZED_VIEW" {
+		t.Fatalf("unexpected materialized view source: %#v", result)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetObjectSourcePropagatesMaterializedViewMetadataError(t *testing.T) {
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "DBMS_METADATA.GET_DDL(:1, :2, :3)",
+			args:          []driver.Value{"MATERIALIZED_VIEW", "SALES_MV", "HR"},
+			err:           errors.New("ORA-31603: object not found"),
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("HR", "SALES_MV", "MATERIALIZED_VIEW")
+	if err == nil || !strings.Contains(err.Error(), "ORA-31603") {
+		t.Fatalf("expected DBMS_METADATA error, got result=%#v error=%v", result, err)
+	}
+	if result != nil {
+		t.Fatalf("metadata error must not return a successful source: %#v", result)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetObjectSourceAggregatesProcedureSourceInOracle(t *testing.T) {
+	const source = "PROCEDURE DBX_LARGE_SOURCE AS\nBEGIN\n  -- preserve <xml> & special characters\n  NULL;\nEND;"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "DBMS_XMLGEN.CONVERT",
+			args:          []driver.Value{"DBX_TEST", "DBX_LARGE_SOURCE", "PROCEDURE"},
+			rows:          [][]driver.Value{{source}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("DBX_TEST", "DBX_LARGE_SOURCE", "PROCEDURE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["source"] != source || result["object_type"] != "PROCEDURE" {
+		t.Fatalf("unexpected procedure source: %#v", result)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetObjectSourceReturnsEmptyWhenAggregatedSourceIsNull(t *testing.T) {
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "DBMS_XMLGEN.CONVERT",
+			args:          []driver.Value{"DBX_TEST", "MISSING_PROC", "PROCEDURE"},
+			rows:          [][]driver.Value{{nil}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("DBX_TEST", "MISSING_PROC", "PROCEDURE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["source"] != "" {
+		t.Fatalf("missing procedure source should be empty: %#v", result)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetObjectSourceFallsBackWhenOracleAggregationFails(t *testing.T) {
+	const firstLine = "PROCEDURE DBX_SOURCE_FALLBACK AS\n"
+	const secondLine = "BEGIN NULL; END;"
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "DBMS_XMLGEN.CONVERT",
+			args:          []driver.Value{"DBX_TEST", "DBX_SOURCE_FALLBACK", "PROCEDURE"},
+			err:           errors.New("ORA-19011: Character string buffer too small"),
+		},
+		{
+			queryContains: "SELECT TEXT",
+			args:          []driver.Value{"DBX_TEST", "DBX_SOURCE_FALLBACK", "PROCEDURE"},
+			rows:          [][]driver.Value{{firstLine}, {secondLine}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("DBX_TEST", "DBX_SOURCE_FALLBACK", "PROCEDURE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["source"] != firstLine+secondLine {
+		t.Fatalf("unexpected fallback procedure source: %#v", result)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetObjectSourcePreservesQuotedSynonymName(t *testing.T) {
+	const synonym = "MixedSynonym"
+	const ddl = `CREATE OR REPLACE EDITIONABLE SYNONYM "AP"."MixedSynonym" FOR "ADM"."S_SPECS"`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "DBMS_METADATA.GET_DDL(:1, :2, :3)",
+			args:          []driver.Value{"SYNONYM", synonym, "AP"},
+			rows:          [][]driver.Value{{ddl}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("AP", synonym, "SYNONYM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["name"] != synonym || result["source"] != ddl {
+		t.Fatalf("quoted synonym identity was not preserved: %#v", result)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetObjectSourceFallsBackToDBMSMetadataWithOriginalName(t *testing.T) {
+	const viewName = "vEnginWJZ"
+	const ddl = `CREATE OR REPLACE FORCE VIEW "ZTZS_ERP2"."vEnginWJZ" AS SELECT source_id FROM "ZTZS_ERP2"."SOURCE_TABLE"`
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_VIEWS",
+			args:          []driver.Value{"ZTZS_ERP2", viewName},
+			err:           errors.New("ORA-00942: table or view does not exist"),
+		},
+		{
+			queryContains: "DBMS_METADATA.GET_DDL('VIEW'",
+			args:          []driver.Value{viewName, "ZTZS_ERP2"},
+			rows:          [][]driver.Value{{ddl}},
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("ZTZS_ERP2", viewName, "VIEW")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["source"] != ddl {
+		t.Fatalf("unexpected fallback source: %#v", result["source"])
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestGetObjectSourceRejectsMissingViewSource(t *testing.T) {
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "FROM ALL_VIEWS",
+			args:          []driver.Value{"ZTZS_ERP2", "vEnginWJZ"},
+			rows:          nil,
+		},
+		{
+			queryContains: "DBMS_METADATA.GET_DDL('VIEW'",
+			args:          []driver.Value{"vEnginWJZ", "ZTZS_ERP2"},
+			err:           errors.New("ORA-31603: object not found"),
+		},
+	})
+	s := newServer()
+	s.db = db
+
+	result, err := s.getObjectSource("ZTZS_ERP2", "vEnginWJZ", "VIEW")
+	if err == nil || !strings.Contains(err.Error(), "view source not found") {
+		t.Fatalf("expected missing view source error, got result=%#v error=%v", result, err)
+	}
+	if result != nil {
+		t.Fatalf("missing view source must not return a successful empty result: %#v", result)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+}
+
+func TestOracleObjectIdentityNameCandidates(t *testing.T) {
+	if got := oracleObjectIdentityNameCandidates("MIXEDPROC"); len(got) != 1 || got[0] != "MIXEDPROC" {
+		t.Fatalf("uppercase identity should be single candidate, got %#v", got)
+	}
+	if got := oracleObjectIdentityNameCandidates("MiXeDProc"); len(got) != 2 || got[0] != "MiXeDProc" || got[1] != "MIXEDPROC" {
+		t.Fatalf("mixed-case identity should try exact then upper, got %#v", got)
+	}
+	if got := oracleObjectIdentityNameCandidates("  "); got != nil {
+		t.Fatalf("blank name should yield no candidates, got %#v", got)
+	}
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+type oracleViewSourceQueryStep struct {
+	queryContains    string
+	args             []driver.Value
+	columns          []string
+	rows             [][]driver.Value
+	err              error
+	exec             bool
+	panicText        string
+	nextPanicText    string
+	columnsPanicText string
+}
+
+type oracleViewSourceDriver struct {
+	steps []oracleViewSourceQueryStep
+	next  int
+}
+
+func (d *oracleViewSourceDriver) Open(string) (driver.Conn, error) {
+	return &oracleViewSourceConn{driver: d}, nil
+}
+
+type oracleViewSourceConn struct {
+	driver *oracleViewSourceDriver
+}
+
+func (c *oracleViewSourceConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("use QueryContext directly")
+}
+
+func (c *oracleViewSourceConn) Close() error {
+	return nil
+}
+
+func (c *oracleViewSourceConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("not supported")
+}
+
+func (c *oracleViewSourceConn) QueryContext(
+	_ context.Context,
+	query string,
+	args []driver.NamedValue,
+) (driver.Rows, error) {
+	if c.driver.next >= len(c.driver.steps) {
+		return nil, errors.New("unexpected extra query: " + query)
+	}
+	step := c.driver.steps[c.driver.next]
+	c.driver.next++
+	if step.exec {
+		return nil, errors.New("expected ExecContext call: " + query)
+	}
+	if !strings.Contains(query, step.queryContains) {
+		return nil, errors.New("unexpected query: " + query)
+	}
+	if step.panicText != "" {
+		panic(step.panicText)
+	}
+	values := make([]driver.Value, len(args))
+	for index, arg := range args {
+		values[index] = arg.Value
+	}
+	if !reflect.DeepEqual(values, step.args) {
+		return nil, errors.New("unexpected query arguments")
+	}
+	if step.err != nil {
+		return nil, step.err
+	}
+	columns := step.columns
+	if len(columns) == 0 {
+		columns = []string{"SOURCE"}
+	}
+	return &oracleViewSourceRows{
+		columns:          columns,
+		values:           step.rows,
+		nextPanicText:    step.nextPanicText,
+		columnsPanicText: step.columnsPanicText,
+	}, nil
+}
+
+func (c *oracleViewSourceConn) ExecContext(
+	_ context.Context,
+	query string,
+	args []driver.NamedValue,
+) (driver.Result, error) {
+	if c.driver.next >= len(c.driver.steps) {
+		return nil, errors.New("unexpected extra exec: " + query)
+	}
+	step := c.driver.steps[c.driver.next]
+	c.driver.next++
+	if !step.exec || !strings.Contains(query, step.queryContains) {
+		return nil, errors.New("unexpected exec: " + query)
+	}
+	values := make([]driver.Value, len(args))
+	for index, arg := range args {
+		values[index] = arg.Value
+	}
+	if (len(values) > 0 || len(step.args) > 0) && !reflect.DeepEqual(values, step.args) {
+		return nil, errors.New("unexpected exec arguments")
+	}
+	if step.err != nil {
+		return nil, step.err
+	}
+	return driver.RowsAffected(0), nil
+}
+
+type oracleViewSourceRows struct {
+	columns          []string
+	values           [][]driver.Value
+	next             int
+	nextPanicText    string
+	columnsPanicText string
+}
+
+func (r *oracleViewSourceRows) Columns() []string {
+	if r.columnsPanicText != "" {
+		panic(r.columnsPanicText)
+	}
+	return r.columns
+}
+
+func (r *oracleViewSourceRows) Close() error {
+	return nil
+}
+
+func (r *oracleViewSourceRows) Next(dest []driver.Value) error {
+	if r.nextPanicText != "" {
+		panic(r.nextPanicText)
+	}
+	if r.next >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.next])
+	r.next++
+	return nil
+}
+
+func openOracleViewSourceTestDB(
+	t *testing.T,
+	steps []oracleViewSourceQueryStep,
+) (*sql.DB, *oracleViewSourceDriver) {
+	t.Helper()
+	driverName := "oracle-test-view-source-" + strings.ReplaceAll(t.Name(), "/", "-") + "-" + time.Now().Format("150405.000000000")
+	scripted := &oracleViewSourceDriver{steps: steps}
+	sql.Register(driverName, scripted)
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+	return db, scripted
+}
+
+// -- fake drivers for timeout tests --
+
+func init() {
+	sql.Register("oracle-test-dml", &oracleDMLDriver{})
+	sql.Register("oracle-test-fast", &oracleFastDriver{})
+}
+
+// oracleDMLDriver: ExecContext blocks until ctx.Done, simulating a long-running DML.
+type oracleDMLDriver struct{}
+
+func (d *oracleDMLDriver) Open(name string) (driver.Conn, error) {
+	return &oracleDMLConn{}, nil
+}
+
+type oracleDMLConn struct{}
+
+func (c *oracleDMLConn) Prepare(query string) (driver.Stmt, error) {
+	return nil, errors.New("use ExecContext directly")
+}
+func (c *oracleDMLConn) Close() error              { return nil }
+func (c *oracleDMLConn) Begin() (driver.Tx, error) { return nil, errors.New("not supported") }
+
+var _ driver.ExecerContext = (*oracleDMLConn)(nil)
+
+func (c *oracleDMLConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// oracleFastDriver: returns rows quickly for cursor survival tests.
+type oracleFastDriver struct{}
+
+func (d *oracleFastDriver) Open(name string) (driver.Conn, error) {
+	return &oracleFastConn{}, nil
+}
+
+type oracleFastConn struct{}
+
+func (c *oracleFastConn) Prepare(query string) (driver.Stmt, error) {
+	return &oracleFastStmt{}, nil
+}
+func (c *oracleFastConn) Close() error              { return nil }
+func (c *oracleFastConn) Begin() (driver.Tx, error) { return nil, errors.New("not supported") }
+
+type oracleFastStmt struct{}
+
+func (s *oracleFastStmt) Close() error  { return nil }
+func (s *oracleFastStmt) NumInput() int { return -1 }
+func (s *oracleFastStmt) Exec(args []driver.Value) (driver.Result, error) {
+	return driver.ResultNoRows, nil
+}
+func (s *oracleFastStmt) Query(args []driver.Value) (driver.Rows, error) {
+	return &oracleFastRows{}, nil
+}
+
+type oracleFastRows struct {
+	pos    int
+	closed bool
+}
+
+func (r *oracleFastRows) Columns() []string { return []string{"id"} }
+func (r *oracleFastRows) Close() error      { r.closed = true; return nil }
+func (r *oracleFastRows) Next(dest []driver.Value) error {
+	if r.pos >= 3 || r.closed {
+		return io.EOF
+	}
+	dest[0] = int64(r.pos + 1)
+	r.pos++
+	return nil
+}
+
+type oraclePanicDriver struct{}
+
+func (d *oraclePanicDriver) Open(string) (driver.Conn, error) {
+	return &oraclePanicConn{}, nil
+}
+
+type oraclePanicConn struct{}
+
+func (c *oraclePanicConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("use QueryContext directly")
+}
+func (c *oraclePanicConn) Close() error              { return nil }
+func (c *oraclePanicConn) Begin() (driver.Tx, error) { return nil, errors.New("not supported") }
+
+func (c *oraclePanicConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	panic("simulated go-ora panic")
+}
+
+// -- timeout tests --
+
+func TestOracleDMLCancelInterruptsExecContext(t *testing.T) {
+	s := newServer()
+	db, err := sql.Open("oracle-test-dml", "dsn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.db = db
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, execErr := s.executeQuery(queryOptions{
+			SQL:         "UPDATE test SET x = 1",
+			TimeoutSecs: 0,
+		})
+		errCh <- execErr
+	}()
+
+	// Give the goroutine time to enter ExecContext and block.
+	time.Sleep(200 * time.Millisecond)
+
+	s.cancelActiveQuery()
+
+	select {
+	case execErr := <-errCh:
+		if execErr == nil {
+			t.Fatal("expected non-nil error after DML cancel")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("executeQuery did not return after cancelActiveQuery")
+	}
+}
+
+func TestOracleCursorSurvivesDeadlineWindow(t *testing.T) {
+	s := newServer()
+	db, err := sql.Open("oracle-test-fast", "dsn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.db = db
+
+	rows, err := s.queryRowsWithTimeout("SELECT id FROM test", nil, 1)
+	if err != nil {
+		t.Fatalf("queryRowsWithTimeout failed: %v", err)
+	}
+	defer s.closeRows(rows)
+
+	s.activeCancelMu.Lock()
+	timerStopped := s.activeTimer == nil
+	s.activeCancelMu.Unlock()
+	if !timerStopped {
+		t.Fatal("timer should be stopped after QueryContext returns")
+	}
+
+	time.Sleep(1200 * time.Millisecond)
+
+	// Read all rows to verify cursor survived the deadline window.
+	cols, _ := rows.Columns()
+	for range cols {
+		// placeholder
+	}
+	rowCount := 0
+	for rows.Next() {
+		rowCount++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("cursor was killed by deadline: %v", err)
+	}
+	if rowCount != 3 {
+		t.Fatalf("expected 3 rows, got %d", rowCount)
+	}
+}
+
+func TestOracleQueryRowsRecoversDriverPanic(t *testing.T) {
+	driverName := "oracle-test-panic-" + strings.ReplaceAll(t.Name(), "/", "-")
+	sql.Register(driverName, &oraclePanicDriver{})
+	db, err := sql.Open(driverName, "dsn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	s := newServer()
+	s.db = db
+	rows, err := s.queryRowsWithTimeout("SELECT geom FROM test", nil, 1)
+	if rows != nil {
+		t.Fatal("panic path must not return rows")
+	}
+	var panicErr oracleDriverPanicError
+	if !errors.As(err, &panicErr) {
+		t.Fatalf("expected oracle driver panic error, got %v", err)
+	}
+	s.activeCancelMu.Lock()
+	defer s.activeCancelMu.Unlock()
+	if s.activeCancel != nil || s.activeTimer != nil || len(s.activeRows) != 0 {
+		t.Fatalf("panic cleanup left active query state: cancel=%v timer=%v rows=%d", s.activeCancel != nil, s.activeTimer != nil, len(s.activeRows))
+	}
+}
+
+func TestOracleQueryRowsFallsBackToPlaceholderOnExtprocFailure(t *testing.T) {
+	metadataStep := oracleViewSourceQueryStep{
+		queryContains: "ALL_TAB_COLUMNS",
+		args:          []driver.Value{"SDE", "TEST_GEOM"},
+		columns:       []string{"COLUMN_NAME", "DATA_TYPE", "DATA_TYPE_OWNER"},
+		rows: [][]driver.Value{
+			{"ID", "NUMBER", nil},
+			{"GEOM", "ST_GEOMETRY", "SDE"},
+		},
+	}
+	db, _ := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{queryContains: "SELECT * FROM SDE.TEST_GEOM", args: []driver.Value{}, panicText: "simulated go-ora panic on SDE object column"},
+		metadataStep,
+		{queryContains: "SDE.ST_AsText", args: []driver.Value{}, err: errors.New("ORA-28595: Extproc agent: Invalid DLL Path")},
+		metadataStep,
+		{
+			queryContains: "'<ST_GEOMETRY>'",
+			args:          []driver.Value{},
+			columns:       []string{"ID", "GEOM", "__DBX_LARGE_VALUE_BYTES_C_1"},
+			rows:          [][]driver.Value{{int64(1), "<ST_GEOMETRY>", "D:1"}},
+		},
+	})
+	s := newServer()
+	s.db = db
+	rows, err := s.queryRowsWithOracleValueRewriteIfNeeded("SELECT * FROM SDE.TEST_GEOM", 0, false)
+	if err != nil {
+		t.Fatalf("expected placeholder fallback to serve rows, got %v", err)
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(columns, []string{"ID", "GEOM", "__DBX_LARGE_VALUE_BYTES_C_1"}) {
+		t.Fatalf("unexpected placeholder columns: %v", columns)
+	}
+	if !rows.Next() {
+		t.Fatalf("expected one placeholder row, got %v", rows.Err())
+	}
+	var id int64
+	var geom, marker string
+	if err := rows.Scan(&id, &geom, &marker); err != nil {
+		t.Fatal(err)
+	}
+	if id != 1 || geom != "<ST_GEOMETRY>" || marker != "D:1" {
+		t.Fatalf("unexpected placeholder row: %v %v %v", id, geom, marker)
+	}
+}
+
+func TestOracleQueryRowsKeepsSTAsTextErrorWhenPlaceholderAlsoFails(t *testing.T) {
+	metadataStep := oracleViewSourceQueryStep{
+		queryContains: "ALL_TAB_COLUMNS",
+		args:          []driver.Value{"SDE", "TEST_GEOM"},
+		columns:       []string{"COLUMN_NAME", "DATA_TYPE", "DATA_TYPE_OWNER"},
+		rows: [][]driver.Value{
+			{"ID", "NUMBER", nil},
+			{"GEOM", "ST_GEOMETRY", "SDE"},
+		},
+	}
+	db, _ := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{queryContains: "SELECT * FROM SDE.TEST_GEOM", args: []driver.Value{}, panicText: "simulated go-ora panic on SDE object column"},
+		metadataStep,
+		{queryContains: "SDE.ST_AsText", args: []driver.Value{}, err: errors.New("ORA-28595: Extproc agent: Invalid DLL Path")},
+		metadataStep,
+		{queryContains: "'<ST_GEOMETRY>'", args: []driver.Value{}, err: errors.New("ORA-01013: user requested cancel of current operation")},
+	})
+	s := newServer()
+	s.db = db
+	rows, err := s.queryRowsWithOracleValueRewriteIfNeeded("SELECT * FROM SDE.TEST_GEOM", 0, false)
+	if rows != nil {
+		t.Fatal("failed fallback path must not return rows")
+	}
+	if err == nil || !strings.Contains(err.Error(), "ORA-28595") {
+		t.Fatalf("expected the original ST_AsText ORA-28595 error, got %v", err)
+	}
+}
+
+func TestReadQuerySessionPageConvertsPanicToError(t *testing.T) {
+	// A nil *sql.Rows makes rows.Next() panic with a nil pointer dereference,
+	// which stands in for go-ora panicking while decoding an unknown type.
+	session := &querySession{rows: nil, columns: []string{"A"}, columnTypes: []string{"NUMBER"}, remaining: 1}
+	result, err := readQuerySessionPage(session, 10)
+	var panicErr oracleDriverPanicError
+	if !errors.As(err, &panicErr) {
+		t.Fatalf("expected oracle driver panic error, got %v", err)
+	}
+	if len(result.Rows) != 0 {
+		t.Fatalf("panic path must not return rows, got %v", result.Rows)
+	}
+}
+
+func TestExecuteQueryPageRetriesWithPlaceholderOnRowIterationPanic(t *testing.T) {
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "SELECT * FROM SDE.TEST_GEOM",
+			args:          []driver.Value{},
+			columns:       []string{"ID", "GEOM"},
+			rows:          [][]driver.Value{{int64(1), "raw geometry bytes"}},
+			nextPanicText: "simulated go-ora decode panic on custom type column",
+		},
+		{
+			queryContains: "ALL_TAB_COLUMNS",
+			args:          []driver.Value{"SDE", "TEST_GEOM"},
+			columns:       []string{"COLUMN_NAME", "DATA_TYPE", "DATA_TYPE_OWNER"},
+			rows: [][]driver.Value{
+				{"ID", "NUMBER", nil},
+				{"GEOM", "ST_GEOMETRY", "SDE"},
+			},
+		},
+		{
+			queryContains: "'<ST_GEOMETRY>'",
+			args:          []driver.Value{},
+			columns:       []string{"ID", "GEOM", "__DBX_LARGE_VALUE_BYTES_C_1"},
+			rows:          [][]driver.Value{{int64(1), "<ST_GEOMETRY>", "D:1"}},
+		},
+	})
+	s := newServer()
+	s.db = db
+	result, err := s.executeQueryPage(queryOptions{SQL: "SELECT * FROM SDE.TEST_GEOM"}, 10)
+	if err != nil {
+		t.Fatalf("expected placeholder retry to serve the first page, got %v", err)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("expected one placeholder row, got %v", result.Rows)
+	}
+	want := []any{int64(1), "<ST_GEOMETRY>", "D:1"}
+	if !reflect.DeepEqual(result.Rows[0], want) {
+		t.Fatalf("unexpected row: %v, want %v", result.Rows[0], want)
+	}
+	if result.SessionID != nil || result.HasMore {
+		t.Fatalf("fully drained page must not keep a session: %v %v", result.SessionID, result.HasMore)
+	}
+}
+
+func TestExecuteQueryPageSurfacesPanicWhenPlaceholderNotApplicable(t *testing.T) {
+	db, scripted := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains: "SELECT * FROM SDE.TEST_GEOM",
+			args:          []driver.Value{},
+			columns:       []string{"ID"},
+			rows:          [][]driver.Value{{int64(1)}},
+			nextPanicText: "simulated go-ora decode panic on custom type column",
+		},
+		{
+			queryContains: "ALL_TAB_COLUMNS",
+			args:          []driver.Value{"SDE", "TEST_GEOM"},
+			columns:       []string{"COLUMN_NAME", "DATA_TYPE", "DATA_TYPE_OWNER"},
+			rows:          [][]driver.Value{{"ID", "NUMBER", nil}},
+		},
+	})
+	s := newServer()
+	s.db = db
+	result, err := s.executeQueryPage(queryOptions{SQL: "SELECT * FROM SDE.TEST_GEOM"}, 10)
+	var panicErr oracleDriverPanicError
+	if !errors.As(err, &panicErr) {
+		t.Fatalf("expected oracle driver panic error, got %v", err)
+	}
+	if scripted.next != len(scripted.steps) {
+		t.Fatalf("expected %d queries, got %d", len(scripted.steps), scripted.next)
+	}
+	if len(result.Rows) != 0 {
+		t.Fatalf("failed query must not return rows, got %v", result.Rows)
+	}
+}
+
+func TestRuntimeHandleLineRecoversRequestPanic(t *testing.T) {
+	db, _ := openOracleViewSourceTestDB(t, []oracleViewSourceQueryStep{
+		{
+			queryContains:    "SELECT * FROM SDE.TEST_GEOM",
+			args:             []driver.Value{},
+			columnsPanicText: "simulated go-ora panic while describing columns",
+		},
+	})
+	runtime := newRuntimeServer()
+	session := newServer()
+	session.db = db
+	runtime.sessions["agent-session-1"] = &agentSession{server: session}
+
+	resp, shutdown := runtime.handleLine(`{"jsonrpc":"2.0","id":5,"method":"execute_query_page","params":{"agentSessionId":"agent-session-1","sql":"SELECT * FROM SDE.TEST_GEOM","pageSize":10}}`)
+	if shutdown {
+		t.Fatal("recovered panic must not shut down the agent")
+	}
+	if resp.Error == nil {
+		t.Fatalf("expected panic error response, got %+v", resp)
+	}
+	if !strings.Contains(resp.Error.Message, "agent request panic") {
+		t.Fatalf("unexpected error message: %s", resp.Error.Message)
+	}
+	if string(resp.ID) != "5" {
+		t.Fatalf("panic response must keep the request id, got %s", resp.ID)
+	}
+
+	// The RPC stream must survive the panic and keep serving requests.
+	followUp, shutdown := runtime.handleLine(`{"jsonrpc":"2.0","id":6,"method":"handshake","params":{}}`)
+	if shutdown || followUp.Error != nil {
+		t.Fatalf("handshake after recovered panic failed: shutdown=%v error=%v", shutdown, followUp.Error)
+	}
+}
+
+func TestManualTransactionBeginCommitRollback(t *testing.T) {
+	db, driver := openOracleManualTxTestDB(t)
+	s := newServer()
+	s.db = db
+
+	if err := s.beginManualTransaction(""); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if !s.hasManualTransaction() {
+		t.Fatal("expected open manual transaction")
+	}
+	if err := s.beginManualTransaction(""); err == nil {
+		t.Fatal("second begin should fail")
+	}
+
+	result, err := s.executeQuery(queryOptions{SQL: "UPDATE t SET a = 1", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("update in txn: %v", err)
+	}
+	if result.AffectedRows != 1 {
+		t.Fatalf("expected 1 affected row, got %d", result.AffectedRows)
+	}
+
+	selectResult, err := s.executeQuery(queryOptions{SQL: "SELECT a FROM t", MaxRows: 10})
+	if err != nil {
+		t.Fatalf("select in txn: %v", err)
+	}
+	if len(selectResult.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(selectResult.Rows))
+	}
+
+	if err := s.commitManualTransaction(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if s.hasManualTransaction() {
+		t.Fatal("transaction should be closed after commit")
+	}
+	if !driver.committed {
+		t.Fatal("expected driver commit")
+	}
+	if driver.rolledBack {
+		t.Fatal("commit path should not rollback")
+	}
+
+	if err := s.beginManualTransaction(""); err != nil {
+		t.Fatalf("re-begin: %v", err)
+	}
+	if _, err := s.executeQuery(queryOptions{SQL: "DELETE FROM t", MaxRows: 10}); err != nil {
+		t.Fatalf("delete in txn: %v", err)
+	}
+	if err := s.rollbackManualTransaction(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	if !driver.rolledBack {
+		t.Fatal("expected driver rollback")
+	}
+	if err := s.commitManualTransaction(); err == nil {
+		t.Fatal("commit without open txn should fail")
+	}
+	if err := s.rollbackManualTransaction(); err == nil {
+		t.Fatal("rollback without open txn should fail")
+	}
+}
+
+// TestManualTransactionSkipsPerStatementSetSchema guards against Oracle's
+// implicit COMMIT before+after DDL (ALTER SESSION SET CURRENT_SCHEMA is DDL).
+// Once a manual transaction is open and the schema is pinned at BEGIN time,
+// executeQuery/executeQueryPage/startTableRead must NOT re-issue ALTER SESSION
+// per statement, otherwise prior DML in the same transaction is silently
+// committed and Rollback can no longer undo it.
+func TestManualTransactionSkipsPerStatementSetSchema(t *testing.T) {
+	db, driver := openOracleManualTxTestDB(t)
+	s := newServer()
+	s.db = db
+
+	if err := s.beginManualTransaction("APP_TEST"); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	// Run a couple of statements with a non-empty schema; before the fix each
+	// call would issue an extra ALTER SESSION SET CURRENT_SCHEMA inside the tx.
+	if _, err := s.executeQuery(queryOptions{SQL: "UPDATE t SET a = 1", Schema: "APP_TEST", MaxRows: 10}); err != nil {
+		t.Fatalf("update in txn: %v", err)
+	}
+	if _, err := s.executeQuery(queryOptions{SQL: "DELETE FROM t", Schema: "APP_TEST", MaxRows: 10}); err != nil {
+		t.Fatalf("delete in txn: %v", err)
+	}
+
+	alterSessionCount := 0
+	for _, q := range driver.execs {
+		if strings.Contains(strings.ToUpper(q), "ALTER SESSION SET CURRENT_SCHEMA") {
+			alterSessionCount++
+		}
+	}
+	// Exactly one ALTER SESSION is expected: the one issued by
+	// beginManualTransaction when pinning the schema. Any additional one would
+	// mean per-statement setSchema ran inside the open transaction and would
+	// trigger an implicit COMMIT of the preceding DML.
+	if alterSessionCount != 1 {
+		t.Fatalf("expected exactly 1 ALTER SESSION (from begin), got %d; per-statement setSchema must be skipped during manual tx", alterSessionCount)
+	}
+
+	if err := s.rollbackManualTransaction(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+}
+
+func TestManualTransactionDisconnectRollsBack(t *testing.T) {
+	db, driver := openOracleManualTxTestDB(t)
+	s := newServer()
+	s.db = db
+	if err := s.beginManualTransaction(""); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := s.disconnect(); err != nil {
+		t.Fatalf("disconnect: %v", err)
+	}
+	if s.hasManualTransaction() {
+		t.Fatal("disconnect should clear manual transaction")
+	}
+	if !driver.rolledBack {
+		t.Fatal("disconnect should rollback open manual transaction")
+	}
+}
+
+func TestManualTransactionBlocksOneShotTransaction(t *testing.T) {
+	db, _ := openOracleManualTxTestDB(t)
+	s := newServer()
+	s.db = db
+	if err := s.beginManualTransaction(""); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	_, err := s.executeTransaction(map[string]json.RawMessage{
+		"statements": json.RawMessage(`["UPDATE t SET a = 1"]`),
+	})
+	if err == nil || !strings.Contains(err.Error(), "manual transaction") {
+		t.Fatalf("expected manual transaction conflict, got %v", err)
+	}
+}
+
+func TestRuntimeHandshakeAdvertisesTransactionCapability(t *testing.T) {
+	runtime := newRuntimeServer()
+	resp, shutdown := runtime.handleLine(`{"jsonrpc":"2.0","id":7,"method":"handshake","params":{"appVersion":"dev"}}`)
+	if shutdown || resp.Error != nil {
+		t.Fatalf("unexpected handshake response: shutdown=%v error=%v", shutdown, resp.Error)
+	}
+	data, err := json.Marshal(resp.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(result.Capabilities, "transaction") {
+		t.Fatalf("expected transaction capability, got %v", result.Capabilities)
+	}
+}
+
+func TestManualTransactionRPCDispatch(t *testing.T) {
+	db, driver := openOracleManualTxTestDB(t)
+	s := newServer()
+	s.db = db
+
+	resp, _ := s.handleLine(`{"jsonrpc":"2.0","id":1,"method":"begin_manual_transaction","params":{}}`)
+	if resp.Error != nil {
+		t.Fatalf("begin rpc: %v", resp.Error)
+	}
+	resp, _ = s.handleLine(`{"jsonrpc":"2.0","id":2,"method":"execute_query","params":{"sql":"UPDATE t SET a = 2","maxRows":10}}`)
+	if resp.Error != nil {
+		t.Fatalf("execute rpc: %v", resp.Error)
+	}
+	resp, _ = s.handleLine(`{"jsonrpc":"2.0","id":3,"method":"commit_manual_transaction","params":{}}`)
+	if resp.Error != nil {
+		t.Fatalf("commit rpc: %v", resp.Error)
+	}
+	if !driver.committed {
+		t.Fatal("expected commit via RPC")
+	}
+}
+
+type oracleManualTxDriver struct {
+	mu         sync.Mutex
+	committed  bool
+	rolledBack bool
+	execs      []string
+	queries    []string
+}
+
+func openOracleManualTxTestDB(t *testing.T) (*sql.DB, *oracleManualTxDriver) {
+	t.Helper()
+	driverName := "oracle-test-manual-tx-" + strings.ReplaceAll(t.Name(), "/", "-") + "-" + time.Now().Format("150405.000000000")
+	drv := &oracleManualTxDriver{}
+	sql.Register(driverName, drv)
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+	return db, drv
+}
+
+func (d *oracleManualTxDriver) Open(string) (driver.Conn, error) {
+	return &oracleManualTxConn{driver: d}, nil
+}
+
+type oracleManualTxConn struct {
+	driver *oracleManualTxDriver
+	closed bool
+}
+
+func (c *oracleManualTxConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("use Query/Exec context APIs")
+}
+
+func (c *oracleManualTxConn) Close() error {
+	c.closed = true
+	return nil
+}
+
+func (c *oracleManualTxConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
+
+func (c *oracleManualTxConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	c.driver.mu.Lock()
+	defer c.driver.mu.Unlock()
+	c.driver.committed = false
+	c.driver.rolledBack = false
+	return &oracleManualTx{driver: c.driver}, nil
+}
+
+var (
+	_ driver.ConnBeginTx    = (*oracleManualTxConn)(nil)
+	_ driver.ExecerContext  = (*oracleManualTxConn)(nil)
+	_ driver.QueryerContext = (*oracleManualTxConn)(nil)
+)
+
+func (c *oracleManualTxConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+	c.driver.mu.Lock()
+	defer c.driver.mu.Unlock()
+	c.driver.execs = append(c.driver.execs, query)
+	return driver.RowsAffected(1), nil
+}
+
+func (c *oracleManualTxConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
+	c.driver.mu.Lock()
+	defer c.driver.mu.Unlock()
+	c.driver.queries = append(c.driver.queries, query)
+	return &oracleManualTxRows{
+		columns: []string{"A"},
+		values:  [][]driver.Value{{int64(1)}},
+	}, nil
+}
+
+type oracleManualTx struct {
+	driver *oracleManualTxDriver
+	done   bool
+}
+
+func (t *oracleManualTx) Commit() error {
+	t.driver.mu.Lock()
+	defer t.driver.mu.Unlock()
+	if t.done {
+		return errors.New("transaction already finished")
+	}
+	t.done = true
+	t.driver.committed = true
+	return nil
+}
+
+func (t *oracleManualTx) Rollback() error {
+	t.driver.mu.Lock()
+	defer t.driver.mu.Unlock()
+	if t.done {
+		return errors.New("transaction already finished")
+	}
+	t.done = true
+	t.driver.rolledBack = true
+	return nil
+}
+
+// database/sql routes Exec/Query on *sql.Tx through the underlying conn while the
+// transaction is open when the driver implements ExecerContext/QueryerContext.
+// Keep explicit Tx methods unused; Conn methods above serve sticky TX execution.
+
+type oracleManualTxRows struct {
+	columns []string
+	values  [][]driver.Value
+	next    int
+}
+
+func (r *oracleManualTxRows) Columns() []string { return r.columns }
+func (r *oracleManualTxRows) Close() error      { return nil }
+func (r *oracleManualTxRows) Next(dest []driver.Value) error {
+	if r.next >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.next])
+	r.next++
+	return nil
+}
+
+func TestOracleOpaqueObjectTypeDetection(t *testing.T) {
+	cases := []struct {
+		name   string
+		column oracleColumnMeta
+		want   bool
+	}{
+		{"object type", oracleColumnMeta{Name: "G", DataType: "GEOM_T", DataTypeOwner: "DBX_TEST"}, true},
+		{"collection type", oracleColumnMeta{Name: "V", DataType: "DBX9180_VARRAY", DataTypeOwner: "DBX_TEST"}, true},
+		{"anydata", oracleColumnMeta{Name: "V", DataType: "ANYDATA", DataTypeOwner: "SYS"}, true},
+		{"number", oracleColumnMeta{Name: "ID", DataType: "NUMBER"}, false},
+		{"varchar2", oracleColumnMeta{Name: "NOTE", DataType: "VARCHAR2"}, false},
+		{"clob", oracleColumnMeta{Name: "PAYLOAD", DataType: "CLOB"}, false},
+		{"xmltype", oracleColumnMeta{Name: "DOC", DataType: "XMLTYPE", DataTypeOwner: "SYS"}, false},
+		{"sdo geometry", oracleColumnMeta{Name: "SHAPE", DataType: "SDO_GEOMETRY", DataTypeOwner: "MDSYS"}, false},
+		{"sde geometry", oracleColumnMeta{Name: "SHAPE", DataType: "ST_GEOMETRY", DataTypeOwner: "SDE"}, false},
+	}
+	for _, testCase := range cases {
+		if got := isOracleOpaqueObjectType(testCase.column); got != testCase.want {
+			t.Fatalf("%s: isOracleOpaqueObjectType() = %v, want %v", testCase.name, got, testCase.want)
+		}
+	}
+}
+
+func TestRewriteOracleOpaqueObjectSelectStar(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT * FROM TEST_UDT`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "G", DataType: "GEOM_T", DataTypeOwner: "DBX_TEST"},
+				{Name: "NOTE", DataType: "VARCHAR2"},
+			}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT "ID", CASE WHEN "G" IS NULL THEN NULL ELSE '<GEOM_T>' END AS "G", "NOTE" FROM TEST_UDT`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleOpaqueObjectExplicitColumn(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.G AS shape, t.ID FROM TEST_UDT t`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "G", DataType: "GEOM_T", DataTypeOwner: "DBX_TEST"},
+			}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT CASE WHEN t."G" IS NULL THEN NULL ELSE '<GEOM_T>' END AS shape, t.ID FROM TEST_UDT t`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleKeepsBuiltinColumnsUntouched(t *testing.T) {
+	input := `SELECT ID, NOTE FROM TEST_PLAIN`
+	sqlText, err := rewriteOracleSelectSQL(
+		input,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "NOTE", DataType: "VARCHAR2"},
+				{Name: "PAYLOAD", DataType: "CLOB"},
+			}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlText != input {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, input)
+	}
+}
+
+func TestOracleSQLLocksRowsDetection(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{"for update", "SELECT * FROM T FOR UPDATE", true},
+		{"for update skip locked", "SELECT * FROM T FOR UPDATE SKIP LOCKED", true},
+		{"for update of column", "SELECT ID FROM T FOR UPDATE OF ID NOWAIT", true},
+		{"lowercase", "select id from t for update", true},
+		{"plain select", "SELECT * FROM T", false},
+		{"string literal", "SELECT 'FOR UPDATE' FROM T", false},
+		{"comment", "SELECT * FROM T -- FOR UPDATE", false},
+		{"subquery for update", "SELECT * FROM (SELECT ID FROM T FOR UPDATE) X", false},
+		{"column named update", "SELECT FOR_UPDATE FROM T", false},
+	}
+	for _, testCase := range cases {
+		if got := oracleSQLLocksRows(testCase.sql); got != testCase.want {
+			t.Fatalf("%s: oracleSQLLocksRows(%q) = %v, want %v", testCase.name, testCase.sql, got, testCase.want)
+		}
+	}
+}
+
+func TestRewriteOracleOpaqueObjectInDeferredProjection(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT * FROM TEST_UDT_LOB`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "DOC", DataType: "CLOB"},
+				{Name: "G", DataType: "GEOM_T", DataTypeOwner: "DBX_TEST"},
+			}, nil
+		},
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sqlText, `CASE WHEN "G" IS NULL THEN NULL ELSE '<GEOM_T>' END AS "G"`) {
+		t.Fatalf("deferred rewrite did not substitute the opaque column: %s", sqlText)
+	}
+	if !strings.Contains(sqlText, `"DOC"`) {
+		t.Fatalf("deferred rewrite dropped the LOB column: %s", sqlText)
+	}
+}
+
+func TestParseSingleOracleTableRefReadsDatabaseLinkAndAlias(t *testing.T) {
+	cases := []struct {
+		name string
+		from string
+		want oracleTableRef
+		ok   bool
+	}{
+		{
+			name: "unqualified link with alias",
+			from: `T_UDT@DBX_LOOP t`,
+			want: oracleTableRef{Table: "T_UDT", Alias: "T", AliasText: "t"},
+			ok:   true,
+		},
+		{
+			name: "schema qualified link with alias",
+			from: `DBX_TEST.T_UDT@DBX_LOOP t`,
+			want: oracleTableRef{Schema: "DBX_TEST", Table: "T_UDT", Alias: "T", AliasText: "t"},
+			ok:   true,
+		},
+		{
+			name: "remote link marker",
+			from: `DBX_TEST.T_UDT@!DBX_LOOP x`,
+			want: oracleTableRef{Schema: "DBX_TEST", Table: "T_UDT", Alias: "X", AliasText: "x"},
+			ok:   true,
+		},
+		{
+			name: "quoted link followed by a clause",
+			from: `DBX_TEST.T_UDT@"Loop Link" WHERE ID > 0`,
+			want: oracleTableRef{Schema: "DBX_TEST", Table: "T_UDT"},
+			ok:   true,
+		},
+		{
+			name: "link without alias",
+			from: `DBX_TEST.T_UDT@DBX_LOOP`,
+			want: oracleTableRef{Schema: "DBX_TEST", Table: "T_UDT"},
+			ok:   true,
+		},
+		{
+			name: "local table is unchanged",
+			from: `DBX_TEST.T_UDT t`,
+			want: oracleTableRef{Schema: "DBX_TEST", Table: "T_UDT", Alias: "T", AliasText: "t"},
+			ok:   true,
+		},
+		{
+			name: "link followed by another table is not a single reference",
+			from: `DBX_TEST.T_UDT@DBX_LOOP, DBX_TEST.OTHER`,
+			ok:   false,
+		},
+		{
+			name: "link followed by a join is not a single reference",
+			from: `DBX_TEST.T_UDT@DBX_LOOP JOIN DBX_TEST.OTHER ON 1 = 1`,
+			ok:   false,
+		},
+		{
+			name: "connect string link keeps the previous shape",
+			from: `DBX_TEST.T_UDT@'XE'`,
+			want: oracleTableRef{Schema: "DBX_TEST", Table: "T_UDT"},
+			ok:   true,
+		},
+	}
+	for _, testCase := range cases {
+		got, ok := parseSingleOracleTableRef(testCase.from)
+		if ok != testCase.ok {
+			t.Fatalf("%s: parseSingleOracleTableRef(%q) ok = %v, want %v", testCase.name, testCase.from, ok, testCase.ok)
+		}
+		if !testCase.ok {
+			continue
+		}
+		if got != testCase.want {
+			t.Fatalf("%s: parseSingleOracleTableRef(%q) = %+v, want %+v", testCase.name, testCase.from, got, testCase.want)
+		}
+	}
+}
+
+func TestRewriteOracleOpaqueObjectProjectionKeepsLinkedAlias(t *testing.T) {
+	var gotSchema, gotTable string
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.*, ROWIDTOCHAR(t.ROWID) AS "__DBX_PK_0" FROM DBX_TEST.T_UDT@DBX_LOOP t`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			gotSchema, gotTable = schema, table
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "G", DataType: "GEOM_T", DataTypeOwner: "DBX_TEST"},
+			}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSchema != "DBX_TEST" || gotTable != "T_UDT" {
+		t.Fatalf("column metadata loaded for (%q, %q), want (DBX_TEST, T_UDT)", gotSchema, gotTable)
+	}
+	want := `SELECT t."ID", CASE WHEN t."G" IS NULL THEN NULL ELSE '<GEOM_T>' END AS "G", ROWIDTOCHAR(t.ROWID) AS "__DBX_PK_0" FROM DBX_TEST.T_UDT@DBX_LOOP t`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+func TestRewriteOracleOpaqueObjectExplicitColumnKeepsLinkedAlias(t *testing.T) {
+	sqlText, err := rewriteOracleSelectSQL(
+		`SELECT t.ID, t.G FROM T_UDT@DBX_LOOP t`,
+		func(schema, table string) ([]oracleColumnMeta, error) {
+			return []oracleColumnMeta{
+				{Name: "ID", DataType: "NUMBER"},
+				{Name: "G", DataType: "GEOM_T", DataTypeOwner: "DBX_TEST"},
+			}, nil
+		},
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `SELECT t.ID, CASE WHEN t."G" IS NULL THEN NULL ELSE '<GEOM_T>' END AS "G" FROM T_UDT@DBX_LOOP t`
+	if sqlText != want {
+		t.Fatalf("rewriteOracleSelectSQL() = %s, want %s", sqlText, want)
+	}
+}
+
+// OCI 模式的连接串解析：oci8 前缀、TNS 别名与 thin 形式共用同一套规则。
+func TestParseOracleJDBCURLAcceptsOci8FormsAndTnsAliases(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		want jdbcURLInfo
+	}{
+		{
+			name: "service",
+			url:  "jdbc:oracle:oci8:@//db.example.com:1521/ORCLPDB1",
+			want: jdbcURLInfo{Kind: "service", Host: "db.example.com", Port: 1521, Database: "ORCLPDB1"},
+		},
+		{
+			name: "sid",
+			url:  "jdbc:oracle:oci8:@db.example.com:1521:ORCL",
+			want: jdbcURLInfo{Kind: "sid", Host: "db.example.com", Port: 1521, Database: "ORCL"},
+		},
+		{
+			name: "descriptor",
+			url:  "jdbc:oracle:oci8:@(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=h)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=x)))",
+			want: jdbcURLInfo{Kind: "descriptor", Descriptor: "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=h)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=x)))"},
+		},
+		{
+			name: "tns alias",
+			url:  "jdbc:oracle:oci8:@ORCLPDB1",
+			want: jdbcURLInfo{Kind: "tns", Database: "ORCLPDB1"},
+		},
+		{
+			name: "tns alias with admin query",
+			url:  "jdbc:oracle:oci8:@ORCLPDB1?TNS_ADMIN=C:/wallets",
+			want: jdbcURLInfo{Kind: "tns", Database: "ORCLPDB1"},
+		},
+		{
+			name: "thin form still parses",
+			url:  "jdbc:oracle:thin:@//db.example.com:1521/ORCLPDB1",
+			want: jdbcURLInfo{Kind: "service", Host: "db.example.com", Port: 1521, Database: "ORCLPDB1"},
+		},
+	}
+	for _, tc := range cases {
+		if got := parseOracleJDBCURL(tc.url); got != tc.want {
+			t.Errorf("%s: parseOracleJDBCURL(%q) = %+v, want %+v", tc.name, tc.url, got, tc.want)
+		}
+	}
+}
+
+func TestParseOracleJDBCURLRejectsUnknownSchemes(t *testing.T) {
+	for _, url := range []string{
+		"jdbc:postgresql://db/app",
+		"jdbc:mysql://db:3306/app",
+		"",
+	} {
+		if got := parseOracleJDBCURL(url); got != (jdbcURLInfo{}) {
+			t.Errorf("parseOracleJDBCURL(%q) = %+v, want the zero value", url, got)
+		}
+	}
+}
+
+func TestOracleTnsAliasName(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"ORCLPDB1", "ORCLPDB1"},
+		{"ORCLPDB1?TNS_ADMIN=C:/wallets", "ORCLPDB1"},
+		{"ORCLPDB1 ", "ORCLPDB1"},
+		{"(DESCRIPTION=(ADDRESS=...))", ""},
+		{"//host:1521/svc", ""},
+		{"host:1521:orcl", ""},
+		{"host/svc", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		if got := oracleTnsAliasName(tc.in); got != tc.want {
+			t.Errorf("oracleTnsAliasName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

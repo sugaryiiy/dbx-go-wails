@@ -1,0 +1,239 @@
+import type { EditorSettings } from "@/stores/settingsStore";
+import { normalizeBackgroundImageSettings } from "@/lib/app/appBackgroundImage";
+import { normalizeResultPageSize } from "@/lib/dataGrid/paginationPageSize";
+import { normalizeQueryResultMaxRows } from "@/lib/dataGrid/queryResultRowLimit";
+import { normalizeExternalSqlEditorMaxMb } from "@/lib/sql/sqlFileOpen";
+import { normalizeCompletionTriggerMode } from "@/lib/sql/sqlCompletionTriggerPolicy";
+import { normalizeSqlTableCompletionSchemaQualification } from "@/lib/sql/sqlCompletionSchemaQualification";
+import { normalizeSqlCompletionCase } from "@/lib/sql/sqlCompletionCase";
+import { normalizeTableHoverLookupMode } from "@/lib/editor/hoverTableLookup";
+import { normalizeRedisKeyTemplates } from "@/lib/redis/redisKeyTemplates";
+import { normalizeCsvNullMode } from "@/lib/export/csvNullMode";
+
+export const EDITOR_SETTINGS_DRAFT_KEYS = [
+  "fontFamily",
+  "fontSize",
+  "tableFontFamily",
+  "uiFontFamily",
+  "uiScale",
+  "theme",
+  "backgroundImage",
+  "customThemes",
+  "activeCustomThemeId",
+  "executeMode",
+  "executeAllOnBlankLine",
+  "showExecutionTargetPicker",
+  "showStatementRunButtons",
+  "showLineNumbers",
+  "showCurrentStatementFrame",
+  "showInsertValueHints",
+  "autoAliasTables",
+  "tableCompletionSchemaQualification",
+  "completionKeywordCase",
+  "completionFunctionCase",
+  "insertSpaceAfterCompletion",
+  "sqlServerSpaceConfirmsCompletion",
+  "snippetTriggerKey",
+  "sortCompletionColumnsAlphabetically",
+  "selectFirstCompletionOnOpen",
+  "wordWrap",
+  "showWhitespace",
+  "ddlOpenMode",
+  "vimModeEnabled",
+  "doubleClickStringSelectionMode",
+  "autoCloseBrackets",
+  "restoreSqlFromSourcePasteEnabled",
+  "sqlSemanticDiagnosticsMode",
+  "confirmDangerousSqlExecution",
+  "confirmUnsavedSqlClose",
+  "appCloseUnsavedTabsMode",
+  "savedSqlOpenTargetMode",
+  "welcomePageMode",
+  "appLayout",
+  "tabLayout",
+  "tabPlacement",
+  "colorizeConnectionTabs",
+  "tabGroupMode",
+  "tabSortMode",
+  "showColumnCommentsInHeader",
+  "showColumnTypesInHeader",
+  "showColumnHeaderTooltips",
+  "showResultSourceDatabase",
+  "resultTabNamingMode",
+  "resultTabPreferComments",
+  "dataGridShowTransposeFieldMetadata",
+  "colorizeDataGridCellTypes",
+  "dataGridTypeColorSchemes",
+  "activeDataGridTypeColorSchemeId",
+  "showIndexIndicatorsInHeader",
+  "compactColumnHeaderActions",
+  "dataGridQuickEntry",
+  "dataGridFilterEditorView",
+  "dataGridToolbarLayout",
+  "dataGridKeepFilterEditorExpanded",
+  "dataGridTextFilterPanelHeight",
+  "defaultAutoKeepResults",
+  "multiStatementDefaultView",
+  "dataGridAutoTransposeSingleRow",
+  "dataGridCellDetailButtonVisible",
+  "dataGridCellDetailDialogDefault",
+  "dataGridCrosshairHighlight",
+  "dataGridStripedRows",
+  "dataGridZebraRowBg",
+  "pageSize",
+  "tableOpenPageSize",
+  "tableOpenSortMode",
+  "tableDatabaseSortDirection",
+  "tableLocalSortDirection",
+  "queryResultMaxRowsEnabled",
+  "queryResultMaxRows",
+  "externalSqlEditorMaxMb",
+  "infiniteScroll",
+  "regexMaxMatchCount",
+  "autoCalculateTotalRows",
+  "flatteningMultiLineText",
+  "dataGridShowWhitespace",
+  "tableColumnTemplateFields",
+  "shortcuts",
+  "shortcutKeymap",
+  "sqlFormatter",
+  "sidebarActivation",
+  "sidebarObjectDisplay",
+  "routineSourceOpenMode",
+  "sidebarTableSearchEnabled",
+  "sidebarSearchOpenedDatabasesOnly",
+  "autoSelectActiveSidebarNode",
+  "sidebarPinDefaultDatabase",
+  "sidebarBrowseObjectsOnDatabaseActivation",
+  "openTabsRestoreMode",
+  "autoReloadRestoredDataTabsOnOpen",
+  "disconnectTabHandlingMode",
+  "deleteConnectionTabHandlingMode",
+  "rememberConnectionDatabaseOnDelete",
+  "dataTabReuseMode",
+  "openDataTabsNextToActive",
+  "prefillNewQueryWithSelect",
+  "generateSqlIncludeDatabaseName",
+  "generateSqlQuoteIdentifiers",
+  "formatSqlOnSqlFileSave",
+  "showTableDdlHoverPreview",
+  "tableHoverLookupMode",
+  "updateNotificationsEnabled",
+  "autoDownloadUpdates",
+  "autoUpdateApp",
+  "autoUpdateDrivers",
+  "autoUpdateJdbc",
+  "autoUpdateMcp",
+  "autoUpdatePlugins",
+  "sidebarObjectInfoMode",
+  "sidebarAllowHorizontalScroll",
+  "sidebarShowTooltips",
+  "sidebarIndent",
+  "sidebarFontSize",
+  "sidebarHiddenTablePrefixes",
+  "sidebarCopyTableNameSeparator",
+  "sidebarCopyTableNameIncludeSchema",
+  "redisKeyTemplates",
+  "redisDatabaseDisplayLimit",
+  "exportBatchSize",
+  "csvQuoteMode",
+  "csvNullMode",
+  "exportRowLimitEnabled",
+  "exportRowLimit",
+  "queryExportKeysetOptimizationEnabled",
+  "globalDateTimeDisplayFormat",
+  "globalDateTimeExportFormat",
+  "globalDateTimeImportFormat",
+  "updateDownloadSource",
+  "toolbarItems",
+  "snippets",
+  "sqlShortcuts",
+  "sqlVariableSubstitutionEnabled",
+  "sqlVariableSyntaxOverrides",
+  "continueOnErrorOnBatch",
+  "clickTableNavigationTarget",
+  "completionTriggerMode",
+  "defaultTransactionMode",
+  "keepExplicitTransactionInAutoCommit",
+] as const satisfies readonly (keyof EditorSettings)[];
+
+export type EditorSettingsDraftKey = (typeof EDITOR_SETTINGS_DRAFT_KEYS)[number];
+export type EditorSettingsDraft = Pick<EditorSettings, EditorSettingsDraftKey>;
+
+function cloneDraftValue<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export function normalizeTableOpenPageSizeDraft(value: unknown): number {
+  // Match persistence so legacy, invalid, and fractional values cannot leave the dialog dirty after apply.
+  return normalizeResultPageSize(value);
+}
+
+export function normalizeQueryResultMaxRowsDraft(value: unknown): number {
+  return normalizeQueryResultMaxRows(value);
+}
+
+function normalizedDraftValue(key: EditorSettingsDraftKey, value: unknown): unknown {
+  if (key === "pageSize" || key === "tableOpenPageSize") return normalizeTableOpenPageSizeDraft(value);
+  if (key === "queryResultMaxRows") return normalizeQueryResultMaxRowsDraft(value);
+  if (key === "externalSqlEditorMaxMb") return normalizeExternalSqlEditorMaxMb(value);
+  if (key === "completionTriggerMode") return normalizeCompletionTriggerMode(value);
+  if (key === "tableCompletionSchemaQualification") return normalizeSqlTableCompletionSchemaQualification(value);
+  if (key === "completionKeywordCase" || key === "completionFunctionCase") return normalizeSqlCompletionCase(value);
+  if (key === "tableHoverLookupMode") return normalizeTableHoverLookupMode(value);
+  if (key === "redisKeyTemplates") return normalizeRedisKeyTemplates(value);
+  if (key === "csvNullMode") return normalizeCsvNullMode(value);
+  if (key === "backgroundImage") return normalizeBackgroundImageSettings(value);
+  if (key === "snippetTriggerKey") return value === "space" || value === "both" ? value : "tab";
+  return value;
+}
+
+function draftValueChanged(key: EditorSettingsDraftKey, a: unknown, b: unknown): boolean {
+  return JSON.stringify(normalizedDraftValue(key, a)) !== JSON.stringify(normalizedDraftValue(key, b));
+}
+
+export function editorSettingsDraftFromSettings(settings: EditorSettings): EditorSettingsDraft {
+  const draft = {} as EditorSettingsDraft;
+  for (const key of EDITOR_SETTINGS_DRAFT_KEYS) {
+    draft[key] = cloneDraftValue(normalizedDraftValue(key, settings[key])) as never;
+  }
+  return draft;
+}
+
+/**
+ * Draft-shaped, per-key-normalized values for exactly the keys present in
+ * `settings`. Used for partial updates (e.g. settings import) where keys the
+ * input does not contain must leave the target state untouched.
+ */
+export function editorSettingsDraftPatchFromSettings(settings: Partial<EditorSettings>): Partial<EditorSettingsDraft> {
+  const patch: Partial<EditorSettingsDraft> = {};
+  for (const key of EDITOR_SETTINGS_DRAFT_KEYS) {
+    if (!(key in settings)) continue;
+    (patch as Record<string, unknown>)[key] = cloneDraftValue(normalizedDraftValue(key, settings[key])) as never;
+  }
+  return patch;
+}
+
+export function editorSettingsPatchFromDraft(draft: EditorSettingsDraft, base: EditorSettingsDraft): Partial<EditorSettings> {
+  const patch: Partial<EditorSettings> = {};
+  for (const key of EDITOR_SETTINGS_DRAFT_KEYS) {
+    if (draftValueChanged(key, draft[key], base[key])) {
+      patch[key] = cloneDraftValue(normalizedDraftValue(key, draft[key])) as never;
+    }
+  }
+  return patch;
+}
+
+export function editorSettingsDraftChanged(draft: EditorSettingsDraft, base: EditorSettingsDraft): boolean {
+  return EDITOR_SETTINGS_DRAFT_KEYS.some((key) => draftValueChanged(key, draft[key], base[key]));
+}
+
+// Closing the settings dialog (Escape, clicking outside, the X button, or the
+// "Close" footer button) must never silently drop an unapplied draft — the
+// dialog only persists shortcuts/sidebarActivation/etc. to the store on an
+// explicit Apply. Route every close attempt through this check so an unsaved
+// draft always surfaces a confirmation instead of vanishing.
+export function shouldConfirmEditorSettingsDialogClose(nextOpen: boolean, hasUnsavedChanges: boolean): boolean {
+  return nextOpen === false && hasUnsavedChanges;
+}

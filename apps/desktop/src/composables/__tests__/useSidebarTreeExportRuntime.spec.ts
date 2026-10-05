@@ -1,0 +1,668 @@
+import { shallowRef, reactive, nextTick, effectScope } from "vue";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ColumnInfo, TreeNode } from "@/types/database";
+
+const toastMock = vi.hoisted(() => vi.fn());
+const copyToClipboardMock = vi.hoisted(() => vi.fn());
+const addExportTaskMock = vi.hoisted(() => vi.fn());
+const updateTableExportTaskMock = vi.hoisted(() => vi.fn());
+const apiMock = vi.hoisted(() => ({
+  buildTableSelectSql: vi.fn(async () => 'SELECT * FROM "main"."users" LIMIT 10000'),
+  closeClientConnectionSession: vi.fn(),
+  closeQuerySession: vi.fn(),
+  executeQuery: vi.fn(),
+  exportQueryResultCsv: vi.fn(),
+  exportQueryResultJson: vi.fn(),
+  exportQueryResultXlsx: vi.fn(),
+  getColumns: vi.fn(),
+  getTableDdl: vi.fn(),
+  startTableExport: vi.fn(),
+  exportMongodbQuery: vi.fn(),
+}));
+
+vi.mock("@/lib/backend/api", () => apiMock);
+vi.mock("@/lib/common/clipboard", () => ({ copyToClipboard: copyToClipboardMock }));
+vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => false }));
+vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: toastMock }) }));
+vi.mock("@/composables/useExportTracker", () => ({ useExportTracker: () => ({ addTask: addExportTaskMock, updateTableExportTask: updateTableExportTaskMock }) }));
+vi.mock("@/i18n", () => ({ default: { install() {} } }));
+vi.mock("vue-i18n", () => ({
+  useI18n: () => ({
+    t: (key: string, params?: Record<string, unknown>) => {
+      if (key === "editor.duckdbDraining") return "上一个 DuckDB 查询仍在停止中，请稍后重试。";
+      if (key === "grid.exportFailed") return `导出失败：${params?.message}`;
+      return key;
+    },
+  }),
+}));
+
+import { useSidebarTreeExportRuntime } from "@/composables/useSidebarTreeExportRuntime";
+import { DEFAULT_DATA_GRID_EXTRACTOR_OPTIONS } from "@/lib/dataGrid/dataGridCopyExtractor";
+import { isLoadingStructurePreview, showStructurePreviewDialog, structurePreviewDefaultFileName, structurePreviewError, structurePreviewSql, structurePreviewTitle } from "@/components/sidebar/sidebarTreeDialogState";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+function column(name: string, isPrimaryKey = false): ColumnInfo {
+  return {
+    name,
+    data_type: "text",
+    is_nullable: !isPrimaryKey,
+    column_default: null,
+    is_primary_key: isPrimaryKey,
+    extra: null,
+    comment: null,
+  };
+}
+
+function exportSettings() {
+  return {
+    editorSettings: {
+      exportBatchSize: 128,
+      exportRowLimit: 500,
+      exportRowLimitEnabled: true,
+      generateSqlIncludeDatabaseName: false,
+      dataGridExtractorOptions: DEFAULT_DATA_GRID_EXTRACTOR_OPTIONS,
+    },
+  };
+}
+
+function structureRuntimeFixture(databaseType: "mysql" | "oceanbase-oracle" = "mysql") {
+  const scope = effectScope();
+  const firstNode = { id: "first-table", type: "table", label: "A", connectionId: "conn-1", database: "db", schema: "app" } as TreeNode;
+  const secondNode = { ...firstNode, id: "second-table", label: "B" } as TreeNode;
+  const activeNode = shallowRef(firstNode);
+  const settingsStore = reactive({ editorSettings: { excludeDdlStorage: true } });
+  const connectionStore = { ensureConnected: vi.fn(), getConfig: () => ({ db_type: databaseType }), treeNodes: [firstNode, secondNode], selectedTreeNodeIds: [] };
+  const runtime = scope.run(() => useSidebarTreeExportRuntime({ activeNode, connectionStore: connectionStore as never, settingsStore: settingsStore as never, acceptedSelectionIds: () => null }))!;
+  return { scope, activeNode, secondNode, settingsStore, runtime };
+}
+
+describe("useSidebarTreeExportRuntime", () => {
+  it("toggles OceanBase structure exports from the original DDL without querying again", async () => {
+    const scope = effectScope();
+    const ddl = 'CREATE TABLE "T" ("ID" NUMBER) REPLICA_NUM=1 PCTFREE=0 PARTITION BY HASH("ID") PARTITIONS 2';
+    apiMock.getTableDdl.mockResolvedValue(ddl);
+    const node = { id: "ob-table", type: "table", label: "T", connectionId: "ob", database: "SYS", schema: "APP" } as TreeNode;
+    const settingsStore = reactive({ editorSettings: { excludeDdlStorage: true } });
+    const connectionStore = { ensureConnected: vi.fn(), getConfig: () => ({ db_type: "oceanbase-oracle" }), treeNodes: [node], selectedTreeNodeIds: [] };
+    const runtime = scope.run(() => useSidebarTreeExportRuntime({ activeNode: shallowRef(node), connectionStore: connectionStore as never, settingsStore: settingsStore as never, acceptedSelectionIds: () => null }))!;
+    try {
+      await runtime.exportStructure();
+      expect(structurePreviewSql.value).not.toContain("REPLICA_NUM");
+      expect(structurePreviewSql.value).toContain('PARTITION BY HASH("ID") PARTITIONS 2');
+      settingsStore.editorSettings.excludeDdlStorage = false;
+      await nextTick();
+      expect(structurePreviewSql.value).toBe(ddl + ";\n");
+      settingsStore.editorSettings.excludeDdlStorage = true;
+      await nextTick();
+      expect(structurePreviewSql.value).not.toContain("PCTFREE");
+      expect(apiMock.getTableDdl).toHaveBeenCalledOnce();
+    } finally {
+      scope.stop();
+    }
+  });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMock.getTableDdl.mockReset();
+    addExportTaskMock.mockImplementation((tableName: string, format: string, filePath: string) => ({
+      exportId: "export-1",
+      tableName,
+      format,
+      filePath,
+      status: "Running",
+      rowsExported: 0,
+      totalRows: null,
+    }));
+    apiMock.startTableExport.mockResolvedValue({});
+    showStructurePreviewDialog.value = false;
+    structurePreviewSql.value = "";
+    structurePreviewTitle.value = "";
+  });
+
+  it.each(["older-first", "newer-first"])("isolates overlapping structure requests completed %s", async (order) => {
+    const { scope, activeNode, secondNode, runtime } = structureRuntimeFixture();
+    const firstDdl = deferred<string>();
+    const secondDdl = deferred<string>();
+    apiMock.getTableDdl.mockReturnValueOnce(firstDdl.promise).mockReturnValueOnce(secondDdl.promise);
+    const firstRequest = runtime.exportStructure();
+    await vi.waitFor(() => expect(apiMock.getTableDdl).toHaveBeenCalledTimes(1));
+    activeNode.value = secondNode;
+    const secondRequest = runtime.exportStructure();
+    await vi.waitFor(() => expect(apiMock.getTableDdl).toHaveBeenCalledTimes(2));
+    try {
+      if (order === "older-first") {
+        firstDdl.resolve("CREATE TABLE A(id INT)");
+        await firstRequest;
+        expect(isLoadingStructurePreview.value).toBe(true);
+        expect(structurePreviewSql.value).toBe("");
+        secondDdl.resolve("CREATE TABLE B(id INT)");
+        await secondRequest;
+      } else {
+        secondDdl.resolve("CREATE TABLE B(id INT)");
+        await secondRequest;
+        firstDdl.resolve("CREATE TABLE A(id INT)");
+        await firstRequest;
+      }
+      expect(structurePreviewSql.value).toBe("CREATE TABLE B(id INT);\n");
+      expect(structurePreviewDefaultFileName.value).toBe("B.sql");
+      expect(isLoadingStructurePreview.value).toBe(false);
+      await runtime.copyStructurePreview();
+      expect(copyToClipboardMock).toHaveBeenLastCalledWith("CREATE TABLE B(id INT);\n");
+    } finally {
+      firstDdl.resolve("CREATE TABLE A(id INT)");
+      secondDdl.resolve("CREATE TABLE B(id INT)");
+      await Promise.all([firstRequest, secondRequest]);
+      scope.stop();
+    }
+  });
+
+  it.each(["close", "dispose"])("ignores pending structure responses after %s", async (action) => {
+    const { scope, runtime } = structureRuntimeFixture();
+    const pendingDdl = deferred<string>();
+    apiMock.getTableDdl.mockReturnValueOnce(pendingDdl.promise);
+    const pendingRequest = runtime.exportStructure();
+    await vi.waitFor(() => expect(apiMock.getTableDdl).toHaveBeenCalledOnce());
+    if (action === "close") showStructurePreviewDialog.value = false;
+    else scope.stop();
+    pendingDdl.resolve("CREATE TABLE A(id INT)");
+    try {
+      await pendingRequest;
+      expect(structurePreviewSql.value).toBe("");
+      expect(isLoadingStructurePreview.value).toBe(false);
+    } finally {
+      scope.stop();
+    }
+  });
+
+  it("ignores an older failure after another structure request succeeds", async () => {
+    const { scope, activeNode, secondNode, runtime } = structureRuntimeFixture();
+    const firstDdl = deferred<string>();
+    apiMock.getTableDdl.mockReturnValueOnce(firstDdl.promise).mockResolvedValueOnce("CREATE TABLE B(id INT)");
+    const firstRequest = runtime.exportStructure();
+    await vi.waitFor(() => expect(apiMock.getTableDdl).toHaveBeenCalledOnce());
+    activeNode.value = secondNode;
+    await runtime.exportStructure();
+    firstDdl.reject(new Error("old request failed"));
+    try {
+      await firstRequest;
+      expect(structurePreviewSql.value).toBe("CREATE TABLE B(id INT);\n");
+      expect(structurePreviewError.value).toBe("");
+      expect(isLoadingStructurePreview.value).toBe(false);
+    } finally {
+      scope.stop();
+    }
+  });
+
+  it("uses the latest storage preference when a structure request completes", async () => {
+    const { scope, settingsStore, runtime } = structureRuntimeFixture("oceanbase-oracle");
+    const pendingDdl = deferred<string>();
+    const ddl = "CREATE TABLE A(id INT) PCTFREE=0";
+    apiMock.getTableDdl.mockReturnValueOnce(pendingDdl.promise);
+    const pendingRequest = runtime.exportStructure();
+    await vi.waitFor(() => expect(apiMock.getTableDdl).toHaveBeenCalledOnce());
+    settingsStore.editorSettings.excludeDdlStorage = false;
+    pendingDdl.resolve(ddl);
+    try {
+      await pendingRequest;
+      expect(structurePreviewSql.value).toBe(ddl + ";\n");
+      settingsStore.editorSettings.excludeDdlStorage = true;
+      await nextTick();
+      expect(structurePreviewSql.value).not.toContain("PCTFREE");
+      expect(apiMock.getTableDdl).toHaveBeenCalledOnce();
+    } finally {
+      scope.stop();
+    }
+  });
+
+  it("translates direct executeQuery errors for sidebar JSON export", async () => {
+    apiMock.executeQuery.mockRejectedValueOnce(new Error("The previous DuckDB query is still stopping. Please try again shortly."));
+    const activeNode = shallowRef({ id: "table-1", type: "table", label: "users", connectionId: "conn-1", database: "db", schema: "main", children: [] } as TreeNode);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "duckdb" })),
+      connectionIdentifierQuote: vi.fn(() => '"'),
+      treeNodes: [],
+      selectedTreeNodeIds: [],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportData("json");
+
+    expect(apiMock.executeQuery).toHaveBeenCalledOnce();
+    expect(toastMock).toHaveBeenCalledWith("导出失败：上一个 DuckDB 查询仍在停止中，请稍后重试。", 5000);
+  });
+
+  it("isolates and advances Cassandra JSON export cursors", async () => {
+    apiMock.buildTableSelectSql.mockResolvedValue('SELECT * FROM "events";');
+    apiMock.executeQuery.mockResolvedValueOnce({ columns: ["id"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, session_id: "cursor-1", has_more: true }).mockResolvedValueOnce({ columns: ["id"], rows: [[2]], affected_rows: 0, execution_time_ms: 1, has_more: false });
+    const activeNode = shallowRef({ id: "table-1", type: "table", label: "events", connectionId: "cassandra-1", database: "app", children: [] } as TreeNode);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "cassandra", query_timeout_secs: 30 })),
+      connectionIdentifierQuote: vi.fn(() => '"'),
+      treeNodes: [],
+      selectedTreeNodeIds: [],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportData("json");
+
+    const firstOptions = apiMock.executeQuery.mock.calls[0]?.[5];
+    const secondOptions = apiMock.executeQuery.mock.calls[1]?.[5];
+    expect(firstOptions).toMatchObject({ maxRows: 2_147_483_647, fetchSize: 10_000, pageSize: 10_000, resultSessionId: undefined, timeoutSecs: 30 });
+    expect(secondOptions).toMatchObject({ maxRows: 2_147_483_647, fetchSize: 10_000, pageSize: 10_000, resultSessionId: "cursor-1", clientSessionId: firstOptions.clientSessionId, timeoutSecs: 30 });
+    expect(firstOptions.clientSessionId).toMatch(/^table-export:/);
+    expect(apiMock.exportQueryResultJson).toHaveBeenCalledWith("events.json", ["id"], [[1], [2]]);
+    expect(apiMock.closeClientConnectionSession).toHaveBeenCalledWith("cassandra-1", "app", firstOptions.clientSessionId, undefined);
+  });
+
+  it("closes a failed Cassandra cursor before disposing its client session", async () => {
+    apiMock.buildTableSelectSql.mockResolvedValue('SELECT * FROM "events";');
+    apiMock.executeQuery.mockResolvedValueOnce({ columns: ["id"], rows: [[1]], affected_rows: 0, execution_time_ms: 1, session_id: "cursor-1", has_more: true }).mockRejectedValueOnce(new Error("cursor lost"));
+    const closing = deferred<void>();
+    apiMock.closeQuerySession.mockReturnValueOnce(closing.promise);
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode: shallowRef({ id: "table-1", type: "table", label: "events", connectionId: "cassandra-1", database: "app", children: [] } as TreeNode),
+      connectionStore: { ensureConnected: vi.fn(), getConfig: () => ({ db_type: "cassandra" }), connectionIdentifierQuote: () => '"', treeNodes: [], selectedTreeNodeIds: [] } as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+    const exported = runtime.exportData("json");
+    await vi.waitFor(() => expect(apiMock.closeQuerySession).toHaveBeenCalled());
+    expect(apiMock.closeClientConnectionSession).not.toHaveBeenCalled();
+    closing.reject(new Error("close failed"));
+    await exported;
+    expect(apiMock.closeClientConnectionSession).toHaveBeenCalledTimes(1);
+    expect(apiMock.exportQueryResultJson).not.toHaveBeenCalled();
+    expect(toastMock).toHaveBeenCalledWith("导出失败：cursor lost", 5000);
+  });
+
+  it("preserves SQL Server legacy JSON export without enabling a new cursor path", async () => {
+    apiMock.executeQuery.mockResolvedValueOnce({ columns: ["id"], rows: [[1]], affected_rows: 0, execution_time_ms: 1 });
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode: shallowRef({ id: "table-1", type: "table", label: "events", connectionId: "sqlserver-1", database: "app", children: [] } as TreeNode),
+      connectionStore: { ensureConnected: vi.fn(), getConfig: () => ({ db_type: "sqlserver", driver_profile: "sqlserver-legacy" }), connectionIdentifierQuote: () => '"', treeNodes: [], selectedTreeNodeIds: [] } as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+    await runtime.exportData("json");
+    expect(apiMock.executeQuery.mock.calls[0]).toHaveLength(3);
+    expect(apiMock.closeClientConnectionSession).not.toHaveBeenCalled();
+    expect(apiMock.exportQueryResultJson).toHaveBeenCalledWith("events.json", ["id"], [[1]]);
+  });
+
+  it("exports a mongo collection through the save-file path without a setup dialog", async () => {
+    apiMock.exportMongodbQuery.mockImplementation(async (_request, onProgress) => {
+      onProgress({ exportId: "export-1", status: "done", documentsRead: 3, bytesWritten: 12, elapsedMs: 4 });
+      return { exportId: "export-1", documentsExported: 3, filePath: "orders.ndjson", elapsedMs: 4 };
+    });
+    const activeNode = shallowRef({ id: "col-1", type: "mongo-collection", label: "orders", connectionId: "conn-1", database: "shop", children: [] } as TreeNode);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "mongodb" })),
+      treeNodes: [],
+      selectedTreeNodeIds: [],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportMongoCollection("ndjson");
+
+    expect(connectionStore.ensureConnected).toHaveBeenCalledWith("conn-1");
+    expect(apiMock.exportMongodbQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "conn-1",
+        database: "shop",
+        collection: "orders",
+        format: "ndjson",
+        filePath: "orders.ndjson",
+      }),
+      expect.any(Function),
+    );
+    expect(toastMock).toHaveBeenCalledWith("grid.exported");
+  });
+
+  it.each(["bson", "bsonGzip"] as const)("exports an official-compatible %s collection dump", async (mode) => {
+    apiMock.exportMongodbQuery.mockImplementation(async (_request, onProgress) => {
+      onProgress({ exportId: "export-1", status: "done", documentsRead: 2, bytesWritten: 64, elapsedMs: 4 });
+      return { exportId: "export-1", documentsExported: 2, filePath: "orders.bson.gz", elapsedMs: 4 };
+    });
+    const activeNode = shallowRef({ id: "col-1", type: "mongo-collection", label: "orders", connectionId: "conn-1", database: "shop", children: [] } as TreeNode);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "mongodb" })),
+      treeNodes: [],
+      selectedTreeNodeIds: [],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportMongoCollection(mode);
+
+    expect(apiMock.exportMongodbQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        database: "shop",
+        collection: "orders",
+        format: "bson",
+        gzip: mode === "bsonGzip",
+        filePath: mode === "bsonGzip" ? "orders.bson.gz" : "orders.bson",
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it("loads and joins every selected DDL in tree order", async () => {
+    apiMock.getTableDdl.mockResolvedValueOnce("CREATE TABLE one (id INT)").mockResolvedValueOnce("CREATE VIEW two AS SELECT 1;");
+    const first = { id: "table-1", type: "table", label: "one", connectionId: "conn-1", database: "db", schema: "main" } as TreeNode;
+    const second = { id: "view-1", type: "view", label: "two", connectionId: "conn-1", database: "db", schema: "main" } as TreeNode;
+    const group = { id: "tables", type: "group-tables", label: "Tables", children: [first, second] } as TreeNode;
+    const activeNode = shallowRef(first);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "postgres" })),
+      treeNodes: [group],
+      selectedTreeNodeIds: [second.id, first.id],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportStructure();
+
+    expect(connectionStore.ensureConnected).toHaveBeenNthCalledWith(1, first.connectionId);
+    expect(connectionStore.ensureConnected).toHaveBeenNthCalledWith(2, second.connectionId);
+    expect(apiMock.getTableDdl).toHaveBeenNthCalledWith(1, first.connectionId, first.database, first.schema, first.label, undefined, undefined, true);
+    expect(apiMock.getTableDdl).toHaveBeenNthCalledWith(2, second.connectionId, second.database, second.schema, second.label, "VIEW", undefined, true);
+    expect(structurePreviewSql.value).toBe("CREATE TABLE one (id INT);\n\nCREATE VIEW two AS SELECT 1;\n");
+    expect(structurePreviewTitle.value).toBe("contextMenu.exportStructurePreviewTitleMultiple");
+    expect(showStructurePreviewDialog.value).toBe(true);
+  });
+
+  it("keeps the original table and export options when selection changes during XLSX preparation", async () => {
+    const metadata = deferred<ColumnInfo[]>();
+    apiMock.getColumns.mockReturnValueOnce(metadata.promise);
+    const originalNode = { id: "table-1", type: "table", label: "users", connectionId: "conn-1", database: "db-a", schema: "public", catalog: "catalog-a", children: [] } as TreeNode;
+    const activeNode = shallowRef(originalNode);
+    const settingsStore = exportSettings();
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "postgres" })),
+      connectionIdentifierQuote: vi.fn((connectionId: string) => (connectionId === "conn-1" ? '"' : "`")),
+      treeNodes: [],
+      selectedTreeNodeIds: [],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: settingsStore as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    const exportPromise = runtime.exportDataXlsx();
+    await vi.waitFor(() => expect(apiMock.getColumns).toHaveBeenCalledWith("conn-1", "db-a", "public", "users", "catalog-a"));
+    activeNode.value = { id: "table-2", type: "table", label: "orders", connectionId: "conn-2", database: "db-b", schema: "sales", children: [] } as TreeNode;
+    settingsStore.editorSettings.exportBatchSize = 16;
+    settingsStore.editorSettings.exportRowLimit = 10;
+    metadata.resolve([column("name")]);
+
+    await exportPromise;
+
+    expect(apiMock.startTableExport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connectionId: "conn-1",
+        database: "db-a",
+        schema: "public",
+        identifierQuote: '"',
+        tableName: "users",
+        filePath: "users.xlsx",
+        columns: ["name"],
+        batchSize: 128,
+        rowLimit: 500,
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it("keeps explicit column order and primary keys for keyset XLSX export", async () => {
+    apiMock.getColumns.mockResolvedValueOnce([column("display_name"), column("id", true), column("created_at")]);
+    const activeNode = shallowRef({ id: "table-1", type: "table", label: "users", connectionId: "conn-1", database: "db", schema: "public", children: [] } as TreeNode);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "postgres" })),
+      connectionIdentifierQuote: vi.fn(() => '"'),
+      treeNodes: [],
+      selectedTreeNodeIds: [],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportDataXlsx();
+
+    expect(apiMock.startTableExport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        columns: ["display_name", "id", "created_at"],
+        primaryKeys: ["id"],
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it("exports every selected table when multiple tables are selected", async () => {
+    const first = { id: "table-1", type: "table", label: "users", connectionId: "conn-1", database: "db", schema: "public", children: [] } as TreeNode;
+    const second = { id: "table-2", type: "table", label: "orders", connectionId: "conn-1", database: "db", schema: "public", children: [] } as TreeNode;
+    const group = { id: "tables", type: "group-tables", label: "Tables", children: [first, second] } as TreeNode;
+    const activeNode = shallowRef(first);
+    const settingsStore = exportSettings();
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "postgres" })),
+      connectionIdentifierQuote: vi.fn(() => '"'),
+      treeNodes: [group],
+      selectedTreeNodeIds: [second.id, first.id],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: settingsStore as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportData("csv");
+
+    expect(apiMock.startTableExport).toHaveBeenCalledTimes(2);
+    expect(apiMock.startTableExport).toHaveBeenNthCalledWith(1, expect.objectContaining({ tableName: "users", filePath: "users.csv" }), expect.any(Function));
+    expect(apiMock.startTableExport).toHaveBeenNthCalledWith(2, expect.objectContaining({ tableName: "orders", filePath: "orders.csv" }), expect.any(Function));
+  });
+
+  it("exports same-name tables from different schemas to distinct files", async () => {
+    const publicUsers = { id: "table-1", type: "table", label: "users", connectionId: "conn-1", database: "db", schema: "public", children: [] } as TreeNode;
+    const salesUsers = { id: "table-2", type: "table", label: "users", connectionId: "conn-1", database: "db", schema: "sales", children: [] } as TreeNode;
+    const group = { id: "tables", type: "group-tables", label: "Tables", children: [publicUsers, salesUsers] } as TreeNode;
+    const activeNode = shallowRef(publicUsers);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "postgres" })),
+      connectionIdentifierQuote: vi.fn(() => '"'),
+      treeNodes: [group],
+      selectedTreeNodeIds: [salesUsers.id, publicUsers.id],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportData("csv");
+
+    expect(apiMock.startTableExport).toHaveBeenCalledTimes(2);
+    expect(apiMock.startTableExport).toHaveBeenNthCalledWith(1, expect.objectContaining({ tableName: "users", filePath: "public.users.csv" }), expect.any(Function));
+    expect(apiMock.startTableExport).toHaveBeenNthCalledWith(2, expect.objectContaining({ tableName: "users", filePath: "sales.users.csv" }), expect.any(Function));
+  });
+
+  it("keeps unique table names unqualified when schemas differ without collisions", async () => {
+    const publicUsers = { id: "table-1", type: "table", label: "users", connectionId: "conn-1", database: "db", schema: "public", children: [] } as TreeNode;
+    const salesOrders = { id: "table-2", type: "table", label: "orders", connectionId: "conn-1", database: "db", schema: "sales", children: [] } as TreeNode;
+    const group = { id: "tables", type: "group-tables", label: "Tables", children: [publicUsers, salesOrders] } as TreeNode;
+    const activeNode = shallowRef(publicUsers);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "postgres" })),
+      connectionIdentifierQuote: vi.fn(() => '"'),
+      treeNodes: [group],
+      selectedTreeNodeIds: [salesOrders.id, publicUsers.id],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportData("csv");
+
+    expect(apiMock.startTableExport).toHaveBeenCalledTimes(2);
+    expect(apiMock.startTableExport).toHaveBeenNthCalledWith(1, expect.objectContaining({ filePath: "users.csv" }), expect.any(Function));
+    expect(apiMock.startTableExport).toHaveBeenNthCalledWith(2, expect.objectContaining({ filePath: "orders.csv" }), expect.any(Function));
+  });
+
+  it("exports only tables in the active execution context when the selection spans connections", async () => {
+    const localUsers = { id: "table-1", type: "table", label: "users", connectionId: "conn-1", database: "db", schema: "public", children: [] } as TreeNode;
+    const foreignOrders = { id: "table-2", type: "table", label: "orders", connectionId: "conn-2", database: "db", schema: "public", children: [] } as TreeNode;
+    const foreignDatabase = { id: "db-b", type: "database", label: "db", connectionId: "conn-2", children: [foreignOrders] } as TreeNode;
+    const localGroup = { id: "tables", type: "group-tables", label: "Tables", children: [localUsers] } as TreeNode;
+    const localDatabase = { id: "db-a", type: "database", label: "db", connectionId: "conn-1", children: [localGroup] } as TreeNode;
+    const activeNode = shallowRef(localUsers);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "postgres" })),
+      connectionIdentifierQuote: vi.fn(() => '"'),
+      treeNodes: [localDatabase, foreignDatabase],
+      selectedTreeNodeIds: [foreignOrders.id, localUsers.id],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportData("csv");
+
+    expect(apiMock.startTableExport).toHaveBeenCalledTimes(1);
+    expect(apiMock.startTableExport).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "conn-1", tableName: "users", filePath: "users.csv" }), expect.any(Function));
+  });
+
+  it("keeps single-table export behavior when only one table is selected", async () => {
+    const activeNode = shallowRef({ id: "table-1", type: "table", label: "users", connectionId: "conn-1", database: "db", schema: "public", children: [] } as TreeNode);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "postgres" })),
+      connectionIdentifierQuote: vi.fn(() => '"'),
+      treeNodes: [],
+      selectedTreeNodeIds: [],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportData("csv");
+
+    expect(apiMock.startTableExport).toHaveBeenCalledOnce();
+    expect(apiMock.startTableExport).toHaveBeenCalledWith(expect.objectContaining({ tableName: "users", filePath: "users.csv" }), expect.any(Function));
+  });
+
+  it("follows the include-database-name setting for SQL INSERT exports", async () => {
+    const activeNode = shallowRef({ id: "table-1", type: "table", label: "events", connectionId: "conn-1", database: "warehouse", schema: "warehouse", children: [] } as TreeNode);
+    const settingsStore = exportSettings();
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "mysql" })),
+      connectionIdentifierQuote: vi.fn(() => "`"),
+      treeNodes: [],
+      selectedTreeNodeIds: [],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: settingsStore as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    // 设置关闭（默认）：INSERT 目标省略库名，恢复脚本不受目标库影响 (#10771)。
+    await runtime.exportData("sql");
+    expect(apiMock.startTableExport).toHaveBeenLastCalledWith(expect.objectContaining({ format: "sql", omitDatabaseQualifier: true }), expect.any(Function));
+
+    // 设置开启：保留限定名。
+    settingsStore.editorSettings.generateSqlIncludeDatabaseName = true;
+    await runtime.exportData("sql");
+    expect(apiMock.startTableExport).toHaveBeenLastCalledWith(expect.objectContaining({ format: "sql", omitDatabaseQualifier: false }), expect.any(Function));
+  });
+
+  it.each([
+    ["source", undefined],
+    ["standard", "standard"],
+  ] as const)("serializes the %s SQL INSERT dialect for a table export", async (expectedDialect, requestedDialect) => {
+    const activeNode = shallowRef({ id: "table-1", type: "table", label: "users", connectionId: "conn-1", database: "db", schema: "dbo", children: [] } as TreeNode);
+    const connectionStore = {
+      ensureConnected: vi.fn(),
+      getConfig: vi.fn(() => ({ db_type: "sqlserver" })),
+      connectionIdentifierQuote: vi.fn(() => "["),
+      treeNodes: [],
+      selectedTreeNodeIds: [],
+    };
+    const runtime = useSidebarTreeExportRuntime({
+      activeNode,
+      connectionStore: connectionStore as never,
+      settingsStore: exportSettings() as never,
+      acceptedSelectionIds: () => null,
+    });
+
+    await runtime.exportData("sql", requestedDialect);
+
+    expect(apiMock.startTableExport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        format: "sql",
+        insertDialect: expectedDialect,
+        identifierQuote: "[",
+      }),
+      expect.any(Function),
+    );
+  });
+});

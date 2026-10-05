@@ -1,0 +1,192 @@
+import type { DatabaseType } from "@/types/database";
+import * as api from "@/lib/backend/api";
+import { formatError } from "@/lib/backend/errorUtils";
+
+export type GridCellValue = string | number | boolean | null | unknown[] | { [key: string]: unknown };
+
+export interface DataGridTableMeta {
+  catalog?: string;
+  database?: string;
+  schema?: string;
+  tableName: string;
+  primaryKeys: string[];
+  columns?: DataGridColumnInfo[];
+}
+
+export interface DataGridColumnInfo {
+  name: string;
+  data_type: string;
+  is_nullable: boolean;
+  is_primary_key?: boolean;
+  column_default?: string | null;
+  extra?: string | null;
+  comment?: string | null;
+}
+
+export interface DataGridSaveStatementOptions {
+  databaseType?: DatabaseType;
+  /** Server version reported by the connection (see `BuildTableSelectSqlOptions.serverVersion`).
+   * The saved statements must address rows the same way the grid read them. */
+  serverVersion?: string;
+  identifierQuote?: string;
+  tableMeta: DataGridTableMeta;
+  columns: string[];
+  sourceColumns?: Array<string | undefined>;
+  rows: GridCellValue[][];
+  dirtyRows: Array<[number, Array<[number, GridCellValue]>]>;
+  deletedRows: number[];
+  newRows: GridCellValue[][];
+  /** `生成 SQL 时包含数据库名`: qualify `database.table` engines in the save SQL. */
+  includeDatabaseName?: boolean;
+}
+
+export interface DataGridCopyUpdateStatementOptions {
+  databaseType?: DatabaseType;
+  identifierQuote?: string;
+  tableMeta: DataGridTableMeta;
+  columns: string[];
+  sourceColumns?: Array<string | undefined>;
+  rows: GridCellValue[][];
+}
+
+export type DataGridCopyInsertMode = "merged" | "row-by-row";
+
+export interface DataGridCopyInsertStatementOptions {
+  databaseType?: DatabaseType;
+  identifierQuote?: string;
+  tableMeta?: DataGridTableMeta;
+  columns: string[];
+  columnTypes?: Array<string | null | undefined>;
+  sourceColumns?: Array<string | undefined>;
+  rows: GridCellValue[][];
+  excludePrimaryKeys?: boolean;
+  includeComputedColumns?: boolean;
+  includeDatabaseName?: boolean;
+  insertMode?: DataGridCopyInsertMode;
+}
+
+export type DataGridContextFilterMode = "equals" | "not-equals" | "is-null" | "is-not-null" | "is-blank" | "is-not-blank" | "like" | "not-like" | "begins-with" | "ends-with" | "less-than" | "less-than-or-equal" | "greater-than" | "greater-than-or-equal" | "in" | "not-in" | "between" | "not-between";
+
+export interface DataGridContextFilterConditionOptions {
+  databaseType?: DatabaseType;
+  identifierQuote?: string;
+  columnName: string;
+  mode: DataGridContextFilterMode;
+  value: GridCellValue;
+  values?: GridCellValue[];
+  endValue?: GridCellValue;
+  columnInfo?: DataGridColumnInfo;
+}
+
+export interface DataGridColumnValueFilterConditionOptions {
+  databaseType?: DatabaseType;
+  identifierQuote?: string;
+  columnName: string;
+  columnInfo?: DataGridColumnInfo;
+  rawValue: string;
+}
+
+export interface DataGridColumnValuesFilterConditionOptions {
+  databaseType?: DatabaseType;
+  identifierQuote?: string;
+  columnName: string;
+  columnInfo?: DataGridColumnInfo;
+  values: GridCellValue[];
+}
+
+export interface DataGridColumnDistinctValuesSqlOptions {
+  databaseType?: DatabaseType;
+  driverProfile?: string;
+  identifierQuote?: string;
+  catalog?: string;
+  database?: string;
+  schema?: string;
+  tableName: string;
+  columnName: string;
+  columnInfo?: DataGridColumnInfo;
+  whereInput?: string;
+  searchValue?: string;
+  limit?: number;
+  includeCounts?: boolean;
+  excludeNulls?: boolean;
+}
+
+export interface DataGridCountSqlOptions {
+  databaseType?: DatabaseType;
+  identifierQuote?: string;
+  catalog?: string;
+  database?: string;
+  schema?: string;
+  tableName: string;
+  whereInput?: string;
+  /** Optional optimizer hint injected between SELECT and the select list.
+   *  Example: "/*+ set(query_dop 32) *​/" for GaussDB parallel COUNT(*). */
+  countHint?: string;
+}
+
+export interface DataGridConditionalUpdateSqlOptions {
+  databaseType?: DatabaseType;
+  identifierQuote?: string;
+  tableMeta: DataGridTableMeta;
+  columnName: string;
+  value: GridCellValue;
+  whereInput: string;
+}
+
+export interface HiveTablePropertiesSqlOptions {
+  databaseType?: DatabaseType;
+  schema?: string;
+  tableName: string;
+  propertyName: string;
+}
+
+export function buildDataGridCopyUpdateStatements(options: DataGridCopyUpdateStatementOptions): Promise<string[]> {
+  return api.buildDataGridCopyUpdateStatements(options);
+}
+
+export function buildDataGridCopyInsertStatement(options: DataGridCopyInsertStatementOptions): Promise<string | undefined> {
+  return api.buildDataGridCopyInsertStatement(options);
+}
+
+export function buildDataGridContextFilterCondition(options: DataGridContextFilterConditionOptions): Promise<string | undefined> {
+  return api.buildDataGridContextFilterCondition(options);
+}
+
+export function buildDataGridColumnValueFilterCondition(options: DataGridColumnValueFilterConditionOptions): Promise<string | undefined> {
+  return api.buildDataGridColumnValueFilterCondition(options);
+}
+
+export function buildDataGridColumnValuesFilterCondition(options: DataGridColumnValuesFilterConditionOptions): Promise<string | undefined> {
+  return api.buildDataGridColumnValuesFilterCondition(options);
+}
+
+export function buildDataGridColumnDistinctValuesSql(options: DataGridColumnDistinctValuesSqlOptions): Promise<string> {
+  return api.buildDataGridColumnDistinctValuesSql(options);
+}
+
+export function buildDataGridCountSql(options: DataGridCountSqlOptions): Promise<string> {
+  return api.buildDataGridCountSql(options);
+}
+
+export function buildDataGridConditionalUpdateSql(options: DataGridConditionalUpdateSqlOptions): Promise<string | undefined> {
+  return api.buildDataGridConditionalUpdateSql(options);
+}
+
+export function buildHiveTablePropertiesSql(options: HiveTablePropertiesSqlOptions): Promise<string> {
+  return api.buildHiveTablePropertiesSql(options);
+}
+
+function formatDataGridSaveError(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return formatError(error);
+}
+
+export function normalizeDataGridSaveError(databaseType: DatabaseType | undefined, error: unknown): string {
+  const message = formatDataGridSaveError(error);
+  if ((databaseType === "hive" || databaseType === "argo") && /Attempt to do update or delete|Error 10294/i.test(message)) {
+    return "Hive UPDATE/DELETE are not enabled for this table or server. Add rows with INSERT, or enable ACID transactional tables in Hive before editing/deleting existing rows.";
+  }
+  return message;
+}

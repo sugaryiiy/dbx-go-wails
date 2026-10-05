@@ -1,0 +1,1501 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUSTFLAGS: -C debuginfo=line-tables-only
+
+jobs:
+  frontend-checks:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      # The workspace intentionally contains platform-specific CLI/MCP packages for every release target.
+      NPM_CONFIG_LOGLEVEL: error
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.27.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm --filter dbx... install --frozen-lockfile
+
+      - name: Check generated connection types
+        run: pnpm check:connection-types
+
+      - name: Check frontend formatting
+        run: pnpm exec oxfmt --check "apps/desktop/src/**/*.{ts,vue}"
+
+      - name: Lint frontend
+        run: pnpm lint
+
+      # Rebuild and diff the committed docs-export bundle after the frontend
+      # checks so source changes cannot silently leave stale generated assets.
+      - name: Rebuild the docs export bundle
+        run: pnpm build:docs-export
+
+      # continue-on-error for one cycle: every reproducibility observation
+      # so far was same-platform, and this job is ubuntu-24.04 x86_64 like
+      # every contributor's toolchain is lockfile-pinned to expect. If a
+      # byte ever differs cross-platform, surface it in the job summary
+      # rather than reddening every PR at once on a repo we contribute to,
+      # not maintain.
+      - name: Report any docs export bundle drift
+        run: git diff --exit-code -- crates/dbx-core/assets/
+        continue-on-error: true
+
+  frontend-typecheck:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      NPM_CONFIG_LOGLEVEL: error
+      # Cold vue-tsc runs exceed 4 GiB; public Linux runners provide 16 GiB RAM.
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.27.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm --filter dbx... install --frozen-lockfile
+
+      - name: Type-check frontend
+        run: pnpm exec vue-tsc --noEmit --project apps/desktop/tsconfig.json
+
+  frontend-test:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      NPM_CONFIG_LOGLEVEL: error
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    name: frontend-test (${{ matrix.shard }}/2)
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.27.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm --filter dbx... install --frozen-lockfile
+
+      - name: Run frontend test shard
+        env:
+          VITEST_SHARD: ${{ matrix.shard }}/2
+        run: >-
+          pnpm exec vitest run
+          --shard=${{ matrix.shard }}/2
+          --reporter=default
+          --reporter=github-actions
+          --reporter=./.github/scripts/ci-vitest-file-timing-reporter.mjs
+
+  frontend:
+    needs:
+      - changes
+      - frontend-checks
+      - frontend-typecheck
+      - frontend-test
+    if: always() && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check selected frontend jobs
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node .github/scripts/ci-gate.mjs frontend
+
+  github-scripts:
+    needs: changes
+    if: needs.changes.outputs.github_scripts == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+
+      - name: GitHub script tests
+        run: node --test .github/scripts/*.test.mjs
+
+      - name: PowerShell MCP installer tests
+        shell: pwsh
+        run: ./.github/scripts/install-mcp-powershell.test.ps1
+
+  packages:
+    needs: changes
+    if: needs.changes.outputs.packages == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      # Unsupported-platform package warnings are expected while validating cross-platform package metadata.
+      NPM_CONFIG_LOGLEVEL: error
+      # sccache cannot reuse Cargo incremental artifacts, so avoid generating them in CI.
+      CARGO_INCREMENTAL: "0"
+      # Fork PRs cannot read repository secrets, so they build without sccache
+      # (see rust-fmt-clippy) and lean on the rust-cache restore from main.
+      RUSTC_WRAPPER: ${{ secrets.SCCACHE_S3_BUCKET != '' && 'sccache' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.27.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libsecret-1-dev
+
+      # Pin mold because runner image updates can change bundled DuckDB C++ links.
+      # The pinned build prevents duckdb_create_config runtime failures.
+      - name: Install mold linker
+        run: |
+          curl -fsSL https://github.com/rui314/mold/releases/download/v2.42.1/mold-2.42.1-x86_64-linux.tar.gz \
+            | sudo tar -C /usr/local --strip-components=1 -xz
+          mold --version
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install plugin development host dependencies
+        run: npm ci --prefix plugins/sdk/dev-host
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Install nextest
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.68.13
+        with:
+          tool: cargo-nextest@0.9.137
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Configure S3 sccache
+        if: env.RUSTC_WRAPPER == 'sccache'
+        shell: bash
+        env:
+          CACHE_BUCKET: ${{ secrets.SCCACHE_S3_BUCKET }}
+          CACHE_ENDPOINT: ${{ secrets.SCCACHE_S3_ENDPOINT }}
+          CACHE_REGION: ${{ secrets.SCCACHE_S3_REGION }}
+          CACHE_KEY_PREFIX: ${{ secrets.SCCACHE_S3_KEY_PREFIX }}
+          CACHE_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY_ID }}
+          CACHE_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_ACCESS_KEY }}
+        run: |
+          {
+            echo "SCCACHE_BUCKET=${CACHE_BUCKET}"
+            echo "SCCACHE_ENDPOINT=${CACHE_ENDPOINT}"
+            echo "SCCACHE_REGION=${CACHE_REGION}"
+            echo "SCCACHE_S3_KEY_PREFIX=${CACHE_KEY_PREFIX}"
+            echo "SCCACHE_S3_USE_SSL=true"
+            echo "AWS_ACCESS_KEY_ID=${CACHE_ACCESS_KEY_ID}"
+            echo "AWS_SECRET_ACCESS_KEY=${CACHE_SECRET_ACCESS_KEY}"
+            # Keep the server alive through post-compile test/lint phases so
+            # "Show sccache stats" reflects the real counters.
+            echo "SCCACHE_IDLE_TIMEOUT=0"
+            # Also cache the C/C++ compilation of -sys crates. These jobs are
+            # native Linux builds, so plain CC/CXX select the target compiler.
+            echo "CC=${SCCACHE_PATH} cc"
+            echo "CXX=${SCCACHE_PATH} c++"
+          } >> "$GITHUB_ENV"
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+          shared-key: ci-packages-x86_64-unknown-linux-gnu
+          # Release-linking (LTO) dominates this job and sccache cannot cache
+          # those crate types.
+          cache-workspace-crates: true
+          # Preserve completed dependency builds when a later test step fails.
+          cache-on-failure: true
+          # PR caches are large and branch-scoped; restore them from main without saving per-PR copies.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # mold -run injects itself as `ld` through PATH for the whole process
+      # tree. It must stay a wrapper: putting the linker into RUSTFLAGS or
+      # .cargo config would change every sccache key and orphan the shared cache.
+      - name: Node package tests
+        run: mold -run pnpm test:packages
+
+      - name: Node package publish dry run
+        run: mold -run pnpm publish:dry-run
+
+      - name: Show sccache stats
+        if: always()
+        continue-on-error: true
+        run: ${SCCACHE_PATH} --show-stats
+
+  windows-standard-check:
+    needs: changes
+    if: needs.changes.outputs.windows_win7_bundle == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: -C debuginfo=line-tables-only -C target-feature=+crt-static
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: windows-standard-v1
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust for standard Windows
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Check standard Windows dependency path
+        run: cargo check --locked --package dbx --no-default-features --target x86_64-pc-windows-msvc
+
+      - name: Show sccache stats
+        if: always()
+        continue-on-error: true
+        run: sccache --show-stats
+
+  windows-win7-bundle:
+    needs: changes
+    if: needs.changes.outputs.windows_win7_bundle == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 120
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_LTO: "off"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "8"
+      RUSTFLAGS: -C debuginfo=line-tables-only -C target-feature=+crt-static
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: win7-webview2-1.0.902.49-v1
+      SCCACHE_IDLE_TIMEOUT: "0"
+      # Single source for the job's nightly pin: the toolchain step and the
+      # prebuilt AWS-LC cache key must move together.
+      WIN7_NIGHTLY_TOOLCHAIN: nightly-2026-07-22
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.27.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Rust for Windows 7
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: ${{ env.WIN7_NIGHTLY_TOOLCHAIN }}
+          components: rust-src
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Restore prebuilt Win7 AWS-LC
+        id: aws-lc-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/win7-aws-lc-install
+          # The fixture manifest and lockfile define the prebuilt AWS-LC artifact.
+          key: win7-aws-lc-v3-${{ runner.os }}-${{ env.WIN7_NIGHTLY_TOOLCHAIN }}-${{ hashFiles('.github/fixtures/win7-aws-lc-cache/Cargo.toml', '.github/fixtures/win7-aws-lc-cache/Cargo.lock') }}
+
+      - name: Build Win7 AWS-LC cache
+        if: steps.aws-lc-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $timer = [System.Diagnostics.Stopwatch]::StartNew()
+          $targetRoot = Join-Path $env:RUNNER_TEMP "win7-aws-lc-build"
+          $installRoot = Join-Path $env:RUNNER_TEMP "win7-aws-lc-install"
+          cargo build --locked --release `
+            --manifest-path .github/fixtures/win7-aws-lc-cache/Cargo.toml `
+            --target x86_64-win7-windows-msvc `
+            -Z build-std=std,panic_abort
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $include = Get-ChildItem $targetRoot -Directory -Recurse -Filter include |
+            Where-Object { Test-Path (Join-Path $_.FullName "openssl/base.h") } |
+            Select-Object -First 1
+          $library = Get-ChildItem $targetRoot -File -Recurse -Filter "*crypto.lib" |
+            Where-Object { $_.Name -like "*aws_lc_0_43_0_crypto.lib" } |
+            Select-Object -First 1
+          if (!$include -or !$library) {
+            Write-Error "AWS-LC did not create the required headers and static library."
+            exit 1
+          }
+
+          $metadata = cargo metadata --locked --format-version 1 `
+            --manifest-path .github/fixtures/win7-aws-lc-cache/Cargo.toml |
+            ConvertFrom-Json
+          $awsLcPackage = $metadata.packages |
+            Where-Object { $_.name -eq "aws-lc-sys" } |
+            Select-Object -First 1
+          $crateRoot = Split-Path $awsLcPackage.manifest_path -Parent
+          $bindings = Join-Path $crateRoot "src/x86_64_pc_windows_msvc_crypto.rs"
+          if (!(Test-Path $bindings)) {
+            Write-Error "AWS-LC did not provide the Windows MSVC bindings."
+            exit 1
+          }
+
+          New-Item -ItemType Directory -Path (Join-Path $installRoot "include") -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $installRoot "lib") -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $installRoot "share/rust") -Force | Out-Null
+          Copy-Item -Path (Join-Path $include.FullName "*") `
+            -Destination (Join-Path $installRoot "include") -Recurse -Force
+          Copy-Item -LiteralPath $library.FullName `
+            -Destination (Join-Path $installRoot "lib/crypto.lib") -Force
+          $bindingOutput = Join-Path $installRoot "share/rust/aws_lc_bindings.rs"
+          $insideInnerAttribute = $false
+          $bindingLines = foreach ($line in Get-Content -LiteralPath $bindings) {
+            if (!$insideInnerAttribute -and $line -eq "#![allow(") {
+              $insideInnerAttribute = $true
+              continue
+            }
+            if ($insideInnerAttribute) {
+              if ($line -eq ")]") {
+                $insideInnerAttribute = $false
+              }
+              continue
+            }
+            $line
+          }
+          $bindingLines | Set-Content -LiteralPath $bindingOutput -Encoding utf8NoBOM
+          $timer.Stop()
+          "AWS-LC cache build: $([math]::Round($timer.Elapsed.TotalSeconds, 1)) seconds" >> $env:GITHUB_STEP_SUMMARY
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/win7-aws-lc-build
+
+      - name: Configure prebuilt Win7 AWS-LC
+        shell: pwsh
+        run: |
+          $installRoot = Join-Path $env:RUNNER_TEMP "win7-aws-lc-install"
+          $requiredFiles = @(
+            "include/openssl/base.h",
+            "include/openssl/boringssl_prefix_symbols.h",
+            "lib/crypto.lib",
+            "share/rust/aws_lc_bindings.rs"
+          )
+          foreach ($relativePath in $requiredFiles) {
+            if (!(Test-Path (Join-Path $installRoot $relativePath))) {
+              Write-Error "The AWS-LC cache does not contain $relativePath."
+              exit 1
+            }
+          }
+          "AWS_LC_SYS_SYSTEM_DIR=$installRoot" >> $env:GITHUB_ENV
+          "AWS_LC_SYS_USE_SYSTEM=1" >> $env:GITHUB_ENV
+          "AWS_LC_SYS_STATIC=1" >> $env:GITHUB_ENV
+          "AWS-LC cache hit: ${{ steps.aws-lc-cache.outputs.cache-hit }}" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Restore prebuilt Win7 OpenSSL
+        id: openssl-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/win7-openssl-install
+          key: win7-openssl-v1-${{ runner.os }}-${{ env.WIN7_NIGHTLY_TOOLCHAIN }}-${{ hashFiles('.github/fixtures/win7-openssl-cache/Cargo.toml', '.github/fixtures/win7-openssl-cache/Cargo.lock') }}
+
+      - name: Build Win7 OpenSSL cache
+        if: steps.openssl-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $timer = [System.Diagnostics.Stopwatch]::StartNew()
+          $targetRoot = Join-Path $env:RUNNER_TEMP "win7-openssl-build"
+          $installRoot = Join-Path $env:RUNNER_TEMP "win7-openssl-install"
+          cargo build --locked --release `
+            --manifest-path .github/fixtures/win7-openssl-cache/Cargo.toml `
+            --target x86_64-win7-windows-msvc `
+            -Z build-std=std,panic_abort
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $install = Get-ChildItem $targetRoot -Directory -Recurse -Filter install |
+            Where-Object { $_.FullName -like "*openssl-build*" } |
+            Select-Object -First 1
+          if (!$install) {
+            Write-Error "OpenSSL did not create an install directory."
+            exit 1
+          }
+          New-Item -ItemType Directory -Path $installRoot -Force | Out-Null
+          Copy-Item -Path (Join-Path $install.FullName "*") -Destination $installRoot -Recurse -Force
+          $timer.Stop()
+          "OpenSSL cache build: $([math]::Round($timer.Elapsed.TotalSeconds, 1)) seconds" >> $env:GITHUB_STEP_SUMMARY
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/win7-openssl-build
+
+      - name: Configure prebuilt Win7 OpenSSL
+        shell: pwsh
+        run: |
+          $installRoot = Join-Path $env:RUNNER_TEMP "win7-openssl-install"
+          if (!(Test-Path (Join-Path $installRoot "include/openssl/ssl.h"))) {
+            Write-Error "The OpenSSL cache does not contain ssl.h."
+            exit 1
+          }
+          if (!(Get-ChildItem (Join-Path $installRoot "lib") -Filter "*ssl*.lib")) {
+            Write-Error "The OpenSSL cache does not contain an SSL library."
+            exit 1
+          }
+          if (!(Get-ChildItem (Join-Path $installRoot "lib") -Filter "*crypto*.lib")) {
+            Write-Error "The OpenSSL cache does not contain a crypto library."
+            exit 1
+          }
+          "OPENSSL_DIR=$installRoot" >> $env:GITHUB_ENV
+          "OPENSSL_NO_VENDOR=1" >> $env:GITHUB_ENV
+          "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
+          "OpenSSL cache hit: ${{ steps.openssl-cache.outputs.cache-hit }}" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Prepare Win7-compatible WebView2 loader
+        shell: pwsh
+        run: ./.github/scripts/prepare-webview2-win7-loader.ps1
+
+      - name: Prepare WebView2 109 fixed runtime
+        shell: pwsh
+        run: ./.github/scripts/prepare-webview2-win7-runtime.ps1
+
+      - name: Probe WebView2 109 fixed runtime
+        shell: pwsh
+        run: ./.github/scripts/assert-webview2-win7-runtime.ps1
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Build DBX for Windows 7
+        shell: pwsh
+        run: |
+          $env:TAURI_CONFIG = Get-Content src-tauri/tauri.webview2-win7-fixed.conf.json -Raw
+          cargo -Z host-config -Z target-applies-to-host -Z build-std=std,panic_abort `
+            --config .github/fixtures/win7-host-repro-config.toml `
+            build --locked --package dbx --release --features custom-protocol `
+            --target x86_64-win7-windows-msvc --timings
+
+      - name: Upload Windows 7 Cargo timings
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: DBX-win7-cargo-timings
+          path: target/cargo-timings/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Audit Windows 7 PE imports
+        shell: pwsh
+        run: ./.github/scripts/assert-win7-pe-compat.ps1 -BinaryPath target/x86_64-win7-windows-msvc/release/dbx.exe
+
+      - name: Audit Win7 WebView2 loader markers
+        shell: pwsh
+        run: ./.github/scripts/assert-webview2-win7-loader.ps1 -BinaryPath target/x86_64-win7-windows-msvc/release/dbx.exe
+
+      - name: Bundle Windows 7 fixed-runtime test installer with zlib
+        shell: pwsh
+        run: |
+          $bundleDir = "target/x86_64-win7-windows-msvc/release/bundle/nsis"
+          pnpm tauri bundle --bundles nsis --target x86_64-win7-windows-msvc `
+            --config src-tauri/tauri.webview2-win7-fixed.conf.json `
+            --config .github/fixtures/win7-nsis-zlib-config.json
+          $installer = Get-ChildItem $bundleDir -Filter "*.exe" |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+          if (!$installer) {
+            Write-Error "Missing Windows 7 fixed-runtime installer in ${bundleDir}"
+            exit 1
+          }
+          Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256
+
+      - name: Audit Windows 7 installer contents
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "target/x86_64-win7-windows-msvc/release/bundle/nsis" -Filter "*.exe" |
+            Sort-Object LastWriteTimeUtc -Descending |
+            Select-Object -First 1
+          ./.github/scripts/assert-win7-installer-content.ps1 -InstallerPath $installer.FullName
+
+      - name: Show sccache stats
+        if: always()
+        continue-on-error: true
+        run: sccache --show-stats
+
+      - name: Upload Windows 7 test installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: DBX-win7-fixed-runtime-test
+          path: target/x86_64-win7-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Measure dbx library command registry expansion
+        if: vars.WIN7_REGISTRY_AB == 'true'
+        shell: pwsh
+        run: |
+          $resultRoot = Join-Path $env:RUNNER_TEMP "dbx-lib-command-registry-ab"
+          $sourcePath = "src-tauri/src/lib.rs"
+          New-Item -ItemType Directory -Force -Path $resultRoot | Out-Null
+          $env:TAURI_CONFIG = Get-Content src-tauri/tauri.webview2-win7-fixed.conf.json -Raw
+
+          $results = @{}
+          function Measure-Registry([string] $name, [int] $commandCount) {
+            $outputDir = Join-Path $resultRoot $name
+            New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+            $timer = [System.Diagnostics.Stopwatch]::StartNew()
+            cargo rustc `
+              --locked `
+              --package dbx `
+              --release `
+              --lib `
+              --features custom-protocol `
+              --target x86_64-win7-windows-msvc `
+              -Z build-std=std,panic_abort `
+              -- `
+              "-Zdump-mono-stats=$outputDir" `
+              "-Zdump-mono-stats-format=json"
+            $exitCode = $LASTEXITCODE
+            $timer.Stop()
+            if ($exitCode -ne 0) {
+              throw "$name command registry compile failed with exit code $exitCode."
+            }
+
+            $monoFile = Get-ChildItem $outputDir -File -Filter "*.mono_items.json" |
+              Select-Object -First 1
+            if (!$monoFile) {
+              throw "$name command registry compile did not create mono statistics."
+            }
+            $monoItems = Get-Content $monoFile.FullName -Raw | ConvertFrom-Json
+            $results[$name] = @{
+              Commands = $commandCount
+              Definitions = $monoItems.Count
+              Seconds = [math]::Round($timer.Elapsed.TotalSeconds, 2)
+              TotalEstimate = ($monoItems | Measure-Object -Property total_estimate -Sum).Sum
+            }
+          }
+
+          $savedWrapper = $env:RUSTC_WRAPPER
+          try {
+            $env:RUSTC_WRAPPER = ""
+            $sourceLines = Get-Content $sourcePath
+            $insideHandler = $false
+            $fullCommandCount = 0
+            foreach ($line in $sourceLines) {
+              if ($line -match 'tauri::generate_handler!\[') {
+                $insideHandler = $true
+                continue
+              }
+              if ($insideHandler -and $line -match '^\s*\]\)\)') {
+                break
+              }
+              if ($insideHandler -and $line -match '^\s+commands::') {
+                $fullCommandCount++
+              }
+            }
+            Measure-Registry "full" $fullCommandCount
+
+            $insideHandler = $false
+            $handlerCommandCount = 0
+            $keptCommandCount = 0
+            $reducedLines = foreach ($line in $sourceLines) {
+              if ($line -match 'tauri::generate_handler!\[') {
+                $insideHandler = $true
+                $line
+                continue
+              }
+              if ($insideHandler -and $line -match '^\s*\]\)\)') {
+                $insideHandler = $false
+                $line
+                continue
+              }
+              if ($insideHandler -and $line -match '^\s+commands::') {
+                $handlerCommandCount++
+                if ($handlerCommandCount % 2 -eq 0) {
+                  continue
+                }
+                $keptCommandCount++
+              }
+              $line
+            }
+            if ($handlerCommandCount -ne $fullCommandCount -or $keptCommandCount -eq $fullCommandCount) {
+              throw "Could not create the reduced command registry."
+            }
+            $reducedLines | Set-Content $sourcePath -Encoding utf8NoBOM
+            Measure-Registry "half" $keptCommandCount
+          } finally {
+            $env:RUSTC_WRAPPER = $savedWrapper
+            git restore --source=HEAD -- $sourcePath
+          }
+
+          @(
+            "### dbx library command registry A/B"
+            ""
+            "| Registry | Commands | Definitions | Estimated cost | Seconds |"
+            "| --- | ---: | ---: | ---: | ---: |"
+            "| Full | $($results['full'].Commands) | $($results['full'].Definitions) | $($results['full'].TotalEstimate) | $($results['full'].Seconds) |"
+            "| Half | $($results['half'].Commands) | $($results['half'].Definitions) | $($results['half'].TotalEstimate) | $($results['half'].Seconds) |"
+          ) | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload dbx library command registry A/B
+        if: always() && vars.WIN7_REGISTRY_AB == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: DBX-win7-dbx-lib-command-registry-ab
+          path: ${{ runner.temp }}/dbx-lib-command-registry-ab/
+          if-no-files-found: error
+          retention-days: 3
+
+  duckdb-windows-driver:
+    needs: changes
+    if: needs.changes.outputs.duckdb_windows == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/duckdb-driver
+      RUSTFLAGS: -C debuginfo=line-tables-only -C target-feature=+crt-static
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: duckdb-windows-v1
+      # libduckdb-sys uses cc-rs for its bundled C++ sources.
+      CC: "sccache cl.exe"
+      CXX: "sccache cl.exe"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Rust for Windows 7
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: nightly-2026-07-22
+          components: rust-src
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Build DuckDB Windows driver
+        shell: pwsh
+        working-directory: agents/drivers/duckdb
+        run: cargo build --locked --release --bin dbx-duckdb-driver --target x86_64-win7-windows-msvc -Z build-std=std,panic_abort
+
+      - name: Validate DuckDB Windows driver
+        shell: bash
+        run: |
+          DRIVER="target/duckdb-driver/x86_64-win7-windows-msvc/release/dbx-duckdb-driver.exe"
+          python agents/scripts/validate_windows_pe_dependencies.py "$DRIVER"
+          "$DRIVER" < /dev/null
+
+  rust-fmt-clippy:
+    needs:
+      - changes
+      - fast-checks
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      # sccache cannot reuse Cargo incremental artifacts, so avoid generating them in CI.
+      CARGO_INCREMENTAL: "0"
+      # Fork PRs cannot read repository secrets, and the GHA sccache backend can
+      # never hold entries for this repo because main only populates S3, so fork
+      # builds run without sccache and lean on the rust-cache restore from main.
+      RUSTC_WRAPPER: ${{ secrets.SCCACHE_S3_BUCKET != '' && 'sccache' || '' }}
+      # The fast lane skips only system font discovery while retaining the other default capabilities.
+      RUST_FEATURE_MODE: ${{ github.event_name == 'pull_request' && needs.changes.outputs.rust_full != 'true' && 'fast' || 'full' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libsecret-1-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: clippy, rustfmt
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Configure S3 sccache
+        if: env.RUSTC_WRAPPER == 'sccache'
+        shell: bash
+        env:
+          CACHE_BUCKET: ${{ secrets.SCCACHE_S3_BUCKET }}
+          CACHE_ENDPOINT: ${{ secrets.SCCACHE_S3_ENDPOINT }}
+          CACHE_REGION: ${{ secrets.SCCACHE_S3_REGION }}
+          CACHE_KEY_PREFIX: ${{ secrets.SCCACHE_S3_KEY_PREFIX }}
+          CACHE_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY_ID }}
+          CACHE_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_ACCESS_KEY }}
+        run: |
+          {
+            echo "SCCACHE_BUCKET=${CACHE_BUCKET}"
+            echo "SCCACHE_ENDPOINT=${CACHE_ENDPOINT}"
+            echo "SCCACHE_REGION=${CACHE_REGION}"
+            echo "SCCACHE_S3_KEY_PREFIX=${CACHE_KEY_PREFIX}"
+            echo "SCCACHE_S3_USE_SSL=true"
+            echo "AWS_ACCESS_KEY_ID=${CACHE_ACCESS_KEY_ID}"
+            echo "AWS_SECRET_ACCESS_KEY=${CACHE_SECRET_ACCESS_KEY}"
+            # Keep the server alive through post-compile test/lint phases so
+            # "Show sccache stats" reflects the real counters.
+            echo "SCCACHE_IDLE_TIMEOUT=0"
+            # Also cache the C/C++ compilation of -sys crates. These jobs are
+            # native Linux builds, so plain CC/CXX select the target compiler.
+            echo "CC=${SCCACHE_PATH} cc"
+            echo "CXX=${SCCACHE_PATH} c++"
+          } >> "$GITHUB_ENV"
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+          shared-key: ci-rust-fmt-clippy-x86_64-unknown-linux-gnu
+          # Preserve completed dependency builds when a later lint step fails.
+          cache-on-failure: true
+          # PR caches are large and branch-scoped; restore them from main without saving per-PR copies.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Cargo clippy
+        run: |-
+          node .github/scripts/ci-rust.mjs clippy workspace "$RUST_FEATURE_MODE"
+
+      - name: Show sccache stats
+        if: always()
+        continue-on-error: true
+        run: ${SCCACHE_PATH} --show-stats
+
+  rust-test:
+    needs:
+      - changes
+      - fast-checks
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      # sccache cannot reuse Cargo incremental artifacts, so avoid generating them in CI.
+      CARGO_INCREMENTAL: "0"
+      # Deep async export tests exceed the Rust test harness's default thread stack on Linux.
+      RUST_MIN_STACK: 8388608
+      # Fork PRs cannot read repository secrets, and the GHA sccache backend can
+      # never hold entries for this repo because main only populates S3, so fork
+      # builds run without sccache and lean on the rust-cache restore from main.
+      RUSTC_WRAPPER: ${{ secrets.SCCACHE_S3_BUCKET != '' && 'sccache' || '' }}
+      # The fast lane skips only system font discovery while retaining the other default capabilities.
+      RUST_FEATURE_MODE: ${{ github.event_name == 'pull_request' && needs.changes.outputs.rust_full != 'true' && 'fast' || 'full' }}
+      RUST_TEST_GROUP: ${{ matrix.group }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libsecret-1-dev
+        if: matrix.group != 'foundation'
+
+      # Pin mold because runner image updates can change bundled C++ links.
+      # See the packages job note for the pinned upstream build.
+      - name: Install mold linker
+        run: |
+          curl -fsSL https://github.com/rui314/mold/releases/download/v2.42.1/mold-2.42.1-x86_64-linux.tar.gz \
+            | sudo tar -C /usr/local --strip-components=1 -xz
+          mold --version
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Configure S3 sccache
+        if: env.RUSTC_WRAPPER == 'sccache'
+        shell: bash
+        env:
+          CACHE_BUCKET: ${{ secrets.SCCACHE_S3_BUCKET }}
+          CACHE_ENDPOINT: ${{ secrets.SCCACHE_S3_ENDPOINT }}
+          CACHE_REGION: ${{ secrets.SCCACHE_S3_REGION }}
+          CACHE_KEY_PREFIX: ${{ secrets.SCCACHE_S3_KEY_PREFIX }}
+          CACHE_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY_ID }}
+          CACHE_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_ACCESS_KEY }}
+        run: |
+          {
+            echo "SCCACHE_BUCKET=${CACHE_BUCKET}"
+            echo "SCCACHE_ENDPOINT=${CACHE_ENDPOINT}"
+            echo "SCCACHE_REGION=${CACHE_REGION}"
+            echo "SCCACHE_S3_KEY_PREFIX=${CACHE_KEY_PREFIX}"
+            echo "SCCACHE_S3_USE_SSL=true"
+            echo "AWS_ACCESS_KEY_ID=${CACHE_ACCESS_KEY_ID}"
+            echo "AWS_SECRET_ACCESS_KEY=${CACHE_SECRET_ACCESS_KEY}"
+            # Keep the server alive through post-compile test/lint phases so
+            # "Show sccache stats" reflects the real counters.
+            echo "SCCACHE_IDLE_TIMEOUT=0"
+            # Also cache the C/C++ compilation of -sys crates. These jobs are
+            # native Linux builds, so plain CC/CXX select the target compiler.
+            echo "CC=${SCCACHE_PATH} cc"
+            echo "CXX=${SCCACHE_PATH} c++"
+          } >> "$GITHUB_ENV"
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./ -> target"
+          shared-key: ci-rust-test-v2-x86_64-unknown-linux-gnu
+          # Test linking dominates this job and sccache cannot cache those crate types.
+          cache-workspace-crates: true
+          # Preserve completed dependency builds when a later test step fails.
+          cache-on-failure: true
+          # PR caches are large and branch-scoped; restore them from main without saving per-PR copies.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3
+        with:
+          tool: cargo-nextest@0.9.137
+
+      # mold -run wraps the whole process tree (see the packages job note):
+      # test-binary linking dominates this job and sccache cannot cache links.
+      - name: Nextest
+        run: |-
+          mold -run node .github/scripts/ci-rust.mjs test "$RUST_TEST_GROUP" "$RUST_FEATURE_MODE"
+
+      - name: Rust doc tests
+        run: |-
+          mold -run node .github/scripts/ci-rust.mjs doctest "$RUST_TEST_GROUP" "$RUST_FEATURE_MODE"
+
+      - name: Show sccache stats
+        if: always()
+        continue-on-error: true
+        run: ${SCCACHE_PATH} --show-stats
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}
+    name: rust-test (${{ matrix.group }})
+
+  rust:
+    needs:
+      - changes
+      - fast-checks
+      - rust-fmt-clippy
+      - rust-test
+    if: always() && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check selected rust jobs
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node .github/scripts/ci-gate.mjs rust
+
+  jdbc:
+    needs: changes
+    if: needs.changes.outputs.jdbc == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: JDBC plugin version guard
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE_SHA" ] || echo "$BASE_SHA" | grep -Eq '^0+$'; then
+            BASE_SHA="HEAD~1"
+          fi
+          node .github/scripts/check-jdbc-plugin-version.mjs "$BASE_SHA" HEAD
+
+      - name: JDBC plugin package check
+        run: ./plugins/jdbc/package.sh
+
+  offline-jdbc-release:
+    needs: changes
+    if: needs.changes.outputs.offline_jdbc == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Cache approved Maven assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/dbx-offline-jdbc-maven
+          key: offline-jdbc-${{ hashFiles('apps/desktop/src/lib/database/managedJdbcAssets.json') }}
+
+      - name: Build real managed JDBC payload
+        env:
+          DBX_OFFLINE_JDBC_MAVEN_CACHE: ~/.cache/dbx-offline-jdbc-maven
+        run: |
+          ./plugins/jdbc/package.sh
+          JDBC_VERSION="$(sed -nE "s/^version[[:space:]]*=[[:space:]]*'([^']+)'.*/\1/p" plugins/jdbc/build.gradle | head -n 1)"
+          node agents/scripts/build_offline_jdbc_payload.mjs \
+            release \
+            "plugins/jdbc/dist/dbx-jdbc-plugin-${JDBC_VERSION}.zip" \
+            "plugins/jdbc/dist/dbx-jdbc-plugin-${JDBC_VERSION}/bin/dbx-maven-resolver"
+
+      - name: Build and unpack all six platform ZIPs
+        run: |
+          printf '{}\n' > release/agent-registry.json
+          for platform in macos-aarch64 macos-x64 linux-x64 linux-aarch64 windows-x64 windows-aarch64; do
+            printf '%s\n' "$platform" > "release/dbx-jre-21-${platform}.tar.zst"
+          done
+          bash agents/scripts/build_offline_zip.sh release
+          node agents/scripts/verify_offline_jdbc_release.mjs release
+
+  nix-packaging:
+    needs: changes
+    if: needs.changes.outputs.nix == 'true'
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Validate Nix dependency closures
+        run: nix build .#dbx-pnpm-deps .#dbx-cargo-deps --no-link --print-build-logs
+
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      packages: ${{ steps.filter.outputs.packages }}
+      rust: ${{ steps.plan.outputs.rust }}
+      rust_full: ${{ steps.plan.outputs.rust_full }}
+      jdbc: ${{ steps.filter.outputs.jdbc }}
+      offline_jdbc: ${{ steps.filter.outputs.offline_jdbc }}
+      agents: ${{ steps.plan.outputs.agents }}
+      duckdb_windows: ${{ steps.filter.outputs.duckdb_windows == 'true' || steps.plan.outputs.duckdb_windows == 'true' }}
+      nix: ${{ steps.filter.outputs.nix }}
+      windows_win7_bundle: ${{ steps.filter.outputs.windows_win7_bundle }}
+      windows_win7_candidate: ${{ steps.plan.outputs.windows_win7_candidate }}
+      windows_win7_affected_packages: ${{ steps.plan.outputs.windows_win7_affected_packages }}
+      windows_win7_reasons: ${{ steps.plan.outputs.windows_win7_reasons }}
+      github_scripts: ${{ steps.filter.outputs.github_scripts }}
+      fast: ${{ steps.plan.outputs.fast }}
+      rust_matrix: ${{ steps.plan.outputs.rust_matrix }}
+      rust_groups_known: ${{ steps.plan.outputs.rust_groups_known }}
+      agent_java: ${{ steps.plan.outputs.agent_java }}
+      agent_go: ${{ steps.plan.outputs.agent_go }}
+      agent_rust: ${{ steps.plan.outputs.agent_rust }}
+      agent_integration: ${{ steps.plan.outputs.agent_integration }}
+      agent_go_changed: ${{ steps.plan.outputs.agent_go_changed }}
+      agent_rust_changed: ${{ steps.plan.outputs.agent_rust_changed }}
+      agent_integration_changed: ${{ steps.plan.outputs.agent_integration_changed }}
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Fetch change base
+        id: change-base
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          echo "sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Detect changed areas
+        uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          base: ${{ steps.change-base.outputs.sha }}
+          filters: |
+            frontend:
+              - 'apps/desktop/**'
+              - 'docs/**'
+              - 'packages/**'
+              - 'pnpm-lock.yaml'
+              - 'package.json'
+              - '.oxfmtrc.json'
+              - 'scripts/run-check.mjs'
+              - 'crates/dbx-core/src/**'
+              - 'crates/dbx-drivers/src/**'
+              - 'crates/dbx-driver-*/src/**'
+              - 'crates/dbx-sql*/src/**'
+              - 'crates/dbx-formats/src/**'
+              - 'crates/dbx-types/src/**'
+              - 'crates/dbx-plugin-runtime/src/**'
+              - 'crates/dbx-ai-provider/**'
+              - 'crates/dbx-core/assets/docs-export.*'
+              - '.github/workflows/ci.yml'
+            packages:
+              - 'packages/cli/**'
+              - 'packages/mcp-server/**'
+              - 'crates/dbx-cli/**'
+              - 'crates/dbx-mcp/**'
+              - 'skills/dbx/**'
+              - 'scripts/verify-package-install.mjs'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/workflows/ci.yml'
+            rust:
+              - 'crates/**'
+              - 'plugins/connection-types/**'
+              - 'plugins/dialects/**'
+              - 'scripts/core-architecture.test.mjs'
+              - 'src-tauri/**'
+              - 'vendor/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain*'
+              - '.github/workflows/ci.yml'
+            jdbc:
+              - 'plugins/jdbc/**'
+            offline_jdbc:
+              - 'plugins/jdbc/**'
+              - 'agents/scripts/build_offline_jdbc_payload.mjs'
+              - 'agents/scripts/build_offline_zip.sh'
+              - 'agents/scripts/verify_offline_jdbc_release.mjs'
+              - 'apps/desktop/src/lib/database/managedJdbcAssets.json'
+              - '.github/scripts/offline-jdbc-payload.test.mjs'
+              - '.github/workflows/agents-release.yml'
+              - '.github/workflows/ci.yml'
+            agents:
+              - 'agents/**'
+              - 'crates/dbx-driver-agent/assets/agent-protocol-v2.json'
+              - 'crates/dbx-core/Cargo.toml'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - '.github/scripts/bump-agent-versions.mjs'
+              - '.github/scripts/bump-agent-versions.test.mjs'
+              - '.github/workflows/agents-release.yml'
+              - '.github/workflows/ci.yml'
+            duckdb_windows:
+              - 'agents/drivers/duckdb/**'
+              - 'agents/scripts/validate_windows_pe_dependencies.py'
+              - '.github/workflows/agents-release.yml'
+              - '.github/workflows/ci.yml'
+            nix:
+              # These advisory checks validate the pnpm and Cargo dependency closures.
+              - 'package.json'
+              - 'packages/**/package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/**/Cargo.toml'
+              - 'src-tauri/Cargo.toml'
+              - 'flake.nix'
+              - 'flake.lock'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/update-nix-pnpm-hash.yml'
+            windows_win7_bundle:
+              - '.github/scripts/assert-win7-pe-compat.ps1'
+              - '.github/scripts/assert-webview2-win7-loader.ps1'
+              - '.github/scripts/assert-win7-installer-content.ps1'
+              - '.github/scripts/assert-webview2-win7-runtime.ps1'
+              - '.github/scripts/prepare-webview2-win7-loader.ps1'
+              - '.github/scripts/prepare-webview2-win7-runtime.ps1'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release.yml'
+              - 'src-tauri/tauri.webview2-win7-fixed.conf.json'
+              - 'src-tauri/build.rs'
+              - 'src-tauri/Cargo.toml'
+              - 'src-tauri/windows/nsis/**'
+              - 'src-tauri/src/commands/update.rs'
+              - 'crates/dbx-core/Cargo.toml'
+              - 'crates/dbx-drivers/**'
+              - 'crates/dbx-driver-*/**'
+              - 'crates/dbx-platform/**'
+              - 'crates/dbx-core/src/host/update.rs'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'vendor/ctor/**'
+              - 'vendor/dirs-sys/**'
+              - 'vendor/pageant/**'
+              - 'vendor/webview2-com-sys/**'
+              - 'vendor/wry/**'
+            github_scripts:
+              - '.github/scripts/**'
+              - 'docs/public/install-mcp*'
+              - '.github/workflows/mcp-release.yml'
+              - '.github/workflows/publish-packages.yml'
+              - '.github/workflows/plugin-release-reusable.yml'
+              - '.github/workflows/ci.yml'
+              - 'apps/desktop/src/types/database.ts'
+              - 'crates/dbx-core/assets/database-drivers.manifest.json'
+      - name: Plan dependency-aware CI jobs
+        id: plan
+        env:
+          BASE_SHA: ${{ steps.change-base.outputs.sha }}
+          RUST_CHANGED: ${{ steps.filter.outputs.rust }}
+          AGENTS_CHANGED: ${{ steps.filter.outputs.agents }}
+          WIN7_CURRENT: ${{ steps.filter.outputs.windows_win7_bundle }}
+        run: node .github/scripts/ci-plan.mjs
+
+  agents:
+    needs:
+      - changes
+      - fast-checks
+      - agent-checks
+      - agent-java
+      - agent-rust
+      - agent-go
+      - agent-integration
+    if: always() && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check selected agents jobs
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node .github/scripts/ci-gate.mjs agents
+  fast-checks:
+    needs: changes
+    if: needs.changes.outputs.fast == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          components: rustfmt
+        if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.agent_rust_changed == 'true'
+      - name: Cargo fmt check
+        if: needs.changes.outputs.rust == 'true'
+        run: cargo fmt --check
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+      - name: CI planner and gate tests
+        run: node --test .github/scripts/ci-*.test.mjs
+      - name: Core architecture contracts
+        if: needs.changes.outputs.rust == 'true'
+        run: node --test scripts/core-architecture.test.mjs
+      - name: Setup pnpm
+        if: needs.changes.outputs.rust == 'true'
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.27.0
+      - name: Install generator dependencies
+        if: needs.changes.outputs.rust == 'true'
+        run: pnpm --filter dbx... install --frozen-lockfile --ignore-scripts
+      - name: Check generated connection types
+        if: needs.changes.outputs.rust == 'true'
+        run: node scripts/sync-connection-types.mjs --check
+      - name: Check workspace and standalone Cargo locks
+        env:
+          CI_PLAN: ${{ needs.changes.outputs.plan }}
+        run: node .github/scripts/ci-lockfiles.mjs
+      - name: Check grouped Rust feature coverage
+        if: needs.changes.outputs.rust == 'true' && needs.changes.outputs.rust_groups_known == 'true'
+        run: node .github/scripts/ci-rust-coverage.mjs
+  agent-checks:
+    needs: changes
+    if: needs.changes.outputs.agents == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: agents
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22.13.0
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+      - name: Agent script tests
+        run: |
+          python3 -m unittest discover -s scripts -p '*_test.py'
+          node --test ../.github/scripts/bump-agent-versions.test.mjs
+      - name: Agent validation
+        run: python3 scripts/validate_agents.py
+  agent-java:
+    needs: [changes, fast-checks, agent-checks]
+    if: needs.changes.outputs.agent_java == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: agents
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: |-
+            8
+            21
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+      - name: Java agent tests and packages
+        run: ./gradlew test shadowJar --continue
+      - name: Agent jar validation
+        run: python3 scripts/validate_agent_jars.py
+  agent-rust:
+    needs: [changes, fast-checks, agent-checks]
+    if: needs.changes.outputs.agent_rust_changed == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      # sccache cannot reuse Cargo incremental artifacts, so avoid generating them in CI.
+      CARGO_INCREMENTAL: "0"
+      # Fork PRs cannot read repository secrets, so they build without sccache
+      # (see rust-fmt-clippy) and lean on the rust-cache restore from main.
+      RUSTC_WRAPPER: ${{ secrets.SCCACHE_S3_BUCKET != '' && 'sccache' || '' }}
+    defaults:
+      run:
+        working-directory: agents
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install system dependencies
+        if: matrix.driver == 'duckdb'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+      # Pin mold because runner image updates can change bundled DuckDB C++ links.
+      # See the packages job note for the pinned upstream build.
+      - name: Install mold linker
+        run: |
+          curl -fsSL https://github.com/rui314/mold/releases/download/v2.42.1/mold-2.42.1-x86_64-linux.tar.gz \
+            | sudo tar -C /usr/local --strip-components=1 -xz
+          mold --version
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: "v0.16.0"
+      - name: Configure S3 sccache
+        if: env.RUSTC_WRAPPER == 'sccache'
+        shell: bash
+        env:
+          CACHE_BUCKET: ${{ secrets.SCCACHE_S3_BUCKET }}
+          CACHE_ENDPOINT: ${{ secrets.SCCACHE_S3_ENDPOINT }}
+          CACHE_REGION: ${{ secrets.SCCACHE_S3_REGION }}
+          CACHE_KEY_PREFIX: ${{ secrets.SCCACHE_S3_KEY_PREFIX }}
+          CACHE_ACCESS_KEY_ID: ${{ secrets.SCCACHE_S3_ACCESS_KEY_ID }}
+          CACHE_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_S3_SECRET_ACCESS_KEY }}
+        run: |
+          {
+            echo "SCCACHE_BUCKET=${CACHE_BUCKET}"
+            echo "SCCACHE_ENDPOINT=${CACHE_ENDPOINT}"
+            echo "SCCACHE_REGION=${CACHE_REGION}"
+            echo "SCCACHE_S3_KEY_PREFIX=${CACHE_KEY_PREFIX}"
+            echo "SCCACHE_S3_USE_SSL=true"
+            echo "AWS_ACCESS_KEY_ID=${CACHE_ACCESS_KEY_ID}"
+            echo "AWS_SECRET_ACCESS_KEY=${CACHE_SECRET_ACCESS_KEY}"
+            # Keep the server alive through post-compile test/lint phases so
+            # "Show sccache stats" reflects the real counters.
+            echo "SCCACHE_IDLE_TIMEOUT=0"
+            # The duckdb driver builds a large bundled C++ library through its
+            # build script; wrapping CC/CXX lets sccache cache those compiles
+            # too (rust-cache alone recompiles all of it on every lock change).
+            echo "CC=${SCCACHE_PATH} cc"
+            echo "CXX=${SCCACHE_PATH} c++"
+          } >> "$GITHUB_ENV"
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: agents/drivers/${{ matrix.driver }} -> target
+          # A failed bundled native build can leave link-compatible but invalid artifacts.
+          shared-key: ci-agent-rust-v2-${{ matrix.driver }}
+          cache-on-failure: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install nextest
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3
+        with:
+          tool: cargo-nextest@0.9.137
+      # mold -run wraps the whole process tree (see the packages job note);
+      # the duckdb sidecar links a large bundled C++ static library.
+      - name: Native Rust driver tests
+        env:
+          DRIVER: ${{ matrix.driver }}
+        run: |
+          mold -run cargo nextest run --manifest-path "drivers/$DRIVER/Cargo.toml" --locked --no-fail-fast
+          mold -run cargo test --doc --manifest-path "drivers/$DRIVER/Cargo.toml" --locked
+      - name: TDengine native agent build
+        if: matrix.driver == 'tdengine'
+        run: mold -run cargo build --manifest-path drivers/tdengine/Cargo.toml --locked --release --bin dbx-tdengine-driver
+      # Diagnostics only; agent jobs must not swallow build/test failures
+      # (ci-workflow.test.mjs), so keep this step best-effort at the command level.
+      - name: Show sccache stats
+        if: always()
+        run: ${SCCACHE_PATH} --show-stats || true
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.changes.outputs.agent_rust) }}
+  agent-go:
+    needs: [changes, fast-checks, agent-checks]
+    if: needs.changes.outputs.agent_go_changed == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: agents
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.25.x
+          cache-dependency-path: agents/drivers/${{ matrix.driver }}/go.sum
+      - name: Native Go tests and target builds
+        env:
+          DRIVER: ${{ matrix.driver }}
+          BINARY: ${{ matrix.binary }}
+          RACE: ${{ matrix.race }}
+        run: bash ../.github/scripts/ci-agent-go.sh "$DRIVER" "$BINARY" "$RACE"
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.changes.outputs.agent_go) }}
+  agent-integration:
+    needs: [changes, fast-checks, agent-checks]
+    if: needs.changes.outputs.agent_integration_changed == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: agents
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup RocketMQ server Java
+        if: matrix.scenario == 'rocketmq'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.25.x
+          cache-dependency-path: agents/drivers/${{ matrix.driver }}/go.sum
+        if: matrix.driver != 'tdengine'
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+        if: matrix.driver == 'tdengine'
+      - name: Install nextest
+        if: matrix.driver == 'tdengine'
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3
+        with:
+          tool: cargo-nextest@0.9.137
+      - name: TDengine Rust cache
+        if: matrix.driver == 'tdengine'
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: agents/drivers/tdengine -> target
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.version == '3.4.2.2' }}
+      - name: Run one live engine and version
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+          VERSION: ${{ matrix.version }}
+          IMAGE: ${{ matrix.image || '' }}
+        run: bash ../.github/scripts/ci-agent-integration.sh "$SCENARIO" "$VERSION" "$IMAGE"
+    name: agent-integration (${{ matrix.scenario }}, ${{ matrix.version }})
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.changes.outputs.agent_integration) }}
+  ci:
+    needs:
+      - changes
+      - fast-checks
+      - rust
+      - agents
+      - frontend
+      - github-scripts
+      - packages
+      - windows-standard-check
+      - windows-win7-bundle
+      - duckdb-windows-driver
+      - jdbc
+      - offline-jdbc-release
+      - nix-packaging
+    if: always() && !cancelled()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check selected all jobs
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node .github/scripts/ci-gate.mjs all

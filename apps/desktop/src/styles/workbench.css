@@ -1,0 +1,174 @@
+/* Workbench chrome is shared by the frame and its independently mounted tools.
+ * Editor syntax, semantic grid colors, and measured grid geometry stay owned
+ * by their respective components. Variables are also available to menus
+ * portaled under body; visual rules remain scoped to the workbench. */
+:root,
+.dbx-workbench {
+  --workbench-chrome: #f0f2f5;
+  --workbench-sidebar: #f7f8fa;
+  --workbench-rail: #eef0f3;
+  --workbench-status: #f0f2f5;
+  --workbench-surface: var(--background);
+  --workbench-border: #d9dde5;
+  --workbench-grid-line: #e7e9ef;
+  --workbench-text: var(--foreground);
+  --workbench-secondary: #475569;
+  --workbench-muted: #59677c;
+  --workbench-font-ui: var(--font-sans, system-ui, sans-serif);
+  --workbench-font-mono: var(--font-mono, ui-monospace, Menlo, monospace);
+  --workbench-font-size-ui: 12px;
+  --workbench-font-size-caption: 11px;
+  --workbench-font-weight-heading: 600;
+  --workbench-accent: #245bd7;
+  --workbench-accent-soft: #e2ebfc;
+  --workbench-hover: #e4e7ee;
+  --workbench-selection: #dce7fa;
+  --workbench-selection-strong: #ccddfa;
+  --workbench-header: #f3f4f7;
+  --workbench-success: #18794e;
+  --workbench-warning: #946000;
+  --workbench-danger: #c8343b;
+}
+:root.dark,
+.dark .dbx-workbench,
+.dbx-workbench.dark {
+  --workbench-chrome: #2b2d31;
+  --workbench-sidebar: #26282e;
+  --workbench-rail: #26282e;
+  --workbench-status: #2b2d31;
+  --workbench-border: #3b3d43;
+  --workbench-grid-line: #33363d;
+  --workbench-secondary: #bdc4d2;
+  --workbench-muted: #a5afc0;
+  --workbench-accent: #6b9bfa;
+  --workbench-accent-soft: #303e58;
+  --workbench-hover: #373a42;
+  --workbench-selection: #2e4260;
+  --workbench-selection-strong: #365174;
+  --workbench-header: #2b2d31;
+  --workbench-success: #70c69b;
+  --workbench-warning: #e9b768;
+  --workbench-danger: #f08890;
+}
+.dbx-workbench {
+  background-color: var(--workbench-surface);
+  color: var(--workbench-text);
+  font-family: var(--workbench-font-ui);
+  font-size: var(--workbench-font-size-ui);
+  font-weight: 400;
+}
+.dbx-workbench .workbench-panes { overflow: hidden; }
+.dbx-workbench .workbench-editor-stage { position: relative; }
+.dbx-workbench .workbench-tool-window { border-left: 1px solid var(--workbench-border); }
+.dbx-workbench .panel-resize-handle:hover,
+.dbx-workbench .panel-resize-handle:active { background-color: var(--workbench-accent); }
+
+.dbx-workbench .sql-editor-workspace,
+.dbx-workbench [data-shared-result-surface] {
+  background-color: var(--workbench-surface);
+}
+
+/* These variables are also consumed by the canvas renderer. Preserve the
+ * existing dirty/deleted/error/search colors and user-selected type colors. */
+.dbx-workbench [data-grid-root][data-grid-active="true"],
+.dbx-workbench [data-grid-root][data-grid-active="true"].data-grid--dark {
+  --data-grid-cell-selected-bg: var(--workbench-selection);
+  --data-grid-cell-selected-single-bg: var(--workbench-selection-strong);
+  --data-grid-cell-selected-border: var(--workbench-accent);
+  --data-grid-cell-active-bg: var(--workbench-accent-soft);
+  --data-grid-cell-hover-bg: var(--workbench-hover);
+  --data-grid-row-number-selected-bg: var(--workbench-selection-strong);
+  --data-grid-row-number-active-bg: var(--workbench-accent-soft);
+}
+
+.dbx-workbench [data-grid-root] .data-grid-header-row {
+  /* Keep the header at the 600 weight used by column-width measurement. */
+  font-weight: 600;
+}
+
+.dbx-workbench [data-grid-root] .data-grid-header-cell {
+  background-color: var(--workbench-header);
+  border-color: var(--workbench-border);
+}
+
+.dbx-workbench [data-grid-root] .data-grid-cell {
+  border-color: var(--workbench-grid-line);
+}
+
+.dbx-workbench [data-grid-root] .data-grid-row-number {
+  border-color: var(--workbench-border);
+}
+
+/* The grid owns 32px / 64px toolbar layouts and animated compact button
+ * widths. Style within those boxes without changing measurement inputs. */
+.dbx-workbench [data-grid-root] .data-grid-topbar-shell {
+  background-color: var(--workbench-chrome);
+  border-color: var(--workbench-border);
+}
+
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-button {
+  border-radius: 4px;
+  line-height: 1.15;
+}
+
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-label {
+  line-height: 1.15;
+}
+
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-button:not(.data-grid-topbar-action-button--commit):not(:disabled):hover {
+  background-color: var(--workbench-hover);
+}
+
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-button:focus-visible {
+  outline: 1px solid var(--workbench-accent);
+  outline-offset: -1px;
+}
+
+.dbx-workbench [data-result-run-tabs-region] [role="presentation"] {
+  border-radius: 3px;
+  box-shadow: none;
+}
+
+.dbx-workbench [data-result-run-tabs-region] [role="presentation"]:has([data-active-result-run="true"]) {
+  background-color: var(--workbench-surface);
+  border-color: var(--workbench-border);
+  box-shadow: inset 0 -2px 0 var(--workbench-accent);
+}
+
+.dbx-workbench [data-result-run-tab]:focus-visible {
+  outline: 1px solid var(--workbench-accent);
+  outline-offset: -2px;
+}
+
+/* UI commands use proportional text; metadata uses a quieter, smaller level.
+ * Data cells keep their configured tabular font and measured dimensions. */
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-button {
+  color: var(--workbench-secondary);
+  font-family: var(--workbench-font-ui);
+  font-weight: 400;
+}
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-button--commit {
+  color: var(--primary-foreground);
+}
+.dbx-workbench [data-grid-root] [data-grid-header-comment-line] {
+  color: var(--workbench-muted);
+}
+.dbx-workbench .sidebar-tool-window-title {
+  color: var(--workbench-text);
+  font-weight: var(--workbench-font-weight-heading);
+}
+.dbx-workbench .sidebar-tool-window-count {
+  color: var(--workbench-muted);
+  font-size: var(--workbench-font-size-caption);
+  font-family: var(--workbench-font-mono);
+}
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-button[aria-pressed="true"],
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-button[data-toolbar-action="preview"] {
+  color: var(--workbench-accent);
+}
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-button[data-toolbar-action="deleteRow"]:not(:disabled) {
+  color: var(--workbench-danger);
+}
+.dbx-workbench [data-grid-root] .data-grid-topbar-action-button[data-toolbar-action="rollback"]:not(:disabled) {
+  color: var(--workbench-warning);
+}

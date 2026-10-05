@@ -1,0 +1,113 @@
+import { createApp } from "vue";
+import { createPinia } from "pinia";
+import "./styles/globals.css";
+import "./styles/workbench.css";
+import { installDebugLogCapture } from "@/lib/backend/debugLog";
+import { retryStartupAfterPreloadFailure } from "@/lib/startup/startupPreloadRecovery";
+import { markStartupPhase } from "@/lib/startup/startupTiming";
+import { applyLegacyWebViewClass, isBlockingCompatFailure } from "@/lib/ui/legacyWebView";
+import { hydrateAppAppearance } from "@/lib/app/appAppearance";
+
+function startupErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return [error.message, error.stack].filter(Boolean).join("\n");
+  }
+  return String(error);
+}
+
+function renderStartupError(error: unknown) {
+  if (retryStartupAfterPreloadFailure(error)) return;
+  const message = startupErrorMessage(error);
+  console.error("[STARTUP] bootstrap failed", error);
+  const root = document.querySelector<HTMLDivElement>("#root");
+  if (!root) return;
+  root.innerHTML = "";
+  const panel = document.createElement("div");
+  panel.style.cssText = ["display:flex", "min-height:100vh", "align-items:center", "justify-content:center", "background:#ffffff", "color:#111827", "padding:24px", "font-family:ui-sans-serif,system-ui,sans-serif"].join(";");
+  const card = document.createElement("div");
+  card.style.cssText = ["max-width:760px", "width:100%", "border:1px solid #e5e7eb", "border-radius: var(--dbx-radius-fixed-6)", "padding:20px", "box-shadow:0 10px 30px rgba(0,0,0,0.08)", "background:#fff"].join(";");
+  const title = document.createElement("h1");
+  title.textContent = "Database Workbench startup failed";
+  title.style.cssText = "margin:0 0 12px;font-size:18px;font-weight:700;";
+  const text = document.createElement("p");
+  text.textContent = "The desktop UI crashed during startup. Please copy the error below for troubleshooting.";
+  text.style.cssText = "margin:0 0 12px;font-size:13px;line-height:1.5;color:#4b5563;";
+  const pre = document.createElement("pre");
+  pre.textContent = message;
+  pre.style.cssText = ["margin:0", "white-space:pre-wrap", "word-break:break-word", "font-size:12px", "line-height:1.5", "background:#f9fafb", "border-radius: var(--dbx-radius-fixed-4)", "padding:12px", "overflow:auto"].join(";");
+  card.append(title, text, pre);
+  panel.append(card);
+  root.append(panel);
+}
+
+function installStartupErrorHandlers() {
+  window.addEventListener("error", (event) => {
+    console.error("[STARTUP] window error", event.error ?? event.message);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    console.error("[STARTUP] unhandled rejection", event.reason);
+  });
+}
+
+function installGlobalInputAttrs() {
+  const ATTRS: [string, string][] = [
+    ["autocomplete", "off"],
+    ["autocapitalize", "off"],
+    ["autocorrect", "off"],
+    ["spellcheck", "false"],
+  ];
+  const MARKER = "data-input-attrs-set";
+  const apply = (el: Element) => {
+    if ((el.tagName === "INPUT" || el.tagName === "TEXTAREA") && !el.hasAttribute(MARKER)) {
+      for (const [k, v] of ATTRS) el.setAttribute(k, v);
+      el.setAttribute(MARKER, "");
+    }
+  };
+  document.querySelectorAll("input, textarea").forEach(apply);
+  new MutationObserver((mutations) => {
+    for (const m of mutations) {
+      for (const node of m.addedNodes) {
+        if (node instanceof Element) {
+          apply(node);
+          node.querySelectorAll("input, textarea").forEach(apply);
+        }
+      }
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+}
+
+async function bootstrap() {
+  markStartupPhase("bootstrap");
+  console.log("[STARTUP] frontend bootstrap begin");
+
+  // The inline engine probe in index.html has already painted an upgrade notice when this
+  // engine cannot style the shell; mounting over it would only replace a readable message
+  // with an unstyled UI. The notice's own button reloads once the user opts to continue.
+  if (isBlockingCompatFailure()) {
+    markStartupPhase("compat-blocked");
+    console.warn("[STARTUP] blocked by engine compatibility notice");
+    window.dispatchEvent(new Event("dbx:startup-ready"));
+    return;
+  }
+  // Tauri WebViews may not retain localStorage across macOS restarts. Load the
+  // durable appearance record before importing i18n and the theme composable;
+  // those modules synchronously read the compatibility keys during evaluation.
+  await hydrateAppAppearance();
+  const [{ default: i18n, loadSavedLocale }, { default: App }] = await Promise.all([import("./i18n"), import("./StartupGate.vue")]);
+  console.log("[STARTUP] frontend modules loaded");
+  const localeReady = loadSavedLocale();
+  const app = createApp(App, { localeReady });
+  app.use(createPinia());
+  app.use(i18n);
+  app.mount("#root");
+  markStartupPhase("gate-mounted");
+  void localeReady.then(() => window.dispatchEvent(new Event("dbx:startup-ready"))).catch(() => {});
+  console.log("[STARTUP] vue mounted");
+
+  installGlobalInputAttrs();
+}
+
+installDebugLogCapture();
+installStartupErrorHandlers();
+applyLegacyWebViewClass();
+void bootstrap().catch(renderStartupError);

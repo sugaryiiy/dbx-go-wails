@@ -1,0 +1,327 @@
+import { isElasticsearchCompatibleDatabaseType, isSolrDatabaseType, type DatabaseType } from "@/types/database";
+
+/**
+ * Resolve the data type to display in a data-grid column header.
+ *
+ * Two sources can supply a column's type:
+ *  - Table metadata (only when a table is open): matched **by column name**,
+ *    richer because it carries precision/scale. Preferred.
+ *  - `QueryResult.column_types` (any query): parallel to `result.columns`, so
+ *    it must be read **by index**. Used as a fallback for arbitrary queries
+ *    that have no table metadata (e.g. `select * from pg_depend`).
+ *
+ * Returns `undefined` when neither source has a non-empty type, so callers can
+ * simply hide the type row.
+ */
+export interface HeaderColumnTypeSources {
+  /** Type from table metadata for this column (looked up by name), if any. */
+  tableColumnType?: string;
+  /** `QueryResult.column_types`, parallel to `result.columns` (by index). */
+  resultColumnTypes?: readonly string[];
+  /** Index of the column within `result.columns`. */
+  actualColIdx: number;
+}
+
+export function resolveHeaderColumnType({ tableColumnType, resultColumnTypes, actualColIdx }: HeaderColumnTypeSources): string | undefined {
+  const fromMeta = tableColumnType?.trim();
+  if (fromMeta) return fromMeta;
+
+  const fromResult = resultColumnTypes?.[actualColIdx]?.trim();
+  return fromResult ? fromResult : undefined;
+}
+
+export function compactHeaderColumnType(dataType: string): string {
+  return /^enum\s*\(/i.test(dataType.trim()) ? "enum" : dataType;
+}
+
+const CHARACTER_LENGTH_TYPE_PATTERN = /^(?:char|varchar|nchar|nvarchar|varchar2|nvarchar2|character|character\s+varying|national\s+character|national\s+character\s+varying)$/i;
+
+export interface MetadataColumnTypeLabel {
+  dataType: string;
+  characterMaximumLength?: number | null;
+  numericPrecision?: number | null;
+  numericScale?: number | null;
+}
+
+export function formatMetadataColumnTypeLabel({ dataType, characterMaximumLength, numericPrecision, numericScale }: MetadataColumnTypeLabel): string {
+  const typeName = dataType.trim();
+  if (!typeName || /\([^)]*\)\s*$/.test(typeName)) return typeName;
+  if (characterMaximumLength != null && characterMaximumLength > 0 && CHARACTER_LENGTH_TYPE_PATTERN.test(typeName)) {
+    return `${typeName}(${characterMaximumLength})`;
+  }
+  if (numericPrecision != null && /^(?:numeric|decimal)$/i.test(typeName)) {
+    return `${typeName}(${numericPrecision},${numericScale ?? 0})`;
+  }
+  return typeName;
+}
+
+/**
+ * Resolve the data type used to drive per-column alignment and other
+ * type-driven rendering in the query-result grid.
+ *
+ * Unlike {@link resolveHeaderColumnType}, the **ResultSet `column_types` wins
+ * over table metadata** for alignment purposes.  Table metadata is matched by
+ * the source column name and reflects the underlying column declaration, so
+ * relying on it for alignment produces wrong results when the query casts the
+ * value to a different type — e.g. `SELECT CAST(amount AS TEXT) AS amount`
+ * would still look numeric and be right-aligned.  The actual ResultSet type
+ * (`text`) reflects what the user sees and must take precedence.  Table
+ * metadata is only consulted when the ResultSet does not supply a non-empty
+ * type for that index.
+ */
+export interface ResultColumnTypeResolution {
+  /** Type reported by the ResultSet for this column (by index). */
+  resultColumnType?: string;
+  /** Lower-cased name of the column in the ResultSet. */
+  resultColumnName?: string;
+  /** Lower-cased name of the underlying source column, when known. */
+  sourceColumnName?: string;
+  /** Map of lower-cased column name -> table metadata type. */
+  tableColumnTypesByName?: ReadonlyMap<string, string>;
+}
+
+export function resolveResultColumnType({ resultColumnType, resultColumnName, sourceColumnName, tableColumnTypesByName }: ResultColumnTypeResolution): string | undefined {
+  const fromResult = resultColumnType?.trim();
+  if (fromResult) return fromResult;
+
+  const lookup = tableColumnTypesByName ?? EMPTY_STRING_MAP;
+  const fromSource = sourceColumnName ? lookup.get(sourceColumnName) : undefined;
+  if (fromSource && fromSource.trim()) return fromSource;
+  const fromResultName = resultColumnName ? lookup.get(resultColumnName) : undefined;
+  return fromResultName && fromResultName.trim() ? fromResultName : undefined;
+}
+
+const EMPTY_STRING_MAP: ReadonlyMap<string, string> = new Map();
+const TRANSPARENT_NUMERIC_TYPE_WRAPPERS = new Set(["nullable", "lowcardinality"]);
+
+const NUMERIC_COLUMN_TYPE_BASES = new Set([
+  "tinyint",
+  "smallint",
+  "mediumint",
+  "int",
+  "integer",
+  "bigint",
+  "serial",
+  "smallserial",
+  "bigserial",
+  "int2",
+  "int4",
+  "int8",
+  "int1",
+  "int16",
+  "int32",
+  "int64",
+  "int128",
+  "int256",
+  "intn",
+  "uint",
+  "uint8",
+  "uint16",
+  "uint32",
+  "uint64",
+  "uint128",
+  "uint256",
+  "float",
+  "float4",
+  "float8",
+  "float16",
+  "float32",
+  "float64",
+  "floatn",
+  "real",
+  "double",
+  "decimal",
+  "decimal32",
+  "decimal64",
+  "decimal128",
+  "decimal256",
+  "decimaln",
+  "numeric",
+  "numericn",
+  "number",
+  "dec",
+  "fixed",
+  "money",
+  "money4",
+  "moneyn",
+  "smallmoney",
+  "smallmoneyn",
+  "binary_float",
+  "binary_double",
+  // Elasticsearch numeric mapping types.
+  "half_float",
+  "scaled_float",
+]);
+
+export function isNumericColumnType(dataType: string | undefined): boolean {
+  if (!dataType) return false;
+  let normalized = dataType.trim().toLowerCase();
+  while (normalized.endsWith(")")) {
+    const openIndex = normalized.indexOf("(");
+    if (openIndex <= 0 || !TRANSPARENT_NUMERIC_TYPE_WRAPPERS.has(normalized.slice(0, openIndex).trim())) break;
+    normalized = normalized.slice(openIndex + 1, -1).trim();
+  }
+  const base = normalized.split(/[\s([]/, 1)[0];
+  return NUMERIC_COLUMN_TYPE_BASES.has(base);
+}
+
+export const DATA_GRID_TYPE_VISUAL_KINDS = ["integer", "numeric", "string", "boolean", "temporal", "structured", "identifier", "binary", "spatial", "unknown"] as const;
+
+export type DataGridTypeVisualKind = (typeof DATA_GRID_TYPE_VISUAL_KINDS)[number];
+
+const INTEGER_COLUMN_TYPE_BASES = new Set([
+  "tinyint",
+  "smallint",
+  "mediumint",
+  "int",
+  "integer",
+  "bigint",
+  "serial",
+  "smallserial",
+  "bigserial",
+  "int1",
+  "int2",
+  "int4",
+  "int8",
+  "int16",
+  "int32",
+  "int64",
+  "int128",
+  "int256",
+  "intn",
+  "uint",
+  "uint8",
+  "uint16",
+  "uint32",
+  "uint64",
+  "uint128",
+  "uint256",
+  "year",
+  // Elasticsearch integer mapping types with unambiguous names.
+  "unsigned_long",
+  "token_count",
+]);
+
+// Elasticsearch integer mapping types whose names collide with other
+// databases' non-integer types (Oracle LONG is a legacy text type, Informix
+// BYTE is binary), so they only apply to Elasticsearch-compatible databases.
+const ELASTICSEARCH_ONLY_INTEGER_COLUMN_TYPE_BASES = new Set(["byte", "short", "long"]);
+
+// Solr schema field types: point/trie numerics and dates carry a `p`/`t`
+// prefix, and analyzed text fields are named `text_*` — none of those names
+// exist in the SQL type palette, so they resolve only under a Solr connection.
+const SOLR_INTEGER_COLUMN_TYPE_BASES = new Set(["pint", "plong", "tint", "tlong", "sint", "slong"]);
+const SOLR_NUMERIC_COLUMN_TYPE_BASES = new Set(["pfloat", "pdouble", "tfloat", "tdouble", "sfloat", "sdouble", "pcurrency", "currency"]);
+const SOLR_TEMPORAL_COLUMN_TYPE_BASES = new Set(["pdate", "tdate"]);
+
+const STRING_COLUMN_TYPE_BASES = new Set([
+  "varchar",
+  "varchar2",
+  "nvarchar",
+  "nvarchar2",
+  "text",
+  "char",
+  "nchar",
+  "ntext",
+  "string",
+  "fixedstring",
+  "tinytext",
+  "mediumtext",
+  "longtext",
+  "clob",
+  "nclob",
+  "long",
+  "enum",
+  "enum8",
+  "enum16",
+  "set",
+  "character",
+  "character varying",
+  "national character",
+  "national character varying",
+  // Elasticsearch text-like mapping types.
+  "keyword",
+  "constant_keyword",
+  "wildcard",
+  "match_only_text",
+  "search_as_you_type",
+  "completion",
+  "ip",
+  "version",
+]);
+
+const BOOLEAN_COLUMN_TYPE_BASES = new Set(["bool", "boolean", "bit"]);
+const TEMPORAL_COLUMN_TYPE_BASES = new Set(["date", "date_nanos", "date32", "daten", "time", "time64", "timen", "timetz", "datetime", "datetime2", "datetime4", "datetime64", "datetimen", "datetimeoffset", "datetimeoffsetn", "smalldatetime", "timestamp", "timestampdty", "timestamptz", "interval"]);
+const STRUCTURED_COLUMN_TYPE_BASES = new Set(["json", "jsonb", "jsonpath", "xml", "xmltype", "array", "map", "tuple", "struct", "row", "object", "nested", "flattened", "document", "variant"]);
+const IDENTIFIER_COLUMN_TYPE_BASES = new Set(["uuid", "uniqueidentifier", "rowid", "urowid"]);
+const BINARY_COLUMN_TYPE_BASES = new Set(["bytea", "blob", "tinyblob", "mediumblob", "longblob", "binary", "varbinary", "image", "raw", "long raw", "bfile"]);
+const SPATIAL_COLUMN_TYPE_BASES = new Set(["geometry", "geography", "sdo_geometry", "point", "linestring", "polygon", "multipoint", "multilinestring", "multipolygon", "geometrycollection"]);
+const TYPE_VISUAL_TRANSPARENT_WRAPPERS = new Set(["nullable", "lowcardinality"]);
+
+function unwrapDataGridColumnType(dataType: string): { normalized: string; array: boolean } {
+  let normalized = dataType.trim().toLowerCase().replace(/\s+/g, " ");
+  let array = false;
+  while (normalized) {
+    if (/\[\s*\]$/.test(normalized)) {
+      array = true;
+      normalized = normalized.replace(/(?:\[\s*\])+$/, "").trim();
+      continue;
+    }
+    const wrapper = normalized.match(/^([a-z][a-z0-9_]*)\s*\((.*)\)$/s);
+    if (!wrapper) break;
+    const wrapperName = wrapper[1] ?? "";
+    if (wrapperName === "array") {
+      array = true;
+      normalized = wrapper[2]?.trim() ?? "";
+      continue;
+    }
+    if (!TYPE_VISUAL_TRANSPARENT_WRAPPERS.has(wrapperName)) break;
+    normalized = wrapper[2]?.trim() ?? "";
+  }
+  // PostgreSQL exposes array type names through Type.name() using its catalog
+  // convention (`_int4`, `_text`, `_jsonb`, including custom arrays).
+  if (normalized.length > 1 && normalized.startsWith("_")) array = true;
+  return { normalized, array };
+}
+
+function dataGridColumnTypeBase(dataType: string): { base: string; array: boolean } {
+  const unwrapped = unwrapDataGridColumnType(dataType);
+  let base = unwrapped.normalized.replace(/\s+unsigned\b/g, "").trim();
+  const parameterStart = base.indexOf("(");
+  if (parameterStart >= 0) base = base.slice(0, parameterStart).trim();
+  if (base.startsWith("timestamp with ")) base = "timestamptz";
+  else if (base.startsWith("timestamp without ")) base = "timestamp";
+  else if (base.startsWith("time with ")) base = "timetz";
+  else if (base.startsWith("time without ")) base = "time";
+  else if (base === "double precision") base = "double";
+  return { base, array: unwrapped.array };
+}
+
+/**
+ * Collapse driver-specific SQL type names into the small semantic palette used
+ * by grid headers and values. Unknown types deliberately stay neutral.
+ */
+export function resolveDataGridTypeVisualKind(dataType: string | undefined, databaseType?: DatabaseType): DataGridTypeVisualKind {
+  if (!dataType?.trim()) return "unknown";
+  const { base, array } = dataGridColumnTypeBase(dataType);
+  if (array) return "structured";
+  if (databaseType === "sqlserver" && (base === "timestamp" || base === "rowversion")) return "binary";
+  if (databaseType === "postgres" && (base === "bit" || base === "bit varying")) return "binary";
+  if ((isElasticsearchCompatibleDatabaseType(databaseType) || isSolrDatabaseType(databaseType)) && ELASTICSEARCH_ONLY_INTEGER_COLUMN_TYPE_BASES.has(base)) return "integer";
+  if (INTEGER_COLUMN_TYPE_BASES.has(base)) return "integer";
+  if (isSolrDatabaseType(databaseType)) {
+    if (SOLR_INTEGER_COLUMN_TYPE_BASES.has(base)) return "integer";
+    if (SOLR_NUMERIC_COLUMN_TYPE_BASES.has(base)) return "numeric";
+    if (SOLR_TEMPORAL_COLUMN_TYPE_BASES.has(base)) return "temporal";
+    if (base.startsWith("text")) return "string";
+  }
+  if (isNumericColumnType(dataType)) return "numeric";
+  if (BOOLEAN_COLUMN_TYPE_BASES.has(base)) return "boolean";
+  if (TEMPORAL_COLUMN_TYPE_BASES.has(base) || base.startsWith("timestamp_")) return "temporal";
+  if (STRUCTURED_COLUMN_TYPE_BASES.has(base)) return "structured";
+  if (IDENTIFIER_COLUMN_TYPE_BASES.has(base)) return "identifier";
+  if (BINARY_COLUMN_TYPE_BASES.has(base)) return "binary";
+  if (SPATIAL_COLUMN_TYPE_BASES.has(base)) return "spatial";
+  if (STRING_COLUMN_TYPE_BASES.has(base)) return "string";
+  return "unknown";
+}

@@ -1,0 +1,106 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { test } from "vitest";
+
+function searchBarSlotSource(): string {
+  const source = readFileSync(path.resolve("apps/desktop/src/components/document/DocumentBrowser.vue"), "utf8");
+  const start = source.indexOf("<template #search-bar");
+  const end = source.indexOf("\n    </DataGrid>", start);
+  assert.notEqual(start, -1, "expected DocumentBrowser search-bar slot");
+  assert.notEqual(end, -1, "expected DocumentBrowser DataGrid closing tag");
+  return source.slice(start, end);
+}
+
+function documentBrowserSource(): string {
+  return readFileSync(path.resolve("apps/desktop/src/components/document/DocumentBrowser.vue"), "utf8");
+}
+
+test("mongo document result search bar does not render a duplicate refresh button", () => {
+  const slot = searchBarSlotSource();
+  assert.equal(slot.includes('{{ t("grid.refresh") }}'), false);
+  assert.equal(slot.includes("RefreshCcw"), false);
+});
+
+test("mongo document table passes copy context to the data grid", () => {
+  const source = documentBrowserSource();
+  assert.match(source, /<DataGrid[\s\S]*?:database-type="props\.databaseType"[\s\S]*?<\/DataGrid>/);
+  assert.match(source, /const customSaveHandler = computed<CustomSaveHandler>\(\(\) => \(\{[\s\S]*?targetLabel: props\.collection,[\s\S]*?\}\)\);/);
+  assert.match(source, /mongo_copy_documents: copyDocuments\.value/);
+  assert.match(source, /result\.extended_documents\?\.length === nextDocuments\.length/);
+  assert.match(source, /props\.databaseType === "mongodb" && mongoCopyDocumentsAvailable\.value/);
+});
+
+test("mongo document row clones reuse the type-preserving source document for saves and previews", () => {
+  const source = documentBrowserSource();
+  assert.match(source, /type DocumentGridChanges = \{[\s\S]*?newRowMeta: GridNewRowMeta\[\];/);
+  assert.match(source, /function buildMongoGridInsertDocument\([\s\S]*?copyDocuments\.value\[sourceIndex\][\s\S]*?buildMongoCopyDocumentFromOriginal\([\s\S]*?excludePrimaryKeys: true/);
+  assert.match(source, /buildMongoGridInsertDocument\(newRow, cols, newRowMeta\)/);
+  assert.match(source, /buildMongoGridInsertDocument\(newRow, columns, newRowMeta\[newRowIndex\]\)/);
+  assert.match(source, /preserveBsonTypes = sourceIndex !== undefined && copyDocuments\.value\[sourceIndex\] !== undefined/);
+  assert.match(source, /documentInsertDocument\(props\.connectionId, props\.database, props\.collection, JSON\.stringify\(doc\), undefined, preserveBsonTypes\)/);
+});
+
+test("document edit mode toggles whole JSON editing for insert and save", () => {
+  const source = documentBrowserSource();
+  assert.match(source, /documentEditMode = ref<"fields" \| "json">\("json"\)/);
+  assert.match(source, /setDocumentEditMode\('json'\)/);
+  assert.match(source, /setDocumentEditMode\('fields'\)/);
+  assert.match(source, /function startEdit\(\)[\s\S]*?documentEditMode\.value = "json"/);
+  assert.match(source, /RedisJsonEditor v-model="editJson"/);
+  assert.match(source, /documentEditMode\.value = "json"/);
+  assert.match(source, /parseDocumentStoreJsonDocument\(editJson\.value, documentStoreProvider\.value\.kind\)/);
+  assert.match(source, /emptyDocumentJson\(\)/);
+  assert.match(source, /mongo\.jsonReplaceHint/);
+  assert.match(source, /isSavingDocument/);
+  assert.match(source, /unsupportedJsonNumber|unsupported-number/);
+  assert.match(source, /pointer-events-none/);
+  assert.match(source, /mongo\.jsonIdRequired/);
+  assert.match(source, /applyDocumentStoreIdentityPlan/);
+  assert.match(source, /planDocumentStoreIdentityMigration/);
+  assert.match(source, /insertDocumentStoreDocumentCore|insertDocumentStoreDocument/);
+});
+
+test("document save uses shared identity plan and write helpers", () => {
+  const source = documentBrowserSource();
+  assert.match(source, /planDocumentStoreIdentityMigration\(/);
+  assert.match(source, /applyDocumentStoreIdentityPlan\(/);
+  assert.match(source, /resolveDocumentStoreWriteRouting\(/);
+  assert.match(source, /isDocumentStoreIdentityField\(/);
+  assert.match(source, /normalizeDocumentStoreRouting\(/);
+  // No local rekey/replace triple-copy orchestration.
+  assert.doesNotMatch(source, /async function rekeyDocumentStoreDocument/);
+  assert.doesNotMatch(source, /async function replaceDocumentStoreDocument/);
+});
+
+test("document table wires on-demand exact total counting for estimated mongo totals", () => {
+  const source = documentBrowserSource();
+  assert.match(source, /:count-total-rows="countExactDocumentTotal"/);
+  assert.match(source, /:inexact-total-row-count-mode="documentStoreProvider\.kind === 'mongodb' \? 'estimated' : 'at-least'"/);
+  assert.match(source, /async function countExactDocumentTotal/);
+  assert.match(source, /const request = loadedDocumentQueryTotalCountRequest/);
+  assert.match(source, /if \(!request \|\| !isCurrentDocumentQueryTotalCountRequest\(request\)\) return undefined;/);
+  assert.match(source, /api\.mongoCountDocuments\(request\.connectionId, request\.database, request\.collection, request\.filter, "accurate"\)/);
+  assert.equal(source.match(/if \(!isCurrentDocumentQueryTotalCountRequest\(request\)\) return undefined;/g)?.length, 2);
+  assert.match(source, /"accurate"/);
+});
+
+test("document pagination commits page index with fetched rows", () => {
+  const source = documentBrowserSource();
+  assert.match(source, /async function load\(options: \{ page\?: number; append\?: boolean; offset\?: number; limit\?: number \} = \{\}\)/);
+  assert.match(source, /await load\(\{ page: nextPage, append: true, offset: normalizedOffset, limit: normalizedLimit \}\)/);
+  assert.match(source, /await load\(\{ page: nextPage, offset: nextPage \* normalizedLimit, limit: normalizedLimit \}\)/);
+  assert.match(source, /if \(options\.page !== undefined\) page\.value = options\.page;/);
+});
+
+test("document query inputs apply on Enter and reserve Shift+Enter for newlines", () => {
+  const source = documentBrowserSource();
+  // Both bars route every key through one handler, because Enter has to pick a
+  // pending completion before it may run the query.
+  assert.equal(source.match(/@keydown="onDocumentQueryKeydown\(\$event, '(?:filter|sort)'\)"/g)?.length, 2);
+  assert.match(source, /const plainEnter = !event\.ctrlKey && !event\.metaKey && !event\.altKey && !event\.shiftKey;/);
+  // Plain Enter and Ctrl/Cmd+Enter apply; Shift+Enter and Alt+Enter fall
+  // through to the textarea so they still insert a newline.
+  assert.match(source, /if \(!plainEnter && !\(\(event\.ctrlKey \|\| event\.metaKey\) && !event\.altKey && !event\.shiftKey\)\) return;/);
+  assert.doesNotMatch(source, /@keydown\.shift\.enter\.prevent="applyFilter"/);
+});

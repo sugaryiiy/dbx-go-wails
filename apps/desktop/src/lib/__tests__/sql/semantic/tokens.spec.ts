@@ -1,0 +1,82 @@
+import { describe, expect, it } from "vitest";
+import { findActiveSqlStatementSpan, isSuppressedSqlSemanticContext, tokenizeSqlSemantic, unquoteSqlSemanticIdentifier } from "@/lib/sql/semantic/tokens";
+
+describe("sqlSemanticTokens", () => {
+  it("tokenizes comments, strings, quoted identifiers, brackets, and backticks", () => {
+    const sql = "select [User Name], `order`, \"Mixed\" from users -- comment\nwhere name = 'it''s ok'";
+    const tokens = tokenizeSqlSemantic(sql);
+
+    expect(tokens.some((token) => token.kind === "quoted_identifier" && unquoteSqlSemanticIdentifier(token) === "User Name")).toBe(true);
+    expect(tokens.some((token) => token.kind === "quoted_identifier" && unquoteSqlSemanticIdentifier(token) === "order")).toBe(true);
+    expect(tokens.some((token) => token.kind === "quoted_identifier" && unquoteSqlSemanticIdentifier(token) === "Mixed")).toBe(true);
+    expect(tokens.some((token) => token.kind === "comment" && token.text.includes("comment"))).toBe(true);
+    expect(tokens.some((token) => token.kind === "string" && token.text === "'it''s ok'")).toBe(true);
+  });
+
+  it("tokenizes Unicode identifier prefixes as complete word tokens", () => {
+    const tokens = tokenizeSqlSemantic("SELECT 名称 客户名称 𠀀字段", "sqlserver");
+
+    expect(tokens.filter((token) => token.kind === "word").map((token) => token.text)).toEqual(["SELECT", "名称", "客户名称", "𠀀字段"]);
+  });
+
+  it("marks comments and string literals as suppressed contexts", () => {
+    const sql = "select * from users -- user.";
+    const tokens = tokenizeSqlSemantic(sql);
+
+    expect(isSuppressedSqlSemanticContext(tokens, sql.length)).toBe(true);
+    expect(isSuppressedSqlSemanticContext(tokens, "select * from users".length)).toBe(false);
+  });
+
+  it("records whether quoted tokens have a closing delimiter", () => {
+    const complete = tokenizeSqlSemantic("select 'value'").find((token) => token.kind === "string");
+    const incomplete = tokenizeSqlSemantic("select '''").find((token) => token.kind === "string");
+
+    expect(complete?.closed).toBe(true);
+    expect(incomplete?.closed).toBe(false);
+  });
+
+  it("handles hash tokens according to the SQL dialect", () => {
+    const sqlServerSql = "SELECT * FROM #temp; SELECT * FROM ##global_temp; SELECT * FROM tempdb..#temp";
+    const sqlServerTokens = tokenizeSqlSemantic(sqlServerSql, "sqlserver");
+    const postgresTokens = tokenizeSqlSemantic("SELECT left_value#right_value", "postgres");
+
+    expect(sqlServerTokens.filter((token) => token.kind === "word" && token.text.startsWith("#")).map((token) => token.text)).toEqual(["#temp", "##global_temp", "#temp"]);
+    expect(sqlServerTokens.some((token) => token.kind === "comment")).toBe(false);
+    expect(postgresTokens.some((token) => token.kind === "operator" && token.text === "#")).toBe(true);
+    expect(postgresTokens.some((token) => token.kind === "comment")).toBe(false);
+    expect(tokenizeSqlSemantic("SELECT 1 # comment", "mysql").some((token) => token.kind === "comment" && token.text === "# comment")).toBe(true);
+  });
+
+  it("finds active statement spans across semicolon-separated scripts", () => {
+    const sql = "select * from users;\nselect * from orders where id = 1;";
+    const cursor = sql.indexOf("orders");
+    const span = findActiveSqlStatementSpan(sql, tokenizeSqlSemantic(sql), cursor);
+
+    expect(sql.slice(span.start, span.end)).toBe("select * from orders where id = 1");
+  });
+
+  it('treats "..." as identifier quoting by default, modeling MySQL\'s ANSI_QUOTES sql_mode', () => {
+    const sql = 'SELECT "col" FROM "orders"';
+    const tokens = tokenizeSqlSemantic(sql, "mysql");
+
+    expect(tokens.some((token) => token.kind === "quoted_identifier" && unquoteSqlSemanticIdentifier(token) === "col")).toBe(true);
+    expect(tokens.some((token) => token.kind === "quoted_identifier" && unquoteSqlSemanticIdentifier(token) === "orders")).toBe(true);
+    expect(tokens.some((token) => token.kind === "string")).toBe(false);
+  });
+
+  it('opts into treating "..." as a string literal, modeling MySQL\'s default (non-ANSI_QUOTES) sql_mode', () => {
+    const sql = 'SELECT "col" FROM "orders"';
+    const tokens = tokenizeSqlSemantic(sql, "mysql", { mysqlDoubleQuoteIsString: true });
+
+    expect(tokens.some((token) => token.kind === "string" && token.text === '"col"')).toBe(true);
+    expect(tokens.some((token) => token.kind === "string" && token.text === '"orders"')).toBe(true);
+    expect(tokens.some((token) => token.kind === "quoted_identifier")).toBe(false);
+  });
+
+  it('applies MySQL backslash escaping inside a mysqlDoubleQuoteIsString "..." string when opted in', () => {
+    const sql = 'SELECT "it\\"s ok"';
+    const tokens = tokenizeSqlSemantic(sql, "mysql", { mysqlDoubleQuoteIsString: true, mysqlBackslashEscape: true });
+
+    expect(tokens.some((token) => token.kind === "string" && token.text === '"it\\"s ok"')).toBe(true);
+  });
+});

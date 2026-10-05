@@ -1,0 +1,79 @@
+import { describe, expect, it } from "vitest";
+import { queryResultNameFromPreamble, queryResultSourceLabel, queryResultSourceNameParts } from "@/lib/sql/queryResultSource";
+
+describe("queryResultNameFromPreamble", () => {
+  it("uses only the immediately preceding line comment", () => {
+    expect(queryResultNameFromPreamble("-- Name: Latest name\r\n")).toBe("Latest name");
+    expect(queryResultNameFromPreamble("-- unrelated\n")).toBe("unrelated");
+    expect(queryResultNameFromPreamble("-- indented\n   ")).toBe("indented");
+    expect(queryResultNameFromPreamble("-- Name: Old name\n-- unrelated\n")).toBe("unrelated");
+    expect(queryResultNameFromPreamble("-- Name: explicit\n--   \n")).toBeUndefined();
+  });
+
+  it("stops at a blank line and ignores non-line comments", () => {
+    expect(queryResultNameFromPreamble("-- older comment\n\n")).toBeUndefined();
+    expect(queryResultNameFromPreamble("/* Name: block */\n")).toBeUndefined();
+    expect(queryResultNameFromPreamble("-- earlier comment\n/* block */\n")).toBeUndefined();
+  });
+
+  it("accepts hash comments for MySQL without treating them as portable SQL comments", () => {
+    expect(queryResultNameFromPreamble("# MySQL report\n", { databaseType: "mysql" })).toBe("MySQL report");
+    expect(queryResultNameFromPreamble("# temporary table\n", { databaseType: "sqlserver" })).toBeUndefined();
+    expect(queryResultNameFromPreamble("# portable comment\n")).toBeUndefined();
+    expect(queryResultNameFromPreamble("# MySQL report\n\n", { databaseType: "mysql" })).toBeUndefined();
+  });
+});
+
+describe("queryResultSourceLabel", () => {
+  it("uses the current database for an unqualified table", () => {
+    expect(queryResultSourceLabel("SELECT * FROM users", { database: "app", databaseType: "mysql" })).toBe("app.users");
+  });
+
+  it("prefers the final explicit qualifier", () => {
+    expect(queryResultSourceLabel("SELECT * FROM analytics.events", { database: "app", databaseType: "mysql" })).toBe("analytics.events");
+    expect(queryResultSourceLabel("SELECT * FROM [ServerOne].[AppDb].[dbo].[Users]", { database: "fallback", databaseType: "sqlserver" })).toBe("dbo.Users");
+  });
+
+  it("preserves quoted identifier names", () => {
+    expect(queryResultSourceLabel('SELECT * FROM "Sales"."Orders"', { database: "app", databaseType: "postgres" })).toBe("Sales.Orders");
+    expect(queryResultSourceLabel("SELECT * FROM HR.EMPLOYEES", { database: "fallback", databaseType: "oracle" })).toBe("HR.EMPLOYEES");
+  });
+
+  it("labels aggregate joins with the first outer physical table", () => {
+    const sql = `SELECT
+      g.group_name AS GROUP_NAME,
+      COUNT(*) AS USER_COUNT,
+      SUM(CASE WHEN u.status = 1 THEN 1 ELSE 0 END) AS ACTIVE_USER_COUNT
+    FROM groups g
+    JOIN group_users gu ON gu.group_id = g.id
+    JOIN users u ON u.id = gu.user_id
+    GROUP BY g.id, g.group_name`;
+
+    expect(queryResultSourceLabel(sql, { database: "aaa", databaseType: "mysql" })).toBe("aaa.groups");
+  });
+
+  it("prefers mutation targets over other table sources", () => {
+    expect(queryResultSourceLabel("UPDATE users SET active = true FROM audit_events ae WHERE ae.user_id = users.id RETURNING users.id", { database: "app", databaseType: "postgres" })).toBe("app.users");
+    expect(queryResultSourceLabel("INSERT INTO audit.events (id) VALUES (1) RETURNING id", { database: "app", databaseType: "postgres" })).toBe("audit.events");
+    expect(queryResultSourceLabel("DELETE FROM users WHERE id = 1 RETURNING id", { database: "app", databaseType: "postgres" })).toBe("app.users");
+  });
+
+  it("ignores non-physical outer sources", () => {
+    expect(queryResultSourceLabel("WITH recent AS (SELECT * FROM orders) SELECT * FROM recent", { database: "app", databaseType: "postgres" })).toBeUndefined();
+    expect(queryResultSourceLabel("SELECT * FROM (SELECT * FROM users) nested", { database: "app", databaseType: "mysql" })).toBeUndefined();
+    expect(queryResultSourceLabel("SELECT * FROM read_csv('users.csv') csv", { database: "main", databaseType: "duckdb" })).toBeUndefined();
+    expect(queryResultSourceLabel("SELECT 1", { database: "app", databaseType: "mysql" })).toBeUndefined();
+  });
+});
+
+describe("queryResultSourceNameParts", () => {
+  it("keeps the qualifier separate even when the database name contains dots", () => {
+    expect(queryResultSourceNameParts("SELECT * FROM data_monitor", { database: "cosimulation2.0", databaseType: "mysql" })).toEqual({ qualifier: "cosimulation2.0", name: "data_monitor" });
+  });
+
+  it("prefers the explicit qualifier and drops an empty one", () => {
+    expect(queryResultSourceNameParts("SELECT * FROM analytics.events", { database: "app", databaseType: "mysql" })).toEqual({ qualifier: "analytics", name: "events" });
+    expect(queryResultSourceNameParts("SELECT * FROM events", { databaseType: "mysql" })).toEqual({ name: "events" });
+    expect(queryResultSourceNameParts("SELECT 1", { database: "app", databaseType: "mysql" })).toBeUndefined();
+  });
+});

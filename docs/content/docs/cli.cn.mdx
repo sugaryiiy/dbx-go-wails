@@ -1,0 +1,294 @@
+---
+title: DBX CLI
+description: 使用原生 DBX CLI 在终端、脚本、CI 和 Codex 中读取连接、Schema、查询结果和 AI 上下文。
+---
+
+<Callout type="info">DBX CLI 是独立命令行包，适合终端、脚本和 AI 编程助手工作流。它与 MCP Server 共享 DBX 连接存储和 SQL 安全规则。</Callout>
+
+## 安装
+
+### npm
+
+```bash
+npm install -g @dbx-app/cli
+```
+
+### Homebrew
+
+```bash
+brew tap t8y2/tap
+brew install dbx-cli
+```
+
+通过 npm 安装时需要 Node.js 18.18.0 或更高版本。CLI 本身不依赖 `better-sqlite3`，也不受 Node.js native module ABI 影响。Homebrew 用户不需要单独管理 Node.js。
+
+### 独立原生版本
+
+`packages-v*` GitHub Release 会提供适用于 macOS、Linux 和 Windows 的 CLI 原生压缩包。下载对应平台的压缩包后，使用 `CLI-SHA256SUMS` 校验，解压即可直接运行 `dbx`，不需要 Node.js。
+
+```bash
+tar -xzf dbx-cli-linux-x64-gnu.tar.gz
+chmod +x dbx
+./dbx --version
+```
+
+如果使用自定义或便携版 DBX 数据目录，可以设置 `DBX_DATA_DIR`。
+
+查看版本：
+
+```bash
+dbx --version
+```
+
+## 官方 Agent Skill
+
+CLI 二进制内置了供 Codex、Claude Code 等可执行 Shell 的 AI Agent 使用的官方 DBX Skill。安装或升级 CLI 后启用一次：
+
+```bash
+dbx agent setup
+dbx agent status
+```
+
+默认安装到 `~/.agents/skills/dbx`。`setup` 全程离线运行，可重复执行并升级到 CLI 内置的新版本；如果目标位置存在非 DBX 管理或经过本地修改的 Skill，则不会覆盖，除非显式使用 `--force`。Agent 使用其它 Skill 根目录时可传入 `--skills-dir <路径>`。
+
+Skill 负责告诉 AI 何时以及如何安全调用 CLI，并不会绕过 CLI、连接或数据库本身的权限限制。普通用户仍然可以直接运行所有 `dbx` 命令。
+
+## 常用命令
+
+```bash
+dbx doctor
+dbx capabilities
+dbx agent setup
+dbx agent status --json
+dbx connections list --json
+dbx connections list --format csv
+dbx schema list local --json
+dbx schema describe local users --json
+dbx query local "select count(*) as total from users" --json
+dbx query local "select id, name from users" --format csv
+dbx query local "select * from users" --limit 50 --timeout 10s --json
+dbx query local --file ./query.sql --json
+dbx context local --tables users,orders
+dbx open local users
+```
+
+## 诊断
+
+使用 `dbx doctor` 查看本地 DBX 路径、连接存储健康状态，以及桌面端 bridge 是否可用：
+
+```bash
+dbx doctor
+dbx doctor --json
+```
+
+如果 npm 没有安装当前平台包，请不要使用 `--no-optional`，重新安装：
+
+```bash
+npm uninstall -g @dbx-app/cli
+npm install -g @dbx-app/cli
+```
+
+使用 `dbx capabilities` 查看哪些数据库类型可以直接查询，哪些当前需要 DBX 桌面端：
+
+```bash
+dbx capabilities
+dbx capabilities --json
+```
+
+当前原生直连清单由 CLI 二进制维护，包括 PostgreSQL、Redshift、MySQL、Doris、StarRocks、Manticore Search、SQLite、rqlite、KWDB 和 QuestDB。`dbx capabilities` 是当前版本的权威输出；其他类型需要运行中的 DBX Desktop bridge 或对应 Agent/外部驱动基础设施。
+
+## 执行模式
+
+### 本地存储
+
+默认情况下 CLI 读取与 Desktop/MCP 相同的 `dbx.db` 连接存储。设置 `DBX_DATA_DIR` 时应指向包含 `dbx.db` 的目录。
+
+- 原生直连类型可以在 Desktop 关闭时查询
+- bridge 类型需要 Desktop 正在运行，并能从数据目录中的 bridge 端口文件发现本地服务
+- Agent/JDBC、DuckDB 和其它外部驱动路径仍需要在 DBX 中安装匹配组件
+- `dbx open` 始终是 Desktop UI 操作，Desktop 未运行时返回 `DBX_NOT_RUNNING`
+
+### DBX Web / Docker
+
+设置 `DBX_WEB_URL` 后，CLI 改为使用部署的 DBX Web 后端，而不是读取本机连接存储：
+
+```bash
+DBX_WEB_URL=https://dbx.example.com \
+DBX_WEB_PASSWORD='your-login-password' \
+dbx connections list --json
+```
+
+`DBX_WEB_PASSWORD` 是 Web 登录密码。Web 模式中的连接、权限、驱动和文件路径都属于服务器环境；`dbx open` 仍需要本机 Desktop bridge，不应作为远程 Web 自动化入口。
+
+## 默认连接
+
+设置 `DBX_CONNECTION` 后，`query` 和 `context` 命令可以省略连接名：
+
+```bash
+DBX_CONNECTION=local dbx query "select 1" --json
+DBX_CONNECTION=local dbx context --tables users,orders
+```
+
+## 输出格式
+
+使用 `--json` 或 `--format json` 可以获得稳定的机器可读输出。`--format csv` 适合把查询、连接、Schema 数据传给其它命令行工具。
+
+```bash
+dbx query local "select id, name from users" --format csv
+```
+
+错误会写入 stderr，并返回非零退出码。
+
+## 查询控制
+
+`dbx query` 对 SQL 连接执行一条 SQL，对 MongoDB 连接接受受支持的 Mongo shell 命令。Redis 不通过这个命令执行，需使用 MCP Redis 工具或 DBX 专用工作区。默认只读。
+
+```bash
+dbx query local "select * from users" --limit 50 --timeout 10s --json
+```
+
+时间支持 `ms`、`s`、`m`，例如 `500ms`、`10s`、`1m`。
+
+非危险写操作需要显式使用 `--allow-writes`：
+
+```bash
+dbx query local "update users set name = 'Ada' where id = 1" --allow-writes
+```
+
+`DROP`、`TRUNCATE`、`ALTER` 等危险 SQL 需要同时显式使用 `--allow-writes` 和 `--allow-dangerous-sql`。显式事务语句仍会被 CLI 阻止；需要多步固定 Session 时使用 [MCP 有状态会话](/cn/docs/mcp#有状态查询会话) 或 DBX 编辑器。
+
+生产数据库上的写入和 DDL 即使传入两个允许参数也会被阻止。CLI 使用连接/数据库生产识别、SQL 风险分类、连接只读保护和数据库权限形成多层边界；允许参数不是绕过生产保护的开关。
+
+## 以短横线开头的 SQL
+
+如果 SQL 以短横线开头，在 SQL 前加 `--`：
+
+```bash
+dbx query local --json -- "-- comment
+select 1"
+```
+
+## 错误码
+
+CLI JSON 错误使用稳定错误码：
+
+| 错误码                   | 含义                         |
+| ------------------------ | ---------------------------- |
+| `UNKNOWN_OPTION`         | 使用了不支持的参数           |
+| `INVALID_OPTION`         | 参数缺少值或值不合法         |
+| `INVALID_ARGUMENT`       | 位置参数缺失或冲突           |
+| `CONNECTION_STORE_ERROR` | DBX 连接存储存在，但无法读取 |
+| `CONNECTION_NOT_FOUND`   | 找不到指定的 DBX 连接        |
+| `SQL_BLOCKED`            | SQL 被安全规则拦截           |
+| `DBX_NOT_RUNNING`        | DBX 桌面端 bridge 不可用     |
+| `HOME_NOT_FOUND`         | 无法确定默认用户 Skill 目录  |
+| `SKILL_MODIFIED`         | Skill 未被 DBX 管理或已被修改 |
+| `SKILL_PATH_UNSAFE`      | 受管理的 Skill 路径是符号链接 |
+| `SKILL_READ_FAILED`      | 无法读取已安装的 Skill 文件  |
+| `SKILL_WRITE_FAILED`     | 无法安装 CLI 内置的 Skill    |
+| `ERROR`                  | 未预期的运行时错误           |
+
+## 桌面端 Deep Link
+
+DBX 桌面端支持通过 Deep Link 从浏览器、堡垒机或脚本唤起客户端。
+
+仅启动或聚焦 DBX，不打开其他窗口：
+
+```bash
+open 'dbx://open'
+```
+
+网页按钮可以直接使用：
+
+```html
+<a href="dbx://open">使用 DBX 打开</a>
+```
+
+使用不带 `id` 的 `dbx://connection/new` 可以打开新建连接窗口并预填连接信息。
+
+DSN 模式：
+
+```bash
+open 'dbx://connection/new?url=postgres%3A%2F%2Fapp%3Asecret%40db.internal%3A5432%2Forders'
+```
+
+字段模式：
+
+```bash
+open 'dbx://connection/new?type=mysql&host=127.0.0.1&port=3306&user=root&password=secret&database=test'
+```
+
+支持的字段：
+
+| 字段         | 含义                                                           |
+| ------------ | -------------------------------------------------------------- |
+| `type`       | 数据库类型；服务类连接包括 `etcd`、`consul`、`nacos-v2`、`nacos-v3`、`r-nacos` |
+| `url`        | 数据库 DSN，建议 URL encode                                    |
+| `name`       | DBX 中显示的连接名；未传时优先使用 `database`，其次使用 `host` |
+| `host`       | 主机地址                                                       |
+| `port`       | 端口                                                           |
+| `user`       | 用户名                                                         |
+| `password`   | 密码                                                           |
+| `database`   | 数据库名；Redis 可传 DB index，例如 `0`                        |
+| `url_params` | 额外连接参数，例如 `sslmode=require`                           |
+| `ssl`        | 是否启用 SSL，`true` 表示启用                                  |
+| `one_time`   | `true` 时自动连接，断开后自动删除连接信息                      |
+
+一次性连接示例：
+
+```bash
+open 'dbx://connection/new?type=redis&host=127.0.0.1&port=6379&user=default&password=secret&database=0&one_time=true'
+```
+
+Nacos 与服务注册中心示例：
+
+```bash
+open 'dbx://connection/new?type=consul&host=127.0.0.1&port=8500&password=acl-token'
+open 'dbx://connection/new?type=nacos-v3&host=127.0.0.1&port=8848&user=nacos&password=secret'
+open 'dbx://connection/new?type=r-nacos&url=http%3A%2F%2F127.0.0.1%3A8848%2Fnacos&user=admin&password=secret'
+```
+
+`nacos` 是 `nacos-v2` 的别名，`rnacos` 是 `r-nacos` 的别名。URL 模式会保留服务端点路径，顶层 `host`、`port`、`user`、`password`、`ssl` 会覆盖 `url` 中的对应值。Consul 的 `password` 表示 ACL token；Nacos 传入 `password` 时必须同时传入 `user`。省略 `v` 或使用 `v=1` 表示当前深链协议，其他版本会被拒绝。
+
+### 按 ID 更新已保存连接
+
+在同一个 `dbx://connection/new` 路由上增加 `id`，即可打开指定的已保存连接进行编辑。例如，堡垒机可以为已有连接传入新的登录凭据：
+
+```bash
+open 'dbx://connection/new?id=saved-connection-id&user=fresh-sso-token&password=fresh-sso-token'
+```
+
+将 `saved-connection-id` 替换为 MCP 工具 `dbx_list_connections` 返回的连接 ID。更新按 ID 精确匹配，不按显示名称查找。CLI 命令 `dbx connections list --json` 目前只列出名称和端点等信息，不返回连接 ID。
+
+收到更新链接后，DBX 只打开预填好的编辑窗口。检查修改内容并点击**保存**后，才会以原连接 ID 和原侧栏分组持久化修改。链接不会自动保存、测试或连接数据库；取消编辑不会修改已保存配置。ID 为空或不存在、目标是一次性连接、已有其他连接窗口打开时，更新会被拒绝，不会退回新建连接。
+
+更新支持使用内置 MySQL、PostgreSQL、SQL Server 配置的已保存字段式连接；存在非空 `connection_string` 的连接不支持此更新流程。只有链接中明确提供的字段才会修改：
+
+| 参数 | 更新行为 |
+| --- | --- |
+| `name`、`host` | 替换当前值，不接受空值 |
+| `port` | 替换为 1 到 65535 之间的整数端口 |
+| `user`、`password` | 预填凭据并保留首尾空白字符；传空值表示清空 |
+| `database`、`url_params` | 替换当前值；传空值表示清空 |
+| `ssl` | 更新 SSL 开关；最终 TLS 行为遵循驱动和 URL 参数规则 |
+
+省略的字段保留原值，包括端口和 SSL 设置。需要清空字段时，保留参数名并传空值，例如 `database=&url_params=`。参数值应进行 URL 编码，例如密码中的字面量 `+` 应编码为 `%2B`。
+
+保存时仍遵循现有的凭据清理规则和该连接的“保存密码”设置。
+
+除 `id` 和上述字段外，只接受可选的协议版本 `v=1`。更新链接不接受 `type`、`url`、`one_time`（包括 `one_time=false`）、未知参数或重复参数名，也不能更改驱动配置或要求自动操作。
+
+保存新的 SSO 凭据不会延长其有效期。MCP 可以读取保存后的连接配置，但仍会独立建立数据库会话，需要凭据仍然有效；更新不会把桌面端正在使用的会话转交给 MCP。
+
+<Callout type="info">测试系统级 `dbx://` 唤起前，请先安装并启动一次 DBX 桌面端，让系统注册 URL 协议。macOS 可使用 `open 'dbx://open'` 或 `open 'dbx://connection/new?...'` 测试。</Callout>
+
+<Callout type="warning">深链可能在浏览器或终端历史中暴露数据库密码或 Consul ACL token。不要将携带凭据的链接写入共享日志、Shell 历史、工单或聊天消息。</Callout>
+
+## Codex
+
+Codex 可以直接通过 shell 调用 CLI：
+
+```bash
+dbx schema describe local users --json
+dbx context local --tables users,orders | codex exec "Write a retention query"
+```

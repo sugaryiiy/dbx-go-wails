@@ -1,0 +1,224 @@
+export type SchemaDiffTableFilterPriority = "include" | "exclude";
+
+export interface SchemaDiffTableMapping {
+  sourceTable: string;
+  targetTable: string;
+}
+
+export interface SchemaDiffRoutineMapping {
+  sourceRoutine: string;
+  targetRoutine: string;
+}
+
+export interface SchemaDiffCompareOptions {
+  tables: boolean;
+  primaryKeys: boolean;
+  foreignKeys: boolean;
+  uniqueKeys: boolean;
+  checks: boolean;
+  exclusions: boolean;
+  views: boolean;
+  functions: boolean;
+  indexes: boolean;
+  sequences: boolean;
+  triggers: boolean;
+  rules: boolean;
+  owners: boolean;
+  cascadeDelete: boolean;
+  sequenceLastValues: boolean;
+  compareColumnOrder: boolean;
+  compareCharset: boolean;
+  ignoreTableNameCase: boolean;
+  ignoreColumnNameCase: boolean;
+  tableIncludePattern: string;
+  tableExcludePattern: string;
+  tableFilterPriority: SchemaDiffTableFilterPriority;
+  /**
+   * Explicitly selected table names to compare (the source table set, applied BEFORE the
+   * existing include/exclude regex filters). `undefined` means no visual restriction, so all
+   * tables still flow through the regex filters and legacy configs keep their
+   * behavior. `[]` means an explicitly enabled restriction with no selected tables and
+   * therefore compares nothing. A non-empty array restricts the comparison to exactly those
+   * names. Never initialize this to the full table
+   * list so newly added tables keep entering unrestricted comparisons and configs stay small.
+   */
+  selectedTables: string[] | undefined;
+  tableMappings?: SchemaDiffTableMapping[];
+  /**
+   * Explicitly selected routine keys (`name` or `name(args)`) to compare.
+   * `undefined` means no restriction (all functions when `functions` is on).
+   * `[]` means restriction enabled with nothing selected.
+   */
+  selectedRoutines: string[] | undefined;
+  routineMappings?: SchemaDiffRoutineMapping[];
+  detectRenames: boolean;
+  renameThreshold: number;
+  detectTableRenames: boolean;
+  enableRollback: boolean;
+  batchPatterns: string;
+  sourceDialect: string;
+  targetDialect: string;
+  compatibilityThreshold: number;
+  fieldMappings: FieldMappingEntry[];
+}
+
+export type FieldMappingParamStrategy = "preserve" | "strip" | "custom";
+
+export interface FieldMappingEntry {
+  sourceType: string;
+  targetType: string;
+  paramStrategy: FieldMappingParamStrategy;
+  customParams?: string;
+}
+
+export interface SchemaDiffConfig {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  sourceConnectionId: string;
+  sourceDatabase: string;
+  sourceSchema: string;
+  targetConnectionId: string;
+  targetDatabase: string;
+  targetSchema: string;
+  options: SchemaDiffCompareOptions;
+}
+
+export interface SchemaDiffOptionItem {
+  id: BooleanSchemaDiffCompareOptionKey;
+  labelKey: string;
+  defaultChecked: boolean;
+  children?: SchemaDiffOptionItem[];
+}
+
+export type BooleanSchemaDiffCompareOptionKey = {
+  [K in keyof SchemaDiffCompareOptions]-?: NonNullable<SchemaDiffCompareOptions[K]> extends boolean ? K : never;
+}[keyof SchemaDiffCompareOptions];
+
+export type SchemaDiffOptionsMap = Partial<Record<string, SchemaDiffOptionItem[]>>;
+
+export const DEFAULT_POSTGRES_OPTIONS: SchemaDiffCompareOptions = {
+  tables: true,
+  primaryKeys: true,
+  foreignKeys: true,
+  uniqueKeys: true,
+  checks: true,
+  exclusions: true,
+  views: true,
+  functions: true,
+  indexes: true,
+  sequences: true,
+  triggers: true,
+  rules: true,
+  owners: true,
+  cascadeDelete: false,
+  sequenceLastValues: true,
+  compareColumnOrder: false,
+  compareCharset: true,
+  ignoreTableNameCase: false,
+  ignoreColumnNameCase: false,
+  tableIncludePattern: "",
+  tableExcludePattern: "",
+  tableFilterPriority: "exclude",
+  selectedTables: undefined,
+  tableMappings: [],
+  selectedRoutines: undefined,
+  routineMappings: [],
+  detectRenames: false,
+  renameThreshold: 0.5,
+  detectTableRenames: false,
+  enableRollback: false,
+  batchPatterns: "",
+  sourceDialect: "",
+  targetDialect: "",
+  compatibilityThreshold: 0.5,
+  fieldMappings: [],
+};
+
+export const DEFAULT_MYSQL_OPTIONS: SchemaDiffCompareOptions = {
+  tables: true,
+  primaryKeys: true,
+  foreignKeys: true,
+  uniqueKeys: true,
+  checks: true,
+  exclusions: false,
+  views: true,
+  functions: true,
+  indexes: true,
+  sequences: false,
+  triggers: true,
+  rules: false,
+  owners: false,
+  cascadeDelete: false,
+  sequenceLastValues: false,
+  compareColumnOrder: false,
+  compareCharset: true,
+  ignoreTableNameCase: false,
+  ignoreColumnNameCase: false,
+  tableIncludePattern: "",
+  tableExcludePattern: "",
+  tableFilterPriority: "exclude",
+  selectedTables: undefined,
+  tableMappings: [],
+  selectedRoutines: undefined,
+  routineMappings: [],
+  detectRenames: false,
+  renameThreshold: 0.5,
+  detectTableRenames: false,
+  enableRollback: false,
+  batchPatterns: "",
+  sourceDialect: "",
+  targetDialect: "",
+  compatibilityThreshold: 0.5,
+  fieldMappings: [],
+};
+
+export function getDefaultOptionsForDbType(dbType: string): SchemaDiffCompareOptions {
+  if (dbType === "postgres" || dbType === "opengauss") {
+    return { ...DEFAULT_POSTGRES_OPTIONS };
+  }
+  return { ...DEFAULT_MYSQL_OPTIONS };
+}
+
+export function normalizeSchemaDiffCompareOptions(options: Partial<SchemaDiffCompareOptions> | null | undefined, dbType = "postgres"): SchemaDiffCompareOptions {
+  const defaults = getDefaultOptionsForDbType(dbType);
+  const normalized: SchemaDiffCompareOptions = {
+    ...defaults,
+    ...options,
+    tableMappings: Array.isArray(options?.tableMappings) ? options.tableMappings.map((mapping) => ({ ...mapping })) : defaults.tableMappings,
+    routineMappings: Array.isArray(options?.routineMappings) ? options.routineMappings.map((mapping) => ({ ...mapping })) : defaults.routineMappings,
+    selectedRoutines: options?.selectedRoutines === undefined ? defaults.selectedRoutines : options.selectedRoutines ? [...options.selectedRoutines] : options.selectedRoutines,
+  };
+  // Table compare owns views; turning tables off must not leave views loading metadata alone.
+  if (!normalized.tables) normalized.views = false;
+  return normalized;
+}
+
+export function createEmptyConfig(id: string, name: string): SchemaDiffConfig {
+  const now = Date.now();
+  return {
+    id,
+    name,
+    createdAt: now,
+    updatedAt: now,
+    sourceConnectionId: "",
+    sourceDatabase: "",
+    sourceSchema: "",
+    targetConnectionId: "",
+    targetDatabase: "",
+    targetSchema: "",
+    options: { ...DEFAULT_POSTGRES_OPTIONS },
+  };
+}
+
+export function cloneConfig(config: SchemaDiffConfig, newId: string, newName: string): SchemaDiffConfig {
+  const now = Date.now();
+  return {
+    ...config,
+    id: newId,
+    name: newName,
+    createdAt: now,
+    updatedAt: now,
+  };
+}

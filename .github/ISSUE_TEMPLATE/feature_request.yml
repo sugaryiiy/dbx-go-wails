@@ -1,0 +1,60 @@
+name: "💡 Feature Request / 功能建议"
+description: Propose a new feature, interaction improvement, or enhancement. / 提议新功能、交互改进或现有功能增强。
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        好的建议最好说明使用场景、数据库类型和期望效果。请避免只写“支持 X”。
+        Describe the use case, database type, and desired outcome; avoid requests that only say “support X”.
+        DBX 版本、运行环境、操作系统和系统架构可在应用内通过“设置 → 关于我们 → 复制支持信息”一键复制。
+        You can copy the DBX version, runtime, operating system, and architecture in the app via “Settings → About → Copy support information”.
+  - type: input
+    id: database
+    attributes:
+      label: 数据库类型和版本 / Database type and version
+      description: 通用功能请填写“通用”；特定数据源请注明类型和版本。 / Enter “通用” for general features; otherwise specify the data source and version.
+      placeholder: "例如：PostgreSQL 16.2 / MySQL 8.0 / Redis 7.2 / 通用 · General"
+    validations: {required: true}
+  - type: textarea
+    id: support-info
+    attributes:
+      label: 支持信息 / Support information
+      description: 粘贴应用中的支持信息。 / Paste the support information copied from the app.
+      placeholder: |
+        DBX 版本 / Version: v0.5.52
+        运行环境 / Runtime: Desktop
+        操作系统 / OS: macOS 26.4
+        系统架构 / Architecture: aarch64
+    validations: {required: true}
+  - type: textarea
+    id: problem
+    attributes:
+      label: 当前痛点 / Current pain point
+      description: 现在做这件事有什么不方便？ / What is inconvenient about the current workflow?
+      placeholder: "例如：每次查询后都要手动复制结果再转成 Markdown。 / Example: I must manually copy query results and convert them to Markdown."
+    validations: {required: true}
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望方案 / Proposed solution
+      description: 希望怎么支持？ / How would you like this to work?
+      placeholder: "例如：在查询结果右上角增加导出 Markdown 按钮。 / Example: Add an Export to Markdown button."
+    validations: {required: true}
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 优先级（是否紧急） / Priority (urgency)
+      description: 紧急 = 希望下个版本优先做；维护者可调整。 / Urgent means you hope for the next release; maintainers may adjust it.
+      options:
+        - "🔴 P0 紧急 · 下个版本必须做 / Urgent · Must do next release"
+        - "🟠 P1 重要 · 尽快处理 / Important · Do soon"
+        - "🟡 P2 普通 · 按排期处理 / Normal · Schedule as appropriate"
+        - "🟢 P3 低优 · 有空再做 / Low · Do when possible"
+    validations: {required: true}
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息 / Additional information
+      description: 参考截图、替代方案、特殊环境等。 / Screenshots, alternatives, or special environments.

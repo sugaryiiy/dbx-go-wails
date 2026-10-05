@@ -1,0 +1,250 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildMcpCherryStudioConfig,
+  buildMcpCodexConfig,
+  buildMcpDeepSeekHarnessConfig,
+  buildMcpJsonConfig,
+  buildMcpOpenCodeConfig,
+  buildMcpPiConfig,
+  buildMcpQoderConfig,
+  buildMcpTraeConfig,
+  buildMcpVsCodeConfig,
+  buildMcpWorkBuddyConfig,
+  mcpWebBackendUrl,
+  preferMcpNativeLaunch,
+} from "@/lib/mcp/mcpConfigTemplates";
+
+describe("MCP config templates", () => {
+  it.each(["/Users/DBX User/.dbx/bin/dbx-mcp", "/home/dbx/.dbx/bin/dbx-mcp", "C:\\Users\\DBX User\\.dbx\\bin\\dbx-mcp.exe"])("prefers native launch for every client: %s", (binary) => {
+    const shim = { command: "node", args: ["/old/shim.js"], env: { DBX_DATA_DIR: "/custom/data" } };
+    const native = preferMcpNativeLaunch(shim, binary);
+    expect(native).toEqual({ command: binary, env: shim.env });
+    for (const builder of [buildMcpJsonConfig, buildMcpTraeConfig, buildMcpQoderConfig, buildMcpVsCodeConfig, buildMcpCherryStudioConfig, buildMcpCodexConfig, buildMcpDeepSeekHarnessConfig, buildMcpOpenCodeConfig, buildMcpPiConfig, buildMcpWorkBuddyConfig]) {
+      const result = builder(native);
+      expect(result).toContain(JSON.stringify(binary));
+      expect(result).toContain("DBX_DATA_DIR");
+      expect(result).not.toContain("shim.js");
+    }
+    expect(preferMcpNativeLaunch(shim)).toBe(shim);
+    expect(preferMcpNativeLaunch(shim, "")).toBe(shim);
+    expect(preferMcpNativeLaunch()).toBeUndefined();
+  });
+
+  it("builds the standard mcpServers JSON used by Claude, Cursor, TRAE, and Windsurf", () => {
+    const config = JSON.parse(buildMcpJsonConfig());
+
+    expect(config).toEqual({
+      mcpServers: {
+        dbx: {
+          command: "dbx-mcp-server",
+        },
+      },
+    });
+  });
+
+  it("preserves the standard mcpServers launch config for ZCode full configuration", () => {
+    const launch = {
+      command: "node",
+      args: ["C:\\dbx\\mcp\\dist\\index.js"],
+      env: { DBX_DATA_DIR: "D:\\DBX Data" },
+    };
+    const config = JSON.parse(buildMcpJsonConfig(launch));
+
+    expect(config).toEqual({ mcpServers: { dbx: launch } });
+    expect(config).not.toHaveProperty("mcp");
+  });
+
+  it("builds the standard mcpServers JSON used by the Pi agent", () => {
+    expect(JSON.parse(buildMcpPiConfig())).toEqual({
+      mcpServers: {
+        dbx: {
+          command: "dbx-mcp-server",
+        },
+      },
+    });
+    expect(buildMcpPiConfig({ command: "npx", args: ["-y", "@dbx-app/mcp-server"] })).toContain('"npx"');
+  });
+
+  it("builds the standard mcpServers JSON used by WorkBuddy", () => {
+    const launch = { command: "dbx-mcp-server", env: { DBX_DATA_DIR: "D:\\DBX Data" } };
+
+    expect(JSON.parse(buildMcpWorkBuddyConfig(launch))).toEqual({
+      mcpServers: {
+        dbx: launch,
+      },
+    });
+  });
+
+  it("builds standard JSON configs with a direct node launch command", () => {
+    const config = JSON.parse(buildMcpJsonConfig({ command: "C:\\Program Files\\nodejs\\node.exe", args: ["C:\\Users\\zhiyo\\AppData\\Roaming\\npm\\node_modules\\@dbx-app\\mcp-server\\dist\\index.js"] }));
+
+    expect(config).toEqual({
+      mcpServers: {
+        dbx: {
+          command: "C:\\Program Files\\nodejs\\node.exe",
+          args: ["C:\\Users\\zhiyo\\AppData\\Roaming\\npm\\node_modules\\@dbx-app\\mcp-server\\dist\\index.js"],
+        },
+      },
+    });
+  });
+
+  it("uses the native binary for TRAE when Windows Node lives under Program Files", () => {
+    const nodeLaunch = {
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\Users\\supervisor\\AppData\\Roaming\\npm\\node_modules\\@dbx-app\\mcp-server\\bin\\dbx-mcp-server.js"],
+      env: { DBX_DATA_DIR: "D:\\GreenSoft\\DBX\\data" },
+    };
+    const nativeBinPath = "C:\\Users\\supervisor\\AppData\\Roaming\\npm\\node_modules\\@dbx-app\\mcp-win32-x64\\bin\\dbx-mcp.exe";
+
+    expect(JSON.parse(buildMcpTraeConfig(nodeLaunch, nativeBinPath))).toEqual({
+      mcpServers: { dbx: { command: nativeBinPath, env: nodeLaunch.env } },
+    });
+    expect(JSON.parse(buildMcpTraeConfig(nodeLaunch))).toEqual({
+      mcpServers: { dbx: nodeLaunch },
+    });
+  });
+
+  it("builds the Qoder config with the same launch shape as TRAE", () => {
+    const launch = {
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\dbx\\mcp\\dist\\index.js"],
+      env: { DBX_DATA_DIR: "D:\\DBX Data" },
+    };
+    const nativeBinPath = "C:\\Users\\supervisor\\AppData\\Roaming\\npm\\node_modules\\@dbx-app\\mcp-win32-x64\\bin\\dbx-mcp.exe";
+
+    expect(JSON.parse(buildMcpQoderConfig(launch, nativeBinPath))).toEqual({
+      mcpServers: { dbx: { command: nativeBinPath, env: launch.env } },
+    });
+  });
+
+  it("includes Web runtime settings without restoring permission environment variables", () => {
+    const launch = {
+      command: "dbx-mcp-server",
+      env: {
+        DBX_WEB_URL: "https://dbx.example.com/tools/dbx",
+        DBX_WEB_PASSWORD: "your-web-login-password",
+      },
+    };
+
+    expect(JSON.parse(buildMcpJsonConfig(launch))).toEqual({
+      mcpServers: { dbx: { command: "dbx-mcp-server", env: launch.env } },
+    });
+    expect(buildMcpCodexConfig(launch)).toContain('[mcp_servers.dbx.env]\nDBX_WEB_URL = "https://dbx.example.com/tools/dbx"');
+    expect(JSON.parse(buildMcpOpenCodeConfig(launch)).mcp.dbx.environment).toEqual(launch.env);
+    expect(buildMcpJsonConfig(launch)).not.toContain("DBX_MCP_ALLOW_WRITES");
+  });
+
+  it("includes the portable DBX data directory in JSON and Codex configs", () => {
+    const launch = {
+      command: "dbx-mcp-server",
+      env: { DBX_DATA_DIR: "D:\\GreenSoft\\DBX\\data" },
+    };
+
+    expect(JSON.parse(buildMcpJsonConfig(launch)).mcpServers.dbx.env).toEqual(launch.env);
+    expect(buildMcpCodexConfig(launch)).toContain('DBX_DATA_DIR = "D:\\\\GreenSoft\\\\DBX\\\\data"');
+  });
+
+  it("keeps a deployed Web base path in DBX_WEB_URL", () => {
+    expect(mcpWebBackendUrl("https://dbx.example.com", "/tools/dbx/api")).toBe("https://dbx.example.com/tools/dbx");
+  });
+
+  it("builds VS Code MCP config with the servers root and no policy environment", () => {
+    const config = JSON.parse(buildMcpVsCodeConfig());
+
+    expect(config).toEqual({
+      servers: {
+        dbx: {
+          type: "stdio",
+          command: "dbx-mcp-server",
+        },
+      },
+    });
+  });
+
+  it("builds VS Code config with a direct node launch command", () => {
+    const config = JSON.parse(buildMcpVsCodeConfig({ command: "node", args: ["C:\\dbx\\mcp\\dist\\index.js"] }));
+
+    expect(config).toEqual({
+      servers: {
+        dbx: {
+          type: "stdio",
+          command: "node",
+          args: ["C:\\dbx\\mcp\\dist\\index.js"],
+        },
+      },
+    });
+  });
+
+  it("builds the Cherry Studio stdio configuration", () => {
+    const config = JSON.parse(
+      buildMcpCherryStudioConfig({
+        command: "/opt/homebrew/bin/node",
+        args: ["/opt/dbx/mcp-server/dist/index.js"],
+        env: { DBX_WEB_URL: "https://dbx.example.com" },
+      }),
+    );
+
+    expect(config).toEqual({
+      mcpServers: {
+        dbx: {
+          name: "dbx",
+          description: "",
+          baseUrl: "",
+          command: "/opt/homebrew/bin/node",
+          args: ["/opt/dbx/mcp-server/dist/index.js"],
+          env: { DBX_WEB_URL: "https://dbx.example.com" },
+          isActive: true,
+          type: "stdio",
+        },
+      },
+    });
+  });
+
+  it("builds Codex TOML config without policy environment", () => {
+    expect(buildMcpCodexConfig()).toBe(["[mcp_servers.dbx]", 'command = "dbx-mcp-server"'].join("\n"));
+  });
+
+  it("builds Codex TOML config with a direct node launch command", () => {
+    expect(buildMcpCodexConfig({ command: "node", args: ["C:\\dbx\\mcp\\dist\\index.js"] })).toBe(["[mcp_servers.dbx]", 'command = "node"', 'args = ["C:\\\\dbx\\\\mcp\\\\dist\\\\index.js"]'].join("\n"));
+  });
+
+  it("builds the DeepSeek Harness Cordis insert patch", () => {
+    expect(buildMcpDeepSeekHarnessConfig()).toBe(["- insert:", "    - id: mcp-dbx", "      name: '@deepseek-ai/dsh-mcp-client'", "      config:", "        serverName: dbx", "        transport: stdio", '        command: "dbx-mcp-server"'].join("\n"));
+  });
+
+  it("includes launch arguments and explicit environment in the DeepSeek Harness patch", () => {
+    expect(
+      buildMcpDeepSeekHarnessConfig({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: ["C:\\Users\\zhiyo\\AppData\\Roaming\\npm\\node_modules\\@dbx-app\\mcp-server\\dist\\index.js"],
+        env: { DBX_DATA_DIR: "D:\\DBX Data" },
+      }),
+    ).toContain(['        command: "C:\\\\Program Files\\\\nodejs\\\\node.exe"', '        args: ["C:\\\\Users\\\\zhiyo\\\\AppData\\\\Roaming\\\\npm\\\\node_modules\\\\@dbx-app\\\\mcp-server\\\\dist\\\\index.js"]', "        env:", '          "DBX_DATA_DIR": "D:\\\\DBX Data"'].join("\n"));
+  });
+
+  it("builds OpenCode config without policy environment", () => {
+    const config = JSON.parse(buildMcpOpenCodeConfig());
+
+    expect(config).toEqual({
+      mcp: {
+        dbx: {
+          type: "local",
+          command: ["dbx-mcp-server"],
+        },
+      },
+    });
+  });
+
+  it("builds OpenCode config with a direct node launch command", () => {
+    const config = JSON.parse(buildMcpOpenCodeConfig({ command: "node", args: ["C:\\dbx\\mcp\\dist\\index.js"] }));
+
+    expect(config).toEqual({
+      mcp: {
+        dbx: {
+          type: "local",
+          command: ["node", "C:\\dbx\\mcp\\dist\\index.js"],
+        },
+      },
+    });
+  });
+});

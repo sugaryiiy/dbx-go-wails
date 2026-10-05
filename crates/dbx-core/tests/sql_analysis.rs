@@ -1,0 +1,860 @@
+use dbx_core::sql_analysis::analyze_sql_references;
+
+#[test]
+fn extracts_tables_aliases_and_qualified_columns() {
+    let analysis = analyze_sql_references("select u.missing from users u where u.id = 1", Some("postgres")).unwrap();
+
+    assert_eq!(analysis.tables.len(), 1);
+    assert_eq!(analysis.tables[0].name, "users");
+    assert_eq!(analysis.tables[0].alias.as_deref(), Some("u"));
+
+    let columns: Vec<_> =
+        analysis.columns.iter().map(|column| (column.qualifier.as_deref(), column.name.as_str())).collect();
+    assert_eq!(columns, vec![(Some("u"), "missing"), (Some("u"), "id")]);
+}
+
+#[test]
+fn extracts_nested_query_scopes_for_correlated_subqueries() {
+    let sql = "select aa.house_id from mds_base_house aa where exists (select 1 from mds_base_owner where HOUSE_ID = aa.HOUSE_ID)";
+    let analysis = analyze_sql_references(sql, Some("mysql")).unwrap();
+
+    let tables: Vec<_> =
+        analysis.tables.iter().map(|table| (table.name.as_str(), table.alias.as_deref(), table.scope_id)).collect();
+    assert_eq!(tables, vec![("mds_base_house", Some("aa"), 0), ("mds_base_owner", None, 1)]);
+
+    let scopes: Vec<_> = analysis.scopes.iter().map(|scope| (scope.id, scope.parent_id)).collect();
+    assert_eq!(scopes, vec![(0, None), (1, Some(0))]);
+
+    let columns: Vec<_> = analysis
+        .columns
+        .iter()
+        .map(|column| (column.qualifier.as_deref(), column.name.as_str(), column.scope_id))
+        .collect();
+    assert_eq!(columns, vec![(Some("aa"), "house_id", 0), (None, "HOUSE_ID", 1), (Some("aa"), "HOUSE_ID", 1)]);
+}
+
+#[test]
+fn extracts_in_subquery_in_a_child_scope() {
+    let sql = "select u.id from users u where u.id in (select o.user_id from orders o)";
+    let analysis = analyze_sql_references(sql, Some("sqlserver")).unwrap();
+
+    let tables: Vec<_> = analysis.tables.iter().map(|table| (table.name.as_str(), table.scope_id)).collect();
+    assert_eq!(tables, vec![("users", 0), ("orders", 1)]);
+
+    let scopes: Vec<_> = analysis.scopes.iter().map(|scope| (scope.id, scope.parent_id)).collect();
+    assert_eq!(scopes, vec![(0, None), (1, Some(0))]);
+}
+
+#[test]
+fn sqlserver_single_cte_is_not_reported_as_a_physical_table() {
+    let sql = "WITH SalesCte AS (SELECT * FROM dbo.sales) SELECT * FROM salescte";
+    let analysis = analyze_sql_references(sql, Some("sqlserver")).unwrap();
+
+    let tables: Vec<_> = analysis.tables.iter().map(|table| (table.schema.as_deref(), table.name.as_str())).collect();
+    assert_eq!(tables, vec![(Some("dbo"), "sales")]);
+}
+
+#[test]
+fn sqlserver_recursive_cte_can_reference_itself() {
+    let sql = "WITH numbers AS (SELECT 1 AS value UNION ALL SELECT value + 1 FROM numbers WHERE value < 10) SELECT * FROM numbers";
+    let analysis = analyze_sql_references(sql, Some("sqlserver")).unwrap();
+
+    assert!(analysis.tables.is_empty());
+}
+
+#[test]
+fn sqlserver_ctes_only_hide_names_after_they_are_declared() {
+    let sql =
+        "WITH first_cte AS (SELECT * FROM later_cte), later_cte AS (SELECT * FROM first_cte) SELECT * FROM later_cte";
+    let analysis = analyze_sql_references(sql, Some("sqlserver")).unwrap();
+
+    let tables: Vec<_> = analysis.tables.iter().map(|table| table.name.as_str()).collect();
+    assert_eq!(tables, vec!["later_cte"]);
+}
+
+#[test]
+fn sqlserver_qualified_table_is_not_hidden_by_same_named_cte() {
+    let sql = "WITH employees AS (SELECT * FROM dbo.employees) SELECT * FROM employees";
+    let analysis = analyze_sql_references(sql, Some("sqlserver")).unwrap();
+
+    assert_eq!(analysis.tables.len(), 1);
+    assert_eq!(analysis.tables[0].schema.as_deref(), Some("dbo"));
+    assert_eq!(analysis.tables[0].name, "employees");
+}
+
+#[test]
+fn nested_queries_inherit_and_shadow_cte_names() {
+    let sql = "WITH source AS (SELECT * FROM dbo.outer_source) SELECT * FROM source WHERE EXISTS (WITH source AS (SELECT * FROM dbo.inner_source) SELECT * FROM source) AND EXISTS (SELECT * FROM source)";
+    let analysis = analyze_sql_references(sql, Some("sqlserver")).unwrap();
+
+    let tables: Vec<_> =
+        analysis.tables.iter().map(|table| (table.schema.as_deref(), table.name.as_str(), table.scope_id)).collect();
+    assert_eq!(tables, vec![(Some("dbo"), "outer_source", 1), (Some("dbo"), "inner_source", 3)]);
+
+    let scopes: Vec<_> = analysis.scopes.iter().map(|scope| (scope.id, scope.parent_id)).collect();
+    assert_eq!(scopes, vec![(0, None), (1, Some(0)), (2, Some(0)), (3, Some(2)), (4, Some(0))]);
+}
+
+#[test]
+fn extracts_unqualified_columns_from_single_table_select() {
+    let analysis = analyze_sql_references("select missing, id from users", Some("postgres")).unwrap();
+
+    let columns: Vec<_> =
+        analysis.columns.iter().map(|column| (column.qualifier.as_deref(), column.name.as_str())).collect();
+    assert_eq!(columns, vec![(None, "missing"), (None, "id")]);
+}
+
+#[test]
+fn extracts_mysql_quoted_table_references() {
+    let analysis = analyze_sql_references("SELECT * FROM `t_19991` LIMIT 100", Some("mysql")).unwrap();
+
+    assert_eq!(analysis.tables.len(), 1);
+    assert_eq!(analysis.tables[0].name, "t_19991");
+    assert_eq!(analysis.tables[0].schema, None);
+    assert_eq!(analysis.tables[0].span.start_line, 1);
+    assert_eq!(analysis.tables[0].span.start_column, 15);
+    assert_eq!(analysis.tables[0].span.end_line, 1);
+    assert_eq!(analysis.tables[0].span.end_column, 24);
+}
+
+#[test]
+fn extracts_mysql_qualified_backtick_table_references() {
+    let analysis = analyze_sql_references("SELECT * FROM `core`.`products` LIMIT 100;", Some("mysql")).unwrap();
+
+    assert_eq!(analysis.tables.len(), 1);
+    assert_eq!(analysis.tables[0].schema.as_deref(), Some("core"));
+    assert_eq!(analysis.tables[0].name, "products");
+}
+
+#[test]
+fn extracts_mysql_single_quoted_table_references() {
+    let analysis = analyze_sql_references("SELECT * FROM 't_10001' LIMIT 100", Some("mysql")).unwrap();
+
+    assert_eq!(analysis.tables.len(), 1);
+    assert_eq!(analysis.tables[0].name, "t_10001");
+    assert_eq!(analysis.tables[0].schema, None);
+}
+
+#[test]
+fn postgres_default_privileges_statements_do_not_raise_syntax_errors() {
+    let sql = "\
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+GRANT SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER ON TABLES TO app_user;";
+
+    let analysis = analyze_sql_references(sql, Some("postgres"))
+        .unwrap_or_else(|error| panic!("PostgreSQL ALTER DEFAULT PRIVILEGES should analyze: {error}"));
+
+    assert!(analysis.tables.is_empty());
+    assert!(analysis.columns.is_empty());
+}
+
+#[test]
+fn extracts_unqualified_order_by_columns_for_sqlserver_queries() {
+    let analysis =
+        analyze_sql_references("SELECT * FROM Evt_GCM_Qop_Info ORDER BY PDReceiveDatePartInfo DESC", Some("sqlserver"))
+            .unwrap();
+
+    assert_eq!(analysis.tables.len(), 1);
+    assert_eq!(analysis.tables[0].name, "Evt_GCM_Qop_Info");
+
+    let columns: Vec<_> =
+        analysis.columns.iter().map(|column| (column.qualifier.as_deref(), column.name.as_str())).collect();
+    assert_eq!(columns, vec![(None, "PDReceiveDatePartInfo")]);
+}
+
+#[test]
+fn sqlserver_date_functions_do_not_treat_legal_dateparts_as_columns() {
+    let dateadd_and_datediff = [
+        "year",
+        "yy",
+        "yyyy",
+        "quarter",
+        "qq",
+        "q",
+        "month",
+        "mm",
+        "m",
+        "dayofyear",
+        "dy",
+        "y",
+        "day",
+        "dd",
+        "d",
+        "week",
+        "wk",
+        "ww",
+        "weekday",
+        "dw",
+        "w",
+        "hour",
+        "hh",
+        "minute",
+        "mi",
+        "n",
+        "second",
+        "ss",
+        "s",
+        "millisecond",
+        "ms",
+        "microsecond",
+        "mcs",
+        "nanosecond",
+        "ns",
+    ];
+    let datediff_big = [
+        "year",
+        "yy",
+        "yyyy",
+        "quarter",
+        "qq",
+        "q",
+        "month",
+        "mm",
+        "m",
+        "dayofyear",
+        "dy",
+        "y",
+        "day",
+        "dd",
+        "d",
+        "week",
+        "wk",
+        "ww",
+        "weekday",
+        "dw",
+        "w",
+        "hour",
+        "hh",
+        "minute",
+        "mi",
+        "n",
+        "second",
+        "ss",
+        "s",
+        "millisecond",
+        "ms",
+        "microsecond",
+        "mcs",
+        "nanosecond",
+        "ns",
+    ];
+    let datepart = [
+        "year",
+        "yy",
+        "yyyy",
+        "quarter",
+        "qq",
+        "q",
+        "month",
+        "mm",
+        "m",
+        "dayofyear",
+        "dy",
+        "y",
+        "day",
+        "dd",
+        "d",
+        "week",
+        "wk",
+        "ww",
+        "weekday",
+        "dw",
+        "w",
+        "hour",
+        "hh",
+        "minute",
+        "mi",
+        "n",
+        "second",
+        "ss",
+        "s",
+        "millisecond",
+        "ms",
+        "microsecond",
+        "mcs",
+        "nanosecond",
+        "ns",
+        "tzoffset",
+        "tz",
+        "iso_week",
+        "isowk",
+        "isoww",
+    ];
+    let datename = [
+        "year",
+        "yy",
+        "yyyy",
+        "quarter",
+        "qq",
+        "q",
+        "month",
+        "mm",
+        "m",
+        "dayofyear",
+        "dy",
+        "y",
+        "day",
+        "dd",
+        "d",
+        "week",
+        "wk",
+        "ww",
+        "weekday",
+        "dw",
+        "w",
+        "hour",
+        "hh",
+        "minute",
+        "mi",
+        "n",
+        "second",
+        "ss",
+        "s",
+        "millisecond",
+        "ms",
+        "microsecond",
+        "mcs",
+        "nanosecond",
+        "ns",
+        "tzoffset",
+        "tz",
+        "iso_week",
+        "isowk",
+        "isoww",
+    ];
+
+    for (function, dateparts) in [
+        ("DATEADD", dateadd_and_datediff.as_slice()),
+        ("DATEDIFF", dateadd_and_datediff.as_slice()),
+        ("DATEDIFF_BIG", datediff_big.as_slice()),
+        ("DATEPART", datepart.as_slice()),
+        ("DATENAME", datename.as_slice()),
+    ] {
+        for (index, datepart) in dateparts.iter().enumerate() {
+            let datepart = if index % 2 == 0 { datepart.to_ascii_uppercase() } else { datepart.to_string() };
+            let sql = match function {
+                "DATEADD" => format!("SELECT DATEADD({datepart}, amount, occurred_at) FROM events"),
+                "DATEDIFF" | "DATEDIFF_BIG" => {
+                    format!("SELECT {function}({datepart}, started_at, ended_at) FROM events")
+                }
+                "DATEPART" | "DATENAME" => format!("SELECT {function}({datepart}, occurred_at) FROM events"),
+                _ => unreachable!(),
+            };
+            let analysis = analyze_sql_references(&sql, Some("sqlserver"))
+                .unwrap_or_else(|error| panic!("{function}({datepart}, ...) should analyze: {error}"));
+            let columns: Vec<_> = analysis.columns.iter().map(|column| column.name.as_str()).collect();
+            let expected = match function {
+                "DATEADD" => vec!["amount", "occurred_at"],
+                "DATEDIFF" | "DATEDIFF_BIG" => vec!["started_at", "ended_at"],
+                "DATEPART" | "DATENAME" => vec!["occurred_at"],
+                _ => unreachable!(),
+            };
+            assert_eq!(columns, expected, "{function} must ignore the legal {datepart} datepart only");
+        }
+    }
+}
+
+#[test]
+fn sqlserver_datepart_suppression_is_limited_to_unqualified_builtins() {
+    let sql = "SELECT dAtEaDd(SeCoNd, amount, occurred_at), dbo.DATEADD(SECOND, amount, occurred_at), custom_fn(MONTH, occurred_at), DATEADD(datepart_column, amount, occurred_at), SECOND FROM events";
+    let analysis = analyze_sql_references(sql, Some("sqlserver")).unwrap();
+
+    let columns: Vec<_> = analysis.columns.iter().map(|column| column.name.as_str()).collect();
+    assert_eq!(
+        columns,
+        vec![
+            "amount",
+            "occurred_at",
+            "SECOND",
+            "amount",
+            "occurred_at",
+            "MONTH",
+            "occurred_at",
+            "datepart_column",
+            "amount",
+            "occurred_at",
+            "SECOND",
+        ]
+    );
+}
+
+#[test]
+fn sqlserver_create_proc_and_procedure_are_equivalent() {
+    for sql in ["CREATE PROC test\nAS\n", "CREATE PROCEDURE test\nAS\n", "CREATE PROC test AS SELECT 1;"] {
+        let analysis = analyze_sql_references(sql, Some("sqlserver"))
+            .unwrap_or_else(|error| panic!("SQL Server procedure declaration should analyze: {error}"));
+        assert!(analysis.tables.is_empty());
+        assert!(analysis.columns.is_empty());
+    }
+}
+
+#[test]
+fn sqlserver_create_or_alter_proc_is_supported() {
+    analyze_sql_references("CREATE OR ALTER PROC test AS SELECT 1;", Some("sqlserver"))
+        .unwrap_or_else(|error| panic!("SQL Server CREATE OR ALTER PROC should analyze: {error}"));
+}
+
+#[test]
+fn create_proc_remains_invalid_outside_sqlserver() {
+    let error = analyze_sql_references("CREATE PROC test AS SELECT 1", Some("postgres"))
+        .expect_err("PostgreSQL must not inherit SQL Server's PROC synonym");
+
+    assert!(error.contains("an object type after CREATE"));
+}
+
+#[test]
+fn sqlserver_proc_identifiers_remain_identifiers_outside_create() {
+    let analysis = analyze_sql_references("SELECT proc FROM jobs", Some("sqlserver")).unwrap();
+
+    assert_eq!(analysis.tables[0].name, "jobs");
+    assert_eq!(analysis.columns[0].name, "proc");
+}
+
+#[test]
+fn sqlserver_cursor_declaration_analyzes_its_query_without_a_cursor_table() {
+    let sql = "DECLARE schema_cursor CURSOR LOCAL FAST_FORWARD FOR
+               SELECT s.name FROM sys.schemas s WHERE s.schema_id > 0;
+               OPEN schema_cursor;
+               FETCH NEXT FROM schema_cursor INTO @schema;
+               CLOSE schema_cursor;
+               DEALLOCATE schema_cursor;";
+    let analysis = analyze_sql_references(sql, Some("sqlserver"))
+        .unwrap_or_else(|error| panic!("valid SQL Server cursor declaration should analyze: {error}"));
+
+    let tables: Vec<_> = analysis.tables.iter().map(|table| (table.schema.as_deref(), table.name.as_str())).collect();
+    assert_eq!(tables, vec![(Some("sys"), "schemas")]);
+    assert!(analysis.tables.iter().all(|table| table.name != "schema_cursor"));
+}
+
+#[test]
+fn sqlserver_reported_cursor_query_does_not_raise_parser_or_table_errors() {
+    let analysis = analyze_sql_references(
+        "DECLARE schema_cursor CURSOR LOCAL FAST_FORWARD FOR
+         SELECT N'dbo' UNION ALL SELECT N'dev';",
+        Some("sqlserver"),
+    )
+    .expect("the reported SQL Server cursor declaration should analyze");
+
+    assert!(analysis.tables.is_empty());
+    assert!(analysis.columns.is_empty());
+}
+
+#[test]
+fn sqlserver_cursor_fallback_is_limited_to_the_reported_option_subset() {
+    for sql in [
+        "DECLARE plain_cursor CURSOR FOR SELECT name FROM dbo.reports;",
+        "DECLARE local_cursor CURSOR LOCAL FOR SELECT name FROM dbo.reports;",
+        "DECLARE fast_cursor CURSOR FAST_FORWARD FOR SELECT name FROM dbo.reports;",
+        "DECLARE global_cursor CURSOR GLOBAL FAST_FORWARD FOR SELECT name FROM dbo.reports;",
+        "DECLARE json_cursor CURSOR LOCAL FAST_FORWARD FOR SELECT (SELECT TOP 1 a.note FROM dbo.audit a FOR JSON PATH) AS payload FROM dbo.reports;",
+    ] {
+        let analysis = analyze_sql_references(sql, Some("sqlserver"))
+            .unwrap_or_else(|error| panic!("the reported cursor option subset should analyze: {error}"));
+        assert!(analysis.tables.iter().any(|table| table.name == "reports"));
+    }
+
+    for sql in [
+        "DECLARE report_cursor CURSOR LOCAL FAST_FORWARD;",
+        "DECLARE report_cursor CURSOR LOCAL FAST_FORWARD FOR UPDATE dbo.reports SET name = 'invalid';",
+        "DECLARE report_cursor CURSOR SCROLL FAST_FORWARD FOR SELECT name FROM dbo.reports;",
+        "DECLARE report_cursor CURSOR LOCAL KEYSET FOR SELECT name FROM dbo.reports;",
+        "DECLARE report_cursor CURSOR LOCAL FAST_FORWARD READ_ONLY FOR SELECT name FROM dbo.reports;",
+        "DECLARE report_cursor CURSOR LOCAL FAST_FORWARD FOR SELECT name INTO #report_copy FROM dbo.reports;",
+        "DECLARE report_cursor CURSOR LOCAL FAST_FORWARD FOR SELECT name FROM dbo.reports FOR BROWSE;",
+    ] {
+        if analyze_sql_references(sql, Some("sqlserver")).is_ok() {
+            panic!("unsupported or invalid cursor syntax must not be suppressed: {sql}");
+        }
+    }
+}
+
+#[test]
+fn sqlserver_cursor_uses_native_lifecycle_statements_and_preserves_query_spans() {
+    for sql in [
+        "OPEN schema_cursor",
+        "FETCH NEXT FROM schema_cursor INTO @schema",
+        "CLOSE schema_cursor",
+        "DEALLOCATE schema_cursor",
+    ] {
+        analyze_sql_references(sql, Some("sqlserver"))
+            .unwrap_or_else(|error| panic!("sqlparser should parse ordinary cursor lifecycle SQL {sql:?}: {error}"));
+    }
+
+    let analysis = analyze_sql_references(
+        "DECLARE schema_cursor CURSOR LOCAL FAST_FORWARD FOR\n    SELECT r.name FROM dbo.reports r OPTION (RECOMPILE);",
+        Some("sqlserver"),
+    )
+    .expect("cursor option and query-hint fallbacks should compose");
+    assert_eq!(analysis.tables[0].name, "reports");
+    assert_eq!(analysis.tables[0].span.start_line, 2);
+    assert_eq!(analysis.tables[0].span.start_column, 28);
+    assert_eq!(analysis.columns[0].name, "name");
+    assert_eq!(analysis.columns[0].span.start_line, 2);
+    assert_eq!(analysis.columns[0].span.start_column, 14);
+
+    analyze_sql_references(
+        "DECLARE schema_cursor CURSOR LOCAL FAST_FORWARD FOR SELECT name FROM dbo.reports OPTION (RECOMPILE);\
+         ALTER TABLE dbo.demo ADD first_flag BIT NULL, second_flag BIT NULL;",
+        Some("sqlserver"),
+    )
+    .expect("cursor, query-hint, and ALTER TABLE fallbacks should compose");
+}
+
+#[test]
+fn sqlserver_cursor_fallback_is_dialect_scoped_and_preserves_other_statements() {
+    let cursor_sql = "DECLARE report_cursor CURSOR LOCAL FAST_FORWARD FOR SELECT name FROM dbo.reports;";
+    analyze_sql_references(cursor_sql, Some("postgres"))
+        .expect_err("other dialects must not inherit SQL Server cursor handling");
+
+    let analysis =
+        analyze_sql_references("DECLARE @schema SYSNAME; SELECT u.name FROM dbo.users u;", Some("sqlserver"))
+            .expect("ordinary SQL Server variable declarations and table references should remain parseable");
+    assert_eq!(analysis.tables.len(), 1);
+    assert_eq!(analysis.tables[0].schema.as_deref(), Some("dbo"));
+    assert_eq!(analysis.tables[0].name, "users");
+}
+
+#[test]
+fn sqlserver_reported_cursor_batch_analyzes_with_control_flow_and_go() {
+    use dbx_core::sql::split_sql_batches;
+
+    let sql = "IF SCHEMA_ID(N'dev') IS NULL
+    EXEC(N'CREATE SCHEMA dev AUTHORIZATION dbo');
+GO
+
+IF COL_LENGTH(N'dbo.sys_user', N'highStandarUser') IS NULL
+    ALTER TABLE dbo.sys_user ADD highStandarUser INT NOT NULL DEFAULT 0;
+GO
+
+DECLARE @schema SYSNAME;
+DECLARE @sql NVARCHAR(MAX);
+DECLARE schema_cursor CURSOR LOCAL FAST_FORWARD FOR
+    SELECT N'dbo' UNION ALL SELECT N'dev';
+
+OPEN schema_cursor;
+FETCH NEXT FROM schema_cursor INTO @schema;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    IF OBJECT_ID(QUOTENAME(@schema) + N'.dashboard', N'U') IS NULL
+    BEGIN
+        SET @sql = N'CREATE TABLE dbo.dashboard (id INT);';
+        EXEC sys.sp_executesql @sql;
+    END;
+    FETCH NEXT FROM schema_cursor INTO @schema;
+END;
+
+CLOSE schema_cursor;
+DEALLOCATE schema_cursor;
+GO";
+
+    let batches = split_sql_batches(sql);
+    assert_eq!(batches.len(), 3);
+    for batch in batches {
+        analyze_sql_references(&batch, Some("sqlserver"))
+            .unwrap_or_else(|error| panic!("the reported SQL Server batch should analyze after removing GO: {error}"));
+    }
+}
+
+#[test]
+fn sqlserver_alter_table_single_add_supports_multiple_columns() {
+    for sql in [
+        "ALTER TABLE dbo.demo\nADD isOldWell BIT NULL,\n    isNewWell BIT NULL;",
+        "ALTER TABLE [dbo].[demo] ADD amount DECIMAL(10, 2) DEFAULT (0), [display_name] NVARCHAR(50) NULL;",
+        "ALTER TABLE dbo.demo ADD enabled BIT NULL, CHECK (enabled IN (0, 1));",
+    ] {
+        analyze_sql_references(sql, Some("sqlserver"))
+            .unwrap_or_else(|error| panic!("SQL Server single-ADD multi-column ALTER TABLE should analyze: {error}"));
+    }
+}
+
+#[test]
+fn sqlserver_alter_table_add_normalization_preserves_boundaries() {
+    analyze_sql_references("ALTER TABLE dbo.demo ADD isOldWell BIT NULL, ADD isNewWell BIT NULL;", Some("sqlserver"))
+        .expect("existing repeated-ADD parser behavior should remain valid");
+
+    let missing_comma =
+        analyze_sql_references("ALTER TABLE dbo.demo ADD isOldWell BIT NULL isNewWell BIT NULL;", Some("sqlserver"))
+            .expect_err("missing column separators must remain invalid");
+    assert!(missing_comma.contains("isNewWell"));
+
+    analyze_sql_references(
+        "ALTER TABLE dbo.demo ADD amount DECIMAL(10, 2) NULL, label NVARCHAR(20) NULL; SELECT label FROM dbo.demo;",
+        Some("sqlserver"),
+    )
+    .expect("data-type commas and multiple statements should remain parseable");
+
+    analyze_sql_references("ALTER TABLE dbo.demo ADD first_flag BIT NULL, second_flag BIT NULL;", Some("postgres"))
+        .expect_err("other dialects must not inherit SQL Server ALTER TABLE normalization");
+}
+
+#[test]
+fn sqlserver_query_hints_do_not_raise_parser_errors() {
+    let analysis = analyze_sql_references(
+        "SELECT o.name FROM sys.objects o WHERE o.type = 'U' OPTION (RECOMPILE);",
+        Some("sqlserver"),
+    )
+    .expect("SQL Server OPTION query hint should analyze");
+
+    assert_eq!(analysis.tables.len(), 1);
+    assert_eq!(analysis.tables[0].schema.as_deref(), Some("sys"));
+    assert_eq!(analysis.tables[0].name, "objects");
+    assert_eq!(analysis.tables[0].alias.as_deref(), Some("o"));
+
+    let columns: Vec<_> =
+        analysis.columns.iter().map(|column| (column.qualifier.as_deref(), column.name.as_str())).collect();
+    assert_eq!(columns, vec![(Some("o"), "name"), (Some("o"), "type")]);
+}
+
+#[test]
+fn sqlserver_query_hints_support_arguments_ctes_and_multiple_statements() {
+    let sql = "WITH nodes AS (\
+               SELECT 1 AS depth \
+               UNION ALL \
+               SELECT depth + 1 FROM nodes WHERE depth < 3\
+               ) SELECT depth FROM nodes OPTION (MAXRECURSION 100, MAXDOP 2);\
+               SELECT name FROM sys.tables WHERE is_ms_shipped = 0 OPTION (HASH JOIN, USE HINT('DISABLE_OPTIMIZER_ROWGOAL'));";
+    let analysis =
+        analyze_sql_references(sql, Some("sqlserver")).expect("SQL Server query hints with arguments should analyze");
+
+    let tables: Vec<_> = analysis.tables.iter().map(|table| (table.schema.as_deref(), table.name.as_str())).collect();
+    assert_eq!(tables, vec![(Some("sys"), "tables")]);
+}
+
+#[test]
+fn sqlserver_option_functions_and_invalid_hints_are_not_suppressed() {
+    for argument in ["value", "recompile"] {
+        let sql = format!("SELECT option({argument}) FROM settings;");
+        let analysis =
+            analyze_sql_references(&sql, Some("sqlserver")).expect("ordinary OPTION function should remain parseable");
+        assert_eq!(analysis.tables[0].name, "settings");
+        assert_eq!(analysis.columns[0].name, argument);
+    }
+
+    let analysis = analyze_sql_references(
+        "SELECT option(recompile); SELECT name FROM sys.objects OPTION (RECOMPILE);",
+        Some("sqlserver"),
+    )
+    .expect("an OPTION function in an earlier statement must remain parseable");
+    assert_eq!(analysis.tables[0].name, "objects");
+    assert_eq!(analysis.columns[0].name, "recompile");
+    assert_eq!(analysis.columns[1].name, "name");
+
+    let error =
+        analyze_sql_references("SELECT * FROM sys.objects WHERE type = 'U' OPTION (CUSTOM_HINT 1);", Some("sqlserver"))
+            .expect_err("unknown OPTION clauses must still surface parser errors");
+    assert!(error.contains("OPTION"));
+}
+
+#[test]
+fn postgres_create_procedure_bodies_do_not_raise_syntax_errors() {
+    let or_replace_with_default_param = "CREATE OR REPLACE PROCEDURE dwd.lzshklx_batch_update_device_id(\n    p_batch_size INT DEFAULT 100,\n    p_total_batches INT DEFAULT NULL\n)\nLANGUAGE plpgsql\nAS $$\nDECLARE\n    v_affected_rows INT;\nBEGIN\n    NULL;\nEND;\n$$;";
+    let plain_dollar_quoted = "CREATE PROCEDURE dwd.foo(p_id INT) LANGUAGE plpgsql AS $tag$ BEGIN NULL; END; $tag$;";
+    let block_comment_separated = "CREATE /* create */ OR /* or */ REPLACE /* replace */ PROCEDURE dwd.foo() LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;";
+    let line_comment_separated = "CREATE -- create\nOR -- or\nREPLACE -- replace\nPROCEDURE dwd.foo() LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;";
+
+    for sql in [or_replace_with_default_param, plain_dollar_quoted, block_comment_separated, line_comment_separated] {
+        let analysis = analyze_sql_references(sql, Some("postgres"))
+            .expect("postgres CREATE PROCEDURE should not surface a false parser error");
+        assert!(analysis.tables.is_empty());
+        assert!(analysis.columns.is_empty());
+    }
+}
+
+#[test]
+fn postgres_create_procedure_syntax_errors_are_not_suppressed() {
+    for sql in [
+        "CREATE PROCEDURE",
+        "CREATE PROCEDURE dwd.foo() LANGUAGE plpgsql AS",
+        "CREATE OR REPLACE PROCEDURE dwd.foo(p_id INT,, p_name TEXT) LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$;",
+        "CREATE PROCEDURE dwd.foo() LANGUAGE plpgsql AS $$ BEGIN NULL; END; $$ trailing",
+    ] {
+        let error = analyze_sql_references(sql, Some("postgres"))
+            .expect_err("invalid postgres CREATE PROCEDURE must keep its parser error");
+        assert!(!error.is_empty(), "invalid postgres CREATE PROCEDURE returned an empty error: {sql}");
+    }
+}
+
+#[test]
+fn duckdb_parser_gap_queries_do_not_raise_syntax_errors() {
+    for sql in ["FROM users;", "SUMMARIZE users;", "SUMMARISE users;"] {
+        let analysis = analyze_sql_references(sql, Some("duckdb")).expect("duckdb parser gap query should analyze");
+        assert!(analysis.tables.is_empty());
+        assert!(analysis.columns.is_empty());
+    }
+}
+
+#[test]
+fn clickhouse_strictness_first_left_joins_do_not_raise_syntax_errors() {
+    for strictness in ["ANY", "ALL", "SEMI", "ANTI"] {
+        let sql = format!("SELECT a.id FROM events a {strictness} LEFT JOIN wallets b ON a.wallet_id = b.id");
+        let analysis = analyze_sql_references(&sql, Some("clickhouse"))
+            .unwrap_or_else(|error| panic!("ClickHouse {strictness} LEFT JOIN should analyze: {error}"));
+
+        let tables: Vec<_> =
+            analysis.tables.iter().map(|table| (table.name.as_str(), table.alias.as_deref())).collect();
+        assert_eq!(tables, vec![("events", Some("a")), ("wallets", Some("b"))]);
+    }
+}
+
+#[test]
+fn spark_datasource_create_table_supports_iceberg_clauses() {
+    let sql = r#"CREATE TABLE account_flow (
+  id STRING,
+  databasename STRING,
+  created TIMESTAMP
+)
+USING iceberg
+PARTITIONED BY (databasename, truncate(created, 7))
+COMMENT '账户流水表'
+TBLPROPERTIES (
+  'format-version' = '2',
+  'snapshot.base.keep.minutes' = '1440',
+  'self-optimizing.group' = 'supbig',
+  'write.metadata.delete-after-commit.enabled' = 'true',
+  'write.metadata.previous-versions-max' = '3',
+  'clean-orphan-file.enabled' = 'true',
+  'clean-orphan-file.min-existing-time-minutes' = '1440',
+  'primary-key' = 'id,databasename',
+  'table.drop-base-path.enabled' = 'true'
+);"#;
+
+    let analysis = analyze_sql_references(sql, Some("spark"))
+        .unwrap_or_else(|error| panic!("Spark datasource CREATE TABLE should analyze: {error}"));
+
+    assert!(analysis.tables.is_empty());
+    assert!(analysis.columns.is_empty());
+}
+
+#[test]
+fn spark_datasource_ctas_preserves_query_references() {
+    let sql = "CREATE TABLE account_flow USING iceberg PARTITIONED BY (id) TBLPROPERTIES ('format-version' = '2') AS SELECT s.id FROM source_flow s";
+    let analysis = analyze_sql_references(sql, Some("spark")).expect("Spark datasource CTAS should analyze");
+
+    let tables: Vec<_> = analysis.tables.iter().map(|table| (table.name.as_str(), table.alias.as_deref())).collect();
+    assert_eq!(tables, vec![("source_flow", Some("s"))]);
+    assert_eq!(analysis.tables[0].span.start_column, sql.find("source_flow").expect("source table") + 1);
+    assert_eq!(analysis.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(), vec!["id"]);
+}
+
+#[test]
+fn spark_datasource_create_table_validates_options_and_properties() {
+    let sql = "CREATE TABLE account_flow (id STRING) USING iceberg TBLPROPERTIES ('format-version' = '2') COMMENT 'account flow' PARTITIONED BY (id) OPTIONS ('merge-schema' = 'true')";
+    let analysis =
+        analyze_sql_references(sql, Some("spark")).expect("reordered Spark datasource clauses should analyze");
+
+    assert!(analysis.tables.is_empty());
+    assert!(analysis.columns.is_empty());
+}
+
+#[test]
+fn spark_datasource_create_table_rejects_duplicate_clauses() {
+    let duplicate_sql = [
+        "CREATE TABLE broken (id STRING) USING iceberg OPTIONS ('a' = '1') OPTIONS ('b' = '2')",
+        "CREATE TABLE broken (id STRING) USING iceberg PARTITIONED BY (id) PARTITIONED BY (id)",
+        "CREATE TABLE broken (id STRING) USING iceberg COMMENT 'first' COMMENT 'second'",
+        "CREATE TABLE broken (id STRING) USING iceberg TBLPROPERTIES ('a' = '1') TBLPROPERTIES ('b' = '2')",
+    ];
+
+    let accepted: Vec<_> =
+        duplicate_sql.iter().copied().filter(|sql| analyze_sql_references(sql, Some("spark")).is_ok()).collect();
+    assert!(accepted.is_empty(), "duplicate Spark datasource clauses were accepted: {accepted:?}");
+}
+
+#[test]
+fn spark_datasource_create_table_keeps_syntax_errors() {
+    for sql in [
+        "CREATE TABLE broken (id STRING) USING",
+        "CREATE TABLE broken (id STRING) USING 'iceberg'",
+        "CREATE TABLE broken (id STRING USING iceberg",
+        "CREATE TABLE broken (id STRING, created TIMESTAMP) USING iceberg PARTITIONED BY (truncate(created 7))",
+        "CREATE TABLE broken (id STRING, created TIMESTAMP) USING iceberg PARTITIONED BY (created) UNKNOWN CLAUSE",
+        "CREATE TABLE broken (id STRING) USING iceberg OPTIONS ('merge-schema')",
+        "CREATE TABLE broken (id STRING) USING iceberg TBLPROPERTIES ('format-version')",
+    ] {
+        let error = analyze_sql_references(sql, Some("spark"))
+            .expect_err(&format!("malformed Spark datasource CREATE TABLE must keep its parser error: {sql}"));
+        assert!(!error.is_empty());
+    }
+
+    let provider_error = analyze_sql_references("CREATE TABLE broken (id STRING) USING 'iceberg'", Some("spark"))
+        .expect_err("quoted Spark datasource provider must remain invalid");
+    assert!(provider_error.contains("Line: 1, Column:"));
+}
+
+#[test]
+fn spark_selects_still_report_query_references() {
+    let analysis = analyze_sql_references("SELECT s.id FROM source_flow s", Some("spark"))
+        .expect("ordinary Spark SELECT should analyze");
+
+    assert_eq!(analysis.tables[0].name, "source_flow");
+    assert_eq!(analysis.tables[0].alias.as_deref(), Some("s"));
+    assert_eq!(analysis.columns[0].name, "id");
+}
+
+#[test]
+fn generic_dialect_still_rejects_spark_datasource_clauses() {
+    let error = analyze_sql_references("CREATE TABLE account_flow (id STRING) USING iceberg", Some("generic"))
+        .expect_err("Spark datasource clauses must remain dialect-specific");
+
+    assert!(error.contains("USING"));
+}
+
+#[test]
+fn oracle_admin_ddl_statements_do_not_raise_syntax_errors() {
+    for sql in [
+        "create user dbx_tmp identified by \"pw\" account unlock;",
+        "alter user dbx_tmp identified by \"pw\";",
+        "alter user dbx_tmp default tablespace dbx_ts;",
+        "create tablespace dbx_ts datafile '/tmp/dbx_ts.dbf' size 10m autoextend on next 1m maxsize unlimited;",
+        "alter tablespace dbx_ts add datafile '/tmp/dbx_ts2.dbf' size 5m;",
+        "drop tablespace dbx_ts including contents and datafiles;",
+        "create profile dbx_prof limit failed_login_attempts 5;",
+        "create directory dbx_dir as '/tmp/dbx_dir';",
+        "create or replace public synonym dbx_syn for dual;",
+        "alter session set nls_date_format='YYYY-MM-DD';",
+        "grant create session to dbx_tmp;",
+        "revoke create session from dbx_tmp;",
+    ] {
+        let analysis = analyze_sql_references(sql, Some("oracle"))
+            .unwrap_or_else(|error| panic!("Oracle admin DDL should analyze: {error} ({sql})"));
+        assert!(analysis.tables.is_empty(), "unexpected table references for {sql}");
+        assert!(analysis.columns.is_empty(), "unexpected column references for {sql}");
+    }
+}
+
+#[test]
+fn oracle_admin_ddl_masking_keeps_following_statement_spans() {
+    let sql =
+        "select 1 from users;\ncreate user dbx_tmp identified by \"pw\" account unlock;\nselect u.id from users u;";
+
+    let analysis = analyze_sql_references(sql, Some("oracle"))
+        .unwrap_or_else(|error| panic!("masked Oracle admin DDL should analyze: {error}"));
+
+    let tables: Vec<_> = analysis.tables.iter().map(|table| (table.name.as_str(), table.scope_id)).collect();
+    assert_eq!(tables, vec![("users", 0), ("users", 1)]);
+    // The trailing statement keeps the exact line/column it had in the unmasked script
+    // ("users" starts after `select u.id from ` on line 3).
+    assert_eq!(analysis.tables[1].span.start_line, 3);
+    assert_eq!(analysis.tables[1].span.start_column, 18);
+
+    let columns: Vec<_> = analysis.columns.iter().map(|column| column.name.as_str()).collect();
+    assert_eq!(columns, vec!["id"]);
+    assert_eq!(analysis.columns[0].span.start_line, 3);
+}
+
+#[test]
+fn oracle_admin_ddl_tolerance_is_scoped_to_oracle_compatible_dialects() {
+    for dialect in [Some("generic"), Some("postgres"), Some("mysql"), None] {
+        let error = analyze_sql_references("create user dbx_tmp identified by \"pw\";", dialect)
+            .expect_err("non Oracle dialects must keep the parser error");
+        assert!(!error.is_empty());
+    }
+}
+
+#[test]
+fn oracle_syntax_errors_are_still_reported() {
+    let error = analyze_sql_references("select from where order;", Some("oracle"))
+        .expect_err("a real Oracle syntax error must still be reported");
+    assert!(error.contains("sql parser error"), "unexpected error: {error}");
+}

@@ -1,0 +1,1020 @@
+<script setup lang="ts">
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch, type CSSProperties } from "vue";
+import { ChevronDown, X } from "@lucide/vue";
+import { completeDataGridConditionQuote, useDataGridConditionEditor, type DataGridConditionColumnOption, type DataGridConditionSuggestion, type DataGridConditionSuggestionProvider } from "@/composables/useDataGridConditionEditor";
+import { tokenizeDataGridCondition, type DataGridConditionTokenType } from "@/lib/dataGrid/dataGridConditionHighlight";
+import { getDataGridConditionSuggestionPosition, getDataGridConditionSuggestionPreferredWidth } from "@/lib/dataGrid/dataGridConditionSuggestionPosition";
+import type { DataGridConditionHistoryKind, DataGridConditionHistoryScope } from "@/lib/dataGrid/dataGridConditionHistory";
+
+const props = withDefaults(
+  defineProps<{
+    kind: DataGridConditionHistoryKind;
+    columns?: readonly DataGridConditionColumnOption[];
+    historyScope: DataGridConditionHistoryScope;
+    placeholder?: string;
+    ariaLabel?: string;
+    historyEmptyText?: string;
+    historyNoMatchesText?: string;
+    identifierQuote?: string;
+    suggestionProvider?: DataGridConditionSuggestionProvider;
+    suggestionDebounceMs?: number;
+    disabled?: boolean;
+    compact?: boolean;
+    apply?: (value: string) => void | boolean | Promise<void | boolean>;
+    clear?: () => void | Promise<void>;
+  }>(),
+  {
+    columns: () => [],
+    placeholder: "",
+    ariaLabel: "",
+    historyEmptyText: "No history yet",
+    historyNoMatchesText: "No matching history",
+    suggestionDebounceMs: 0,
+    disabled: false,
+  },
+);
+
+const modelValue = defineModel<string>({ default: "" });
+const emit = defineEmits<{
+  apply: [value: string];
+  clear: [];
+}>();
+
+const inputRef = ref<HTMLTextAreaElement>();
+const selectionStart = ref(modelValue.value.length);
+const selectionEnd = ref(modelValue.value.length);
+const suggestionListId = `${useId()}-${props.kind}-condition-suggestions`;
+const overlayRef = ref<HTMLTextAreaElement>();
+const controlRef = ref<HTMLDivElement>();
+const dropdownRef = ref<HTMLDivElement>();
+const expanded = ref(false);
+const composing = ref(false);
+const expandedRect = ref({ left: 0, top: 0, width: 0, controlsTop: 0, inputTop: 0, prefix: 0, suffix: 28 });
+const expandedHeight = ref(56);
+const suggestionPosition = ref({ left: 0, top: 0, width: 180 });
+const historyPreview = ref<{ value: string; left: number; top: number; maxWidth: number; arrowTop: number; side: "left" | "right" } | null>(null);
+const pointerMovedSuggestionIndex = ref(-1);
+const editorFocused = ref(false);
+const conditionUndoStack = ref<string[]>([]);
+const conditionRedoStack = ref<string[]>([]);
+let conditionLastValue = modelValue.value;
+// Chromium groups a continuous typing run into a single native undo step, but
+// this editor replaces native undo with its own stack, so without grouping the
+// user needs one Ctrl+Z per character. Keystrokes within this window keep the
+// run's opening value on top of the stack; apply/blur/programmatic edits close
+// the run so the next keystroke starts a fresh undo step.
+const CONDITION_TYPING_UNDO_GROUP_MS = 700;
+let conditionUndoGroupOpen = false;
+let conditionUndoGroupAt = 0;
+let collapseTimer: ReturnType<typeof setTimeout> | undefined;
+let resizeObserver: ResizeObserver | undefined;
+let expandAfterComposition = false;
+
+function closeConditionUndoGroup() {
+  conditionUndoGroupOpen = false;
+}
+
+const editor = useDataGridConditionEditor({
+  kind: props.kind,
+  value: modelValue,
+  selectionStart,
+  selectionEnd,
+  identifierQuote: () => props.identifierQuote,
+  columns: () => props.columns,
+  historyScope: () => props.historyScope,
+  suggestionProvider: props.suggestionProvider,
+  suggestionDebounceMs: props.suggestionDebounceMs,
+  suggestionsEnabled: editorFocused,
+});
+
+const activeEditor = computed(() => overlayRef.value ?? inputRef.value);
+const hasValue = computed(() => modelValue.value.trim().length > 0);
+// Syntax highlight tokens rendered in a layer below the (transparent-text)
+// textarea, so keywords / fields / values are colored without losing caret
+// and selection behavior.
+const highlightTokens = computed(() => tokenizeDataGridCondition(modelValue.value));
+const collapsedHighlightScrollLeft = ref(0);
+const expandedHighlightScrollLeft = ref(0);
+const expandedHighlightScrollTop = ref(0);
+// The highlight layer is a plain div and never gives up content width to a
+// scrollbar, while the transparent-text textarea above it does. Both wrap with
+// `white-space: pre-wrap` + `overflow-wrap: anywhere`, so an uncompensated
+// scrollbar makes the two layers break at different characters and the visible
+// text drifts away from the caret. Compensate with the measured width instead
+// of assuming one.
+const expandedHighlightScrollbarWidth = ref(0);
+const collapsedHighlightStyle = computed<CSSProperties>(() => ({ transform: `translateX(${-collapsedHighlightScrollLeft.value}px)` }));
+const expandedHighlightStyle = computed<CSSProperties>(() => ({
+  transform: `translate(${-expandedHighlightScrollLeft.value}px, ${-expandedHighlightScrollTop.value}px)`,
+  "--data-grid-condition-highlight-scrollbar": `${expandedHighlightScrollbarWidth.value}px`,
+}));
+
+function highlightTokenClass(type: DataGridConditionTokenType): string | undefined {
+  if (type === "plain") return undefined;
+  return `data-grid-condition-token--${type}`;
+}
+
+function onEditorScroll(event: Event) {
+  const target = event.currentTarget as HTMLTextAreaElement;
+  if (target === overlayRef.value) {
+    expandedHighlightScrollLeft.value = target.scrollLeft;
+    expandedHighlightScrollTop.value = target.scrollTop;
+  } else {
+    collapsedHighlightScrollLeft.value = target.scrollLeft;
+  }
+}
+const emptyHistoryText = computed(() => (modelValue.value.trim() ? props.historyNoMatchesText : props.historyEmptyText));
+const activeSuggestionId = computed(() => (editor.highlightedIndex.value >= 0 ? `${suggestionListId}-${editor.highlightedIndex.value}` : undefined));
+const suggestionPreferredWidth = computed(() => getDataGridConditionSuggestionPreferredWidth(editor.suggestions.value));
+const suggestionStyle = computed<CSSProperties>(() => ({
+  left: `${suggestionPosition.value.left}px`,
+  top: `${suggestionPosition.value.top}px`,
+  width: `${suggestionPosition.value.width}px`,
+}));
+const overlayStyle = computed<CSSProperties>(() => ({
+  "--data-grid-condition-controls-top": `${expandedRect.value.controlsTop}px`,
+  "--data-grid-condition-input-top": `${expandedRect.value.inputTop}px`,
+  "--data-grid-condition-prefix-indent": `${expandedRect.value.prefix}px`,
+  "--data-grid-condition-suffix-width": `${expandedRect.value.suffix}px`,
+  left: `${expandedRect.value.left}px`,
+  top: `${expandedRect.value.top}px`,
+  width: `${expandedRect.value.width}px`,
+  height: `${expandedHeight.value}px`,
+}));
+const previewStyle = computed<CSSProperties>(() => {
+  const preview = historyPreview.value;
+  return preview ? { left: `${preview.left}px`, top: `${preview.top}px`, maxWidth: `${preview.maxWidth}px` } : {};
+});
+const previewArrowStyle = computed<CSSProperties>(() => ({ top: `${historyPreview.value?.arrowTop ?? 0}px` }));
+
+function createTextProbe(input: HTMLTextAreaElement, wrap: boolean, options: { width?: number; paddingLeft?: number; paddingRight?: number } = {}) {
+  const probe = document.createElement(wrap ? "div" : "span");
+  const style = window.getComputedStyle(input);
+  const width = options.width ?? input.clientWidth;
+  const paddingLeft = options.paddingLeft !== undefined ? `${options.paddingLeft}px` : style.paddingLeft;
+  const paddingRight = options.paddingRight !== undefined ? `${options.paddingRight}px` : style.paddingRight;
+  probe.textContent = input.value || input.placeholder || "";
+  probe.style.cssText = `position:fixed;left:-9999px;top:-9999px;visibility:hidden;box-sizing:border-box;${wrap ? `width:${width}px;white-space:pre-wrap;overflow-wrap:anywhere;padding:${style.paddingTop} ${paddingRight} ${style.paddingBottom} ${paddingLeft};` : "white-space:pre;"}font:${style.font};font-size:${style.fontSize};font-family:${style.fontFamily};font-weight:${style.fontWeight};line-height:${style.lineHeight};letter-spacing:${style.letterSpacing};`;
+  document.body.appendChild(probe);
+  return probe;
+}
+
+function shouldExpand(input: HTMLTextAreaElement) {
+  if (!input.value) return false;
+  const hasMultipleLines = /\r?\n/.test(input.value);
+  const probe = createTextProbe(input, false);
+  const should = hasMultipleLines || probe.getBoundingClientRect().width > input.clientWidth + 1;
+  probe.remove();
+  return should;
+}
+
+function measureExpandedHeight(input: HTMLTextAreaElement, rect: typeof expandedRect.value) {
+  const probe = createTextProbe(input, true, {
+    width: Math.max(1, rect.width - 8),
+    paddingLeft: rect.prefix + 2,
+    paddingRight: rect.suffix + 8,
+  });
+  const style = window.getComputedStyle(input);
+  const lineHeight = Number.parseFloat(style.lineHeight) || 24;
+  const contentHeight = probe.scrollHeight;
+  probe.remove();
+  const availableHeight = Math.max(56, window.innerHeight - input.getBoundingClientRect().top - 12);
+  return Math.min(Math.max(56, lineHeight * 2.5, contentHeight), Math.min(260, availableHeight));
+}
+
+function maxExpandedHeight() {
+  const input = inputRef.value;
+  const top = input?.getBoundingClientRect().top ?? expandedRect.value.top;
+  return Math.min(260, Math.max(56, window.innerHeight - top - 12));
+}
+
+function fitExpandedHeightToOverlay() {
+  const overlay = overlayRef.value;
+  if (!overlay) return;
+  const overflow = overlay.scrollHeight - overlay.clientHeight;
+  if (overflow > 4) {
+    expandedHeight.value = Math.min(maxExpandedHeight(), expandedHeight.value + overflow);
+  } else if (overflow <= 0) {
+    overlay.scrollTop = 0;
+  }
+}
+
+function syncExpandedHighlightScrollbar() {
+  const overlay = overlayRef.value;
+  if (!overlay) return;
+  const scrollbar = Math.max(0, overlay.offsetWidth - overlay.clientWidth);
+  if (scrollbar !== expandedHighlightScrollbarWidth.value) expandedHighlightScrollbarWidth.value = scrollbar;
+}
+
+function syncExpandedLayout() {
+  syncExpandedHighlightScrollbar();
+  // Re-fit once the compensation has been applied: the highlight layer now
+  // wraps exactly like the textarea, so the pane can size itself to the real
+  // content height instead of leaving a scrollbar that only the textarea sees.
+  void nextTick(fitExpandedHeightToOverlay);
+}
+
+function measureExpandedRect(input: HTMLTextAreaElement) {
+  const inputRect = input.getBoundingClientRect();
+  const control = controlRef.value;
+  const controlRect = control?.getBoundingClientRect() ?? inputRect;
+  const controlsRect = control?.firstElementChild?.getBoundingClientRect() ?? controlRect;
+  const label = control?.querySelector<HTMLElement>(".data-grid-topbar-condition-label");
+  const labelPrefix = label ? label.scrollWidth + 4 : 0;
+  const horizontalInset = 8;
+  return {
+    left: controlRect.left - horizontalInset,
+    top: controlRect.top,
+    width: controlRect.width + horizontalInset * 2,
+    controlsTop: Math.max(0, controlsRect.top - controlRect.top),
+    inputTop: Math.max(0, inputRect.top - controlRect.top),
+    prefix: Math.max(0, inputRect.left - controlRect.left, labelPrefix),
+    suffix: Math.max(28, controlRect.right - inputRect.right),
+  };
+}
+
+function updateSuggestionPosition() {
+  void nextTick(() => {
+    const target = activeEditor.value;
+    if (!target) return;
+    const targetRect = target.getBoundingClientRect();
+    const suggestionAnchor = expanded.value
+      ? {
+          left: targetRect.left,
+          bottom: expandedRect.value.top + expandedHeight.value,
+          width: targetRect.width,
+        }
+      : targetRect;
+    suggestionPosition.value = getDataGridConditionSuggestionPosition(suggestionAnchor, {
+      viewportWidth: window.innerWidth,
+      preferredWidth: suggestionPreferredWidth.value,
+      maxWidth: suggestionPreferredWidth.value === undefined ? undefined : 520,
+    });
+  });
+}
+
+function resizeEditor(forceExpand = false) {
+  void nextTick(() => {
+    const input = inputRef.value;
+    if (!input) return;
+    // Expanding swaps focus to a teleported overlay textarea; doing that mid-IME
+    // composition truncates unfinished pinyin. Defer until composition ends.
+    if (composing.value && !expanded.value) {
+      expandAfterComposition = true;
+      return;
+    }
+    const wasExpanded = expanded.value;
+    const overlayFocused = document.activeElement === overlayRef.value;
+    const focused = document.activeElement === input || overlayFocused;
+    const nextExpanded = focused && shouldExpand(input) && (forceExpand || expanded.value);
+    if (nextExpanded) {
+      if (!wasExpanded) {
+        expandedHighlightScrollLeft.value = 0;
+        expandedHighlightScrollTop.value = 0;
+      }
+      const nextRect = measureExpandedRect(input);
+      expandedRect.value = nextRect;
+      expandedHeight.value = measureExpandedHeight(input, nextRect);
+      void nextTick(syncExpandedLayout);
+    }
+    expanded.value = nextExpanded;
+    updateSuggestionPosition();
+    if (nextExpanded && document.activeElement === input && !composing.value) {
+      void nextTick(() => {
+        const overlay = overlayRef.value;
+        if (!overlay || composing.value) return;
+        const { start, end } = selectionToRestore(input.value);
+        overlay.setSelectionRange(start, end);
+        overlay.focus({ preventScroll: true });
+        overlay.setSelectionRange(start, end);
+        selectionStart.value = start;
+        selectionEnd.value = end;
+        scheduleCaretIntoView();
+      });
+    }
+    if (!nextExpanded && overlayFocused && !composing.value) {
+      void nextTick(() => {
+        const { start, end } = selectionToRestore(input.value);
+        input.focus({ preventScroll: true });
+        input.setSelectionRange(start, end);
+        selectionStart.value = start;
+        selectionEnd.value = end;
+        scheduleCaretIntoView();
+      });
+    }
+  });
+}
+
+function onCompositionStart() {
+  composing.value = true;
+}
+
+function onCompositionEnd() {
+  composing.value = false;
+  if (!expandAfterComposition) return;
+  expandAfterComposition = false;
+  resizeEditor(true);
+}
+
+function focus(select = false) {
+  const target = activeEditor.value ?? inputRef.value;
+  target?.focus();
+  if (select) {
+    target?.select();
+    if (target) syncSelection(target);
+  } else {
+    target?.setSelectionRange(selectionStart.value, selectionEnd.value);
+  }
+  resizeEditor(true);
+}
+
+function scrollCaretIntoView() {
+  const target = activeEditor.value;
+  if (!target) return;
+  const hasVerticalOverflow = target.scrollHeight > target.clientHeight + 4;
+  const hasHorizontalOverflow = target.scrollWidth > target.clientWidth + 1;
+  if (!hasVerticalOverflow && !hasHorizontalOverflow) {
+    target.scrollTop = 0;
+    target.scrollLeft = 0;
+    return;
+  }
+  const style = window.getComputedStyle(target);
+  const probe = document.createElement("div");
+  const caretMarker = document.createElement("span");
+  const caret = Math.min(Math.max(selectionStart.value, 0), target.value.length);
+  probe.textContent = target.value.slice(0, caret) || " ";
+  caretMarker.textContent = "\u200b";
+  probe.appendChild(caretMarker);
+  probe.style.cssText = `position:fixed;left:-9999px;top:-9999px;visibility:hidden;box-sizing:border-box;width:${target.clientWidth}px;white-space:${style.whiteSpace};overflow-wrap:${style.overflowWrap};padding:${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft};font:${style.font};font-size:${style.fontSize};font-family:${style.fontFamily};font-weight:${style.fontWeight};line-height:${style.lineHeight};letter-spacing:${style.letterSpacing};text-indent:${style.textIndent};`;
+  document.body.appendChild(probe);
+  const lineHeight = Number.parseFloat(style.lineHeight) || 24;
+  const caretTop = caretMarker.offsetTop;
+  const caretLeft = caretMarker.offsetLeft;
+  const topPadding = Number.parseFloat(style.paddingTop) || 0;
+  const bottomPadding = Number.parseFloat(style.paddingBottom) || 0;
+  const leftPadding = Number.parseFloat(style.paddingLeft) || 0;
+  const rightPadding = Number.parseFloat(style.paddingRight) || 0;
+  const visibleTop = target.scrollTop + topPadding;
+  const visibleBottom = target.scrollTop + target.clientHeight - bottomPadding;
+  const visibleLeft = target.scrollLeft + leftPadding;
+  const visibleRight = target.scrollLeft + target.clientWidth - rightPadding;
+  if (hasVerticalOverflow) {
+    if (caretTop < visibleTop) target.scrollTop = Math.max(0, caretTop - topPadding);
+    else if (caretTop + lineHeight > visibleBottom) target.scrollTop = caretTop + lineHeight + bottomPadding - target.clientHeight;
+  } else {
+    target.scrollTop = 0;
+  }
+  if (hasHorizontalOverflow) {
+    if (caretLeft < visibleLeft) target.scrollLeft = Math.max(0, caretLeft - leftPadding);
+    else if (caretLeft > visibleRight) target.scrollLeft = caretLeft + rightPadding - target.clientWidth;
+  } else {
+    target.scrollLeft = 0;
+  }
+  probe.remove();
+}
+
+function scheduleCaretIntoView() {
+  void nextTick(() => {
+    requestAnimationFrame(() => scrollCaretIntoView());
+  });
+}
+
+function focusAfterAccept() {
+  void nextTick(() => {
+    focus();
+    scheduleCaretIntoView();
+  });
+}
+
+function syncSelection(target: HTMLTextAreaElement) {
+  selectionStart.value = target.selectionStart;
+  selectionEnd.value = target.selectionEnd;
+}
+
+// A range captured before the text shrank (for example select-all followed by a
+// replacement) is longer than the value that is actually there. Clamping it
+// would select the whole condition, so the next keystroke would drop the input;
+// leave the caret at the end of the shorter text instead.
+function selectionToRestore(currentValue: string) {
+  const valueLength = currentValue.length;
+  if (selectionStart.value > valueLength || selectionEnd.value > valueLength) return { start: valueLength, end: valueLength };
+  return { start: selectionStart.value, end: selectionEnd.value };
+}
+
+function onFocus(event: FocusEvent) {
+  editorFocused.value = true;
+  syncSelection(event.currentTarget as HTMLTextAreaElement);
+  resizeEditor(true);
+}
+
+function onSelectionChange(event: Event) {
+  syncSelection(event.currentTarget as HTMLTextAreaElement);
+}
+
+function onClick(event: MouseEvent) {
+  onSelectionChange(event);
+  resizeEditor(true);
+}
+
+function scheduleCollapse() {
+  if (collapseTimer) clearTimeout(collapseTimer);
+  collapseTimer = setTimeout(() => {
+    const active = document.activeElement;
+    // Expanding/collapsing swaps focus between the two textareas, which fires a
+    // blur on the element being left; only a real exit from the editor ends the
+    // typing run.
+    if (active === inputRef.value || active === overlayRef.value) return;
+    closeConditionUndoGroup();
+    editorFocused.value = false;
+    editor.dismiss();
+    expanded.value = false;
+  }, 0);
+}
+
+function onInput(event: Event) {
+  syncSelection(event.currentTarget as HTMLTextAreaElement);
+  resizeEditor(true);
+  updateSuggestionPosition();
+  scheduleCaretIntoView();
+}
+
+function isConditionUndoRedoShortcut(event: KeyboardEvent) {
+  const key = event.key.toLowerCase();
+  return ((event.metaKey || event.ctrlKey) && !event.altKey && key === "z") || (event.ctrlKey && !event.metaKey && !event.altKey && key === "y");
+}
+
+function isConditionRedoShortcut(event: KeyboardEvent) {
+  return ((event.metaKey || event.ctrlKey) && !event.altKey && event.shiftKey && event.key.toLowerCase() === "z") || (event.ctrlKey && !event.metaKey && !event.altKey && event.key.toLowerCase() === "y");
+}
+
+function applyConditionHistoryValue(value: string) {
+  closeConditionUndoGroup();
+  conditionLastValue = value;
+  modelValue.value = value;
+  void nextTick(() => {
+    const target = activeEditor.value;
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    target.setSelectionRange(value.length, value.length);
+    syncSelection(target);
+  });
+}
+
+function handleConditionUndoRedo(event: KeyboardEvent) {
+  if (!isConditionUndoRedoShortcut(event)) return false;
+
+  event.preventDefault();
+  event.stopPropagation();
+  const source = isConditionRedoShortcut(event) ? conditionRedoStack.value : conditionUndoStack.value;
+  const targetValue = source.pop();
+  if (targetValue === undefined) return true;
+
+  const currentValue = modelValue.value;
+  const destination = isConditionRedoShortcut(event) ? conditionUndoStack.value : conditionRedoStack.value;
+  destination.push(currentValue);
+  applyConditionHistoryValue(targetValue);
+  return true;
+}
+
+async function applyCondition() {
+  closeConditionUndoGroup();
+  editor.dismiss();
+  const applied = props.apply ? await props.apply(modelValue.value) : emit("apply", modelValue.value);
+  if (applied !== false && modelValue.value.trim()) editor.rememberHistory();
+}
+
+async function clearCondition() {
+  closeConditionUndoGroup();
+  modelValue.value = "";
+  editor.dismiss();
+  expanded.value = false;
+  if (props.clear) await props.clear();
+  else emit("clear");
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (handleConditionUndoRedo(event)) return;
+  if (completeQuote(event)) return;
+  if (event.key === "Enter" || event.key === "Tab") closeConditionUndoGroup();
+  const action = editor.handleKeydown(event);
+  if (action === "apply") void applyCondition();
+  if (action === "accept") focusAfterAccept();
+}
+
+function completeQuote(event: KeyboardEvent) {
+  if (props.kind !== "where" || (event.key !== "'" && event.key !== '"') || event.isComposing || event.keyCode === 229 || event.metaKey || event.ctrlKey || event.altKey) return false;
+  const target = event.currentTarget as HTMLTextAreaElement;
+  const completion = completeDataGridConditionQuote(modelValue.value, target.selectionStart, target.selectionEnd, event.key);
+  event.preventDefault();
+  modelValue.value = completion.value;
+  selectionStart.value = completion.selectionStart;
+  selectionEnd.value = completion.selectionEnd;
+  editor.dismiss();
+  void nextTick(() => {
+    const active = activeEditor.value;
+    active?.focus();
+    active?.setSelectionRange(completion.selectionStart, completion.selectionEnd);
+  });
+  return true;
+}
+
+function openHistory() {
+  editor.openHistory();
+  updateSuggestionPosition();
+  focus();
+}
+
+function acceptSuggestion(index: number) {
+  closeConditionUndoGroup();
+  editor.accept(index);
+  focusAfterAccept();
+}
+
+function onSuggestionPointerMove(index: number, suggestion: DataGridConditionSuggestion, event: MouseEvent) {
+  pointerMovedSuggestionIndex.value = index;
+  editor.highlightedIndex.value = index;
+  if (suggestion.kind === "history") showHistoryPreview(suggestion.value, event);
+}
+
+function onSuggestionPointerLeave() {
+  pointerMovedSuggestionIndex.value = -1;
+  hideHistoryPreview();
+}
+
+function eventInside(event: Event, element?: HTMLElement) {
+  if (!element) return false;
+  const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+  return path.includes(element) || (event.target instanceof Node && element.contains(event.target));
+}
+
+function onDocumentPointerDown(event: PointerEvent) {
+  if (eventInside(event, controlRef.value) || eventInside(event, overlayRef.value?.parentElement ?? undefined) || eventInside(event, dropdownRef.value)) return;
+  editor.dismiss();
+}
+
+function onViewportResize() {
+  resizeEditor();
+}
+
+function showHistoryPreview(value: string, event: MouseEvent) {
+  const target = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+  const text = target?.querySelector<HTMLElement>("[data-condition-history-text]");
+  if (!target || !text || text.scrollWidth <= text.clientWidth + 1) return hideHistoryPreview();
+  const rect = target.getBoundingClientRect();
+  const gap = 10;
+  const availableRight = window.innerWidth - rect.right - gap - 8;
+  const availableLeft = rect.left - gap - 8;
+  const placeRight = availableRight >= 280 || availableRight >= availableLeft;
+  const maxWidth = Math.max(280, Math.min(560, placeRight ? availableRight : availableLeft));
+  const estimatedHeight = Math.min(260, Math.max(56, Math.ceil(value.length / 58) * 18 + 24));
+  const top = Math.min(Math.max(8, rect.top), Math.max(8, window.innerHeight - estimatedHeight - 8));
+  historyPreview.value = {
+    value,
+    left: placeRight ? rect.right + gap : Math.max(8, rect.left - gap - maxWidth),
+    top,
+    maxWidth,
+    arrowTop: Math.min(Math.max(14, rect.top + rect.height / 2 - top), estimatedHeight - 14),
+    side: placeRight ? "left" : "right",
+  };
+}
+
+function hideHistoryPreview() {
+  historyPreview.value = null;
+}
+
+watch(modelValue, (value) => {
+  if (value !== conditionLastValue) {
+    const now = Date.now();
+    const continuesTypingRun = conditionUndoGroupOpen && now - conditionUndoGroupAt <= CONDITION_TYPING_UNDO_GROUP_MS;
+    if (!continuesTypingRun) {
+      conditionUndoStack.value.push(conditionLastValue);
+      conditionRedoStack.value = [];
+    }
+    conditionUndoGroupOpen = true;
+    conditionUndoGroupAt = now;
+    conditionLastValue = value;
+  }
+  resizeEditor();
+});
+watch(suggestionPreferredWidth, () => {
+  if (editor.dropdownOpen.value) updateSuggestionPosition();
+});
+watch(
+  () => editor.suggestions.value.map((suggestion) => `${suggestion.kind}:${suggestion.value}`).join("\n"),
+  () => {
+    pointerMovedSuggestionIndex.value = -1;
+  },
+);
+watch(
+  () => editor.dropdownOpen.value,
+  (open) => {
+    pointerMovedSuggestionIndex.value = -1;
+    if (open) updateSuggestionPosition();
+    else hideHistoryPreview();
+  },
+);
+
+onMounted(() => {
+  window.addEventListener("resize", onViewportResize);
+  window.visualViewport?.addEventListener("resize", onViewportResize);
+  window.addEventListener("dbx:ui-scale-applied", onViewportResize);
+  document.addEventListener("pointerdown", onDocumentPointerDown, true);
+  if (typeof ResizeObserver !== "undefined" && controlRef.value) {
+    resizeObserver = new ResizeObserver(() => resizeEditor());
+    resizeObserver.observe(controlRef.value);
+  }
+});
+
+onUnmounted(() => {
+  if (collapseTimer) clearTimeout(collapseTimer);
+  expandAfterComposition = false;
+  resizeObserver?.disconnect();
+  window.removeEventListener("resize", onViewportResize);
+  window.visualViewport?.removeEventListener("resize", onViewportResize);
+  window.removeEventListener("dbx:ui-scale-applied", onViewportResize);
+  document.removeEventListener("pointerdown", onDocumentPointerDown, true);
+});
+
+defineExpose({ focus, dismiss: editor.dismiss, rememberHistory: editor.rememberHistory });
+</script>
+
+<template>
+  <div ref="controlRef" class="relative flex min-w-0 flex-1 items-stretch">
+    <div class="flex min-w-0 flex-1 items-center gap-1">
+      <span class="data-grid-topbar-condition-label" :class="[props.kind === 'where' ? 'data-grid-topbar-condition-label--where' : 'data-grid-topbar-condition-label--order', { 'data-grid-topbar-condition-label--compact': props.compact }]">
+        {{ props.kind === "where" ? "WHERE" : "ORDER BY" }}
+      </span>
+      <div class="relative h-6 min-w-0 flex-1 overflow-hidden">
+        <div v-if="!composing" aria-hidden="true" class="data-grid-condition-highlight pointer-events-none absolute left-0 top-0" :style="collapsedHighlightStyle">
+          <span v-for="(token, tokenIndex) in highlightTokens" :key="tokenIndex" :class="highlightTokenClass(token.type)">{{ token.text }}</span>
+        </div>
+        <textarea
+          ref="inputRef"
+          v-model="modelValue"
+          wrap="off"
+          rows="1"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          :disabled="props.disabled"
+          :placeholder="props.placeholder"
+          :aria-label="props.ariaLabel || props.placeholder"
+          role="combobox"
+          aria-autocomplete="list"
+          :aria-expanded="editor.dropdownOpen.value"
+          :aria-controls="suggestionListId"
+          :aria-activedescendant="activeSuggestionId"
+          class="data-grid-topbar-condition-input absolute inset-x-0 top-0 h-6 min-w-0 resize-none bg-transparent outline-none"
+          :class="[props.kind === 'where' ? 'data-grid-topbar-condition-input--where' : 'data-grid-topbar-condition-input--order', { 'data-grid-topbar-condition-input--compact': props.compact, 'data-grid-condition-input--transparent-text': !composing }]"
+          style="height: 24px"
+          @focus="onFocus"
+          @blur="scheduleCollapse"
+          @click="onClick"
+          @select="onSelectionChange"
+          @keyup="onSelectionChange"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
+          @input="onInput"
+          @scroll="onEditorScroll"
+          @contextmenu.stop
+          @keydown="onKeydown"
+        />
+      </div>
+      <button type="button" class="shrink-0 text-muted-foreground hover:text-foreground" :disabled="props.disabled" @mousedown.prevent @click="openHistory">
+        <ChevronDown class="h-3 w-3" />
+      </button>
+      <button v-if="hasValue" type="button" class="shrink-0 text-muted-foreground hover:text-foreground" :disabled="props.disabled" @mousedown.prevent @click="clearCondition">
+        <X class="h-3 w-3" />
+      </button>
+    </div>
+
+    <Teleport to="body">
+      <div v-if="expanded" class="data-grid-topbar-condition-pane--expanded fixed z-[80] flex min-w-0 items-start gap-1" :style="overlayStyle">
+        <div v-if="!composing" aria-hidden="true" class="data-grid-condition-highlight data-grid-condition-highlight--expanded pointer-events-none absolute" :style="expandedHighlightStyle">
+          <span v-for="(token, tokenIndex) in highlightTokens" :key="tokenIndex" :class="highlightTokenClass(token.type)">{{ token.text }}</span>
+        </div>
+        <textarea
+          ref="overlayRef"
+          v-model="modelValue"
+          :disabled="props.disabled"
+          :placeholder="props.placeholder"
+          :aria-label="props.ariaLabel || props.placeholder"
+          role="combobox"
+          aria-autocomplete="list"
+          :aria-expanded="editor.dropdownOpen.value"
+          :aria-controls="suggestionListId"
+          :aria-activedescendant="activeSuggestionId"
+          class="data-grid-topbar-condition-input data-grid-topbar-condition-input--expanded absolute resize-none outline-none"
+          :class="[props.kind === 'where' ? 'data-grid-topbar-condition-input--where' : 'data-grid-topbar-condition-input--order', { 'data-grid-topbar-condition-input--compact': props.compact, 'data-grid-condition-input--transparent-text': !composing }]"
+          @blur="scheduleCollapse"
+          @focus="onFocus"
+          @click="onSelectionChange"
+          @select="onSelectionChange"
+          @keyup="onSelectionChange"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
+          @input="onInput"
+          @scroll="onEditorScroll"
+          @contextmenu.stop
+          @keydown="onKeydown"
+        />
+        <div class="data-grid-topbar-condition-floating-controls pointer-events-none absolute inset-x-2 z-[2] flex h-6 min-w-0 items-center gap-1">
+          <span class="data-grid-topbar-condition-label data-grid-topbar-condition-label--floating" :class="[props.kind === 'where' ? 'data-grid-topbar-condition-label--where' : 'data-grid-topbar-condition-label--order', { 'data-grid-topbar-condition-label--compact': props.compact }]">
+            {{ props.kind === "where" ? "WHERE" : "ORDER BY" }}
+          </span>
+          <div class="min-w-0 flex-1" />
+          <button type="button" class="data-grid-topbar-condition-icon-control pointer-events-auto shrink-0 text-muted-foreground hover:text-foreground" :disabled="props.disabled" @mousedown.prevent @click="openHistory">
+            <ChevronDown class="h-3 w-3" />
+          </button>
+          <button v-if="hasValue" type="button" class="data-grid-topbar-condition-icon-control pointer-events-auto shrink-0 text-muted-foreground hover:text-foreground" :disabled="props.disabled" @mousedown.prevent @click="clearCondition">
+            <X class="h-3 w-3" />
+          </button>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="editor.dropdownOpen.value" :id="suggestionListId" ref="dropdownRef" role="listbox" class="fixed z-[90] min-w-[180px] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md" :style="suggestionStyle">
+        <div
+          v-for="(suggestion, index) in editor.suggestions.value"
+          :key="`${suggestion.kind}:${suggestion.value}`"
+          :id="`${suggestionListId}-${index}`"
+          role="option"
+          :aria-selected="index === editor.highlightedIndex.value"
+          class="flex cursor-pointer items-center px-3 py-1.5 text-xs"
+          :class="index === editor.highlightedIndex.value ? 'bg-accent text-accent-foreground' : pointerMovedSuggestionIndex === index ? 'bg-gray-200 dark:bg-gray-800' : ''"
+          @mousedown.prevent="acceptSuggestion(index)"
+          @mousemove="onSuggestionPointerMove(index, suggestion, $event)"
+          @mouseleave="onSuggestionPointerLeave"
+        >
+          <span data-condition-history-text class="data-grid-condition-suggestion-field min-w-0 truncate" :class="suggestion.comment ? 'max-w-[75%] shrink-0' : 'flex-1'" :title="suggestion.value">
+            {{ suggestion.value }}
+          </span>
+          <span v-if="suggestion.comment" class="ml-3 min-w-0 flex-1 truncate text-right text-muted-foreground" :title="suggestion.comment">{{ suggestion.comment }}</span>
+          <button v-if="suggestion.kind === 'history'" type="button" class="ml-2 shrink-0 text-muted-foreground hover:text-foreground" @mousedown.stop.prevent="editor.deleteHistory(suggestion.value)">
+            <X class="h-3 w-3" />
+          </button>
+        </div>
+        <div v-if="editor.suggestions.value.length === 0" class="px-3 py-2 text-xs text-muted-foreground">{{ emptyHistoryText }}</div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="historyPreview" class="pointer-events-none fixed z-[140] rounded-md bg-foreground shadow-xl" :style="previewStyle">
+        <span class="absolute h-3 w-3 rotate-45 bg-foreground" :class="historyPreview.side === 'left' ? '-left-1.5' : '-right-1.5'" :style="previewArrowStyle" />
+        <div class="max-h-[min(320px,calc(100vh-16px))] overflow-auto rounded-md px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-background-solid">{{ historyPreview.value }}</div>
+      </div>
+    </Teleport>
+  </div>
+</template>
+
+<style scoped>
+.data-grid-topbar-condition-label {
+  display: inline-flex;
+  flex-shrink: 0;
+  max-width: 5rem;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--data-grid-condition-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+  user-select: none;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    max-width var(--data-grid-topbar-transition-duration, 340ms) var(--data-grid-topbar-transition-easing, cubic-bezier(0.22, 1, 0.36, 1)),
+    opacity 240ms ease 60ms,
+    transform var(--data-grid-topbar-transition-duration, 340ms) var(--data-grid-topbar-transition-easing, cubic-bezier(0.22, 1, 0.36, 1)),
+    color 240ms ease;
+}
+
+.data-grid-topbar-condition-label--where {
+  color: rgb(37 99 235);
+}
+
+.data-grid-topbar-condition-label--order {
+  color: rgb(234 88 12);
+}
+
+.data-grid-topbar-condition-label--floating {
+  position: relative;
+  z-index: 1;
+  text-shadow:
+    -1px 0 color-mix(in oklab, var(--background) 96%, var(--muted) 4%),
+    1px 0 color-mix(in oklab, var(--background) 96%, var(--muted) 4%),
+    0 -1px color-mix(in oklab, var(--background) 96%, var(--muted) 4%),
+    0 1px color-mix(in oklab, var(--background) 96%, var(--muted) 4%);
+}
+
+:global(.dark .data-grid-topbar-condition-label--where) {
+  color: rgb(96 165 250);
+}
+
+:global(.dark .data-grid-topbar-condition-label--order) {
+  color: rgb(251 146 60);
+}
+
+:global(.dark .data-grid-topbar-condition-label--floating) {
+  text-shadow:
+    -1px 0 rgb(24, 24, 27),
+    1px 0 rgb(24, 24, 27),
+    0 -1px rgb(24, 24, 27),
+    0 1px rgb(24, 24, 27);
+}
+
+.data-grid-topbar-condition-label--compact {
+  max-width: 0;
+  opacity: 0;
+  transform: translateX(-4px);
+}
+
+.data-grid-topbar-condition-label--floating.data-grid-topbar-condition-label--compact {
+  max-width: 5rem;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.data-grid-topbar-condition-input,
+.data-grid-condition-suggestion-field {
+  font-family: var(--data-grid-condition-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+  font-size: 0.875rem;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
+}
+
+.data-grid-topbar-condition-input {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0 0.125rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: pre;
+  border: 0;
+  border-radius: 0;
+  appearance: none;
+  scrollbar-width: none;
+  line-height: 1.5rem;
+}
+
+:global(.dark .data-grid-topbar-condition-input) {
+  color: rgb(244, 244, 245);
+  background-color: transparent !important;
+}
+
+.data-grid-topbar-condition-input::-webkit-scrollbar {
+  display: none;
+}
+
+.data-grid-topbar-condition-icon-control {
+  align-self: center;
+  margin-top: 0;
+}
+
+.data-grid-topbar-condition-floating-controls {
+  top: var(--data-grid-condition-controls-top);
+  will-change: transform;
+}
+
+.data-grid-topbar-condition-pane--expanded {
+  --data-grid-condition-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  position: fixed;
+  z-index: 80;
+  right: auto;
+  bottom: auto;
+  box-sizing: border-box;
+  padding: 0.1875rem 0.5rem;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--background) 96%, var(--muted) 4%);
+  box-shadow:
+    inset 0 -1px 0 var(--border),
+    0 8px 16px rgb(15 23 42 / 8%);
+  transition: box-shadow 150ms ease;
+  --data-grid-expanded-scrollbar-offset: 8px;
+  --data-grid-condition-controls-top: 0.125rem;
+  --data-grid-condition-input-top: 0.125rem;
+  --data-grid-condition-prefix-indent: 0px;
+  --data-grid-condition-suffix-width: 0px;
+}
+
+:global(.dark .data-grid-topbar-condition-pane--expanded) {
+  background: rgb(24, 24, 27) !important;
+  color: rgb(244, 244, 245);
+  box-shadow:
+    inset 0 -1px 0 rgb(63, 63, 70),
+    0 8px 16px rgb(0 0 0 / 32%);
+}
+
+.data-grid-topbar-condition-input--expanded {
+  top: var(--data-grid-condition-input-top);
+  right: 0.5rem;
+  bottom: 0.125rem;
+  left: 0.5rem;
+  height: auto;
+  line-height: 1.5rem;
+  margin-left: 0;
+  width: calc(100% - 1rem + var(--data-grid-expanded-scrollbar-offset));
+  max-width: none;
+  margin-right: calc(-1 * var(--data-grid-expanded-scrollbar-offset));
+  padding: 0 calc(var(--data-grid-condition-suffix-width) + 0.5rem) 0.0625rem calc(var(--data-grid-condition-prefix-indent) + 0.125rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  scrollbar-width: thin;
+}
+
+.data-grid-topbar-condition-input--expanded::-webkit-scrollbar {
+  display: initial;
+  width: 8px;
+}
+
+.data-grid-topbar-condition-input::placeholder {
+  color: transparent;
+  transition: color 240ms ease;
+}
+
+.data-grid-topbar-condition-input--where.data-grid-topbar-condition-input--compact::placeholder {
+  color: rgb(59 130 246 / 70%);
+}
+
+.data-grid-topbar-condition-input--order.data-grid-topbar-condition-input--compact::placeholder {
+  color: rgb(249 115 22 / 70%);
+}
+
+:global(.dark .data-grid-topbar-condition-input--where.data-grid-topbar-condition-input--compact::placeholder) {
+  color: rgb(147 197 253 / 70%);
+}
+
+:global(.dark .data-grid-topbar-condition-input--order.data-grid-topbar-condition-input--compact::placeholder) {
+  color: rgb(253 186 116 / 70%);
+}
+
+/* Syntax highlight layer: sits below the transparent-text textarea and colors
+   condition keywords / fields / values while the real caret and selection keep
+   working in the textarea above it. */
+.data-grid-condition-highlight {
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 100%;
+  height: 24px;
+  padding: 0 0.125rem;
+  font-family: var(--data-grid-condition-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
+  font-size: 0.875rem;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
+  line-height: 1.5rem;
+  white-space: pre;
+}
+
+.data-grid-condition-highlight--expanded {
+  top: var(--data-grid-condition-input-top);
+  bottom: 0.125rem;
+  left: 0.5rem;
+  width: calc(100% - 1rem + var(--data-grid-expanded-scrollbar-offset));
+  min-width: 0;
+  height: auto;
+  margin-right: calc(-1 * var(--data-grid-expanded-scrollbar-offset));
+  padding: 0 calc(var(--data-grid-condition-suffix-width) + 0.5rem + var(--data-grid-condition-highlight-scrollbar, 0px)) 0.0625rem calc(var(--data-grid-condition-prefix-indent) + 0.125rem);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.data-grid-condition-input--transparent-text {
+  color: transparent !important;
+  caret-color: var(--foreground);
+}
+
+.data-grid-condition-token--keyword {
+  color: rgb(37 99 235);
+  font-weight: 600;
+}
+
+.data-grid-condition-token--field {
+  color: rgb(225 29 72);
+}
+
+.data-grid-condition-token--value {
+  color: rgb(13 148 136);
+}
+
+:global(.dark .data-grid-condition-token--keyword) {
+  color: rgb(96 165 250);
+}
+
+:global(.dark .data-grid-condition-token--field) {
+  color: rgb(251 113 133);
+}
+
+:global(.dark .data-grid-condition-token--value) {
+  color: rgb(45 212 191);
+}
+</style>

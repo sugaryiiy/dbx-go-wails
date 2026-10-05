@@ -1,0 +1,302 @@
+import { describe, expect, it } from "vitest";
+import { supportsDatabaseFeature } from "@/lib/database/databaseDriverManifest";
+import {
+  dorisGrantPrivilegesSql,
+  dorisGrantsResult,
+  dorisPrivilegeTargetSql,
+  dorisUsersResult,
+  gaussdbMUserAdminProvider,
+  getDatabaseUserAdminProvider,
+  kingbaseShowGrantsSql,
+  kingbaseUserAdminProvider,
+  mysqlPrivilegeSelectionFromGrants,
+  nativeMysqlUserAdminProvider,
+  postgresTableGrantsResult,
+  postgresTableGrantsSql,
+  postgresUserAdminProvider,
+  resolveDatabaseUserAdminProviderForConnection,
+  starrocksTableGrantsResult,
+  supportsDatabaseUserAdmin,
+} from "@/lib/database/databaseUserAdmin";
+import type { ConnectionConfig, QueryResult } from "@/types/database";
+
+function result(columns: string[], rows: QueryResult["rows"]): QueryResult {
+  return { columns, rows, affected_rows: 0, execution_time_ms: 1 };
+}
+
+function connection(dbType: ConnectionConfig["db_type"], driverProfile?: string): ConnectionConfig {
+  return {
+    id: `${dbType}-connection`,
+    name: dbType,
+    db_type: dbType,
+    driver_profile: driverProfile,
+    host: "localhost",
+    port: 5432,
+    username: "tester",
+    password: "",
+  };
+}
+
+describe("Vastbase password changes", () => {
+  const user = { user: 'fixture"role', host: "LOGIN" };
+
+  it("quotes both passwords and the role in the exact self-change grammar", () => {
+    const provider = getDatabaseUserAdminProvider("vastbase")!;
+    expect(provider.alterPasswordSql!(user, "new'password", "old'password")).toBe(`ALTER ROLE "fixture""role" IDENTIFIED BY 'new''password' REPLACE 'old''password';`);
+  });
+
+  it("allows the server to authorize a reset without the old password", () => {
+    const provider = getDatabaseUserAdminProvider("vastbase")!;
+    expect(provider.alterPasswordSql!(user, "new", "")).toBe('ALTER ROLE "fixture""role" IDENTIFIED BY \'new\';');
+    expect(provider.alterPasswordSql!(user, "new")).toBe('ALTER ROLE "fixture""role" IDENTIFIED BY \'new\';');
+  });
+
+  it("keeps whitespace in old passwords and preserves PostgreSQL and MySQL defaults", () => {
+    expect(getDatabaseUserAdminProvider("vastbase")!.alterPasswordSql!(user, "new", " ")).toContain(" REPLACE ' ';");
+    expect(getDatabaseUserAdminProvider("postgres")!.alterPasswordSql!(user, "new", "old")).toBe('ALTER ROLE "fixture""role" PASSWORD \'new\';');
+    expect(getDatabaseUserAdminProvider("mysql")!.alterPasswordSql!({ user: "fixture", host: "%" }, "new", "old")).toBe("ALTER USER 'fixture'@'%' IDENTIFIED BY 'new';");
+  });
+});
+
+describe("MySQL grant privilege selection", () => {
+  const availablePrivileges = ["SELECT", "INSERT", "UPDATE", "EXECUTE"];
+
+  it("expands ALL PRIVILEGES and reads WITH GRANT OPTION for the current scope", () => {
+    expect(
+      mysqlPrivilegeSelectionFromGrants({
+        grants: ["grant all privileges on `*`.* to 'root'@'%' WITH GRANT OPTION"],
+        database: "*",
+        table: "*",
+        availablePrivileges,
+      }),
+    ).toEqual({ privileges: availablePrivileges, grantOption: true });
+  });
+
+  it("merges matching grants case-insensitively", () => {
+    expect(
+      mysqlPrivilegeSelectionFromGrants({
+        grants: ["GRANT SELECT, insert ON `Sales`.`Orders` TO 'app'@'%'", "GRANT UPDATE ON sales.orders TO 'app'@'%' WITH GRANT OPTION"],
+        database: "SALES",
+        table: "orders",
+        availablePrivileges,
+      }),
+    ).toEqual({ privileges: ["SELECT", "INSERT", "UPDATE"], grantOption: true });
+  });
+
+  it("supports escaped backticks and ignores grants for other scopes or routines", () => {
+    expect(
+      mysqlPrivilegeSelectionFromGrants({
+        grants: ["GRANT SELECT ON `tenant``db`.`audit``log` TO 'app'@'%'", "GRANT INSERT ON `tenant``db`.* TO 'app'@'%' WITH GRANT OPTION", "GRANT EXECUTE ON PROCEDURE `tenant``db`.`audit``log` TO 'app'@'%' WITH GRANT OPTION"],
+        database: "tenant`db",
+        table: "audit`log",
+        availablePrivileges,
+      }),
+    ).toEqual({ privileges: ["SELECT"], grantOption: false });
+  });
+
+  it("returns an empty selection when the current scope has no grant", () => {
+    expect(
+      mysqlPrivilegeSelectionFromGrants({
+        grants: ["GRANT SELECT ON `other`.* TO 'app'@'%' WITH GRANT OPTION"],
+        database: "current",
+        table: "*",
+        availablePrivileges,
+      }),
+    ).toEqual({ privileges: [], grantOption: false });
+  });
+});
+
+describe("database user admin providers", () => {
+  it("keeps Xugu on its dedicated permission surface despite the product capability", () => {
+    expect(supportsDatabaseFeature("xugu", "userAdmin")).toBe(true);
+    expect(supportsDatabaseUserAdmin("xugu")).toBe(false);
+    expect(getDatabaseUserAdminProvider("xugu")).toBeNull();
+    expect(resolveDatabaseUserAdminProviderForConnection(connection("xugu"))).toBeNull();
+  });
+
+  it("opts only native MySQL connections into account Host changes", () => {
+    const legacyNative = resolveDatabaseUserAdminProviderForConnection(connection("mysql"));
+    const blankLegacyNative = resolveDatabaseUserAdminProviderForConnection(connection("mysql", "  "));
+    const native = resolveDatabaseUserAdminProviderForConnection(connection("mysql", "mysql"));
+    const normalizedNative = resolveDatabaseUserAdminProviderForConnection(connection("mysql", " MySQL "));
+
+    expect(legacyNative).toBe(nativeMysqlUserAdminProvider);
+    expect(blankLegacyNative).toBe(nativeMysqlUserAdminProvider);
+    expect(native).toBe(nativeMysqlUserAdminProvider);
+    expect(normalizedNative).toBe(nativeMysqlUserAdminProvider);
+    expect(native?.renameUserSql?.({ user: "app'user", host: "old\\host" }, "new'\\host")).toBe("RENAME USER 'app''user'@'old\\\\host' TO 'app''user'@'new''\\\\host';");
+  });
+
+  it("does not expose account Host changes to MySQL-compatible providers", () => {
+    const jdbcMysql = { ...connection("jdbc", "mysql"), connection_string: "jdbc:mysql://localhost:3306/app" };
+
+    expect(getDatabaseUserAdminProvider("mysql")?.renameUserSql).toBeUndefined();
+    expect(resolveDatabaseUserAdminProviderForConnection(connection("goldendb", "goldendb"))?.renameUserSql).toBeUndefined();
+    expect(resolveDatabaseUserAdminProviderForConnection(jdbcMysql)?.renameUserSql).toBeUndefined();
+    for (const profile of ["mariadb", "oceanbase", "tidb", "tdsql", "polardb", "greatsql", "goldendb", "doris", "selectdb", "starrocks"]) {
+      expect(resolveDatabaseUserAdminProviderForConnection(connection("mysql", profile))?.renameUserSql, profile).toBeUndefined();
+    }
+    for (const dbType of ["gbase", "doris", "starrocks", "postgres"] as const) {
+      expect(resolveDatabaseUserAdminProviderForConnection(connection(dbType, dbType))?.renameUserSql, dbType).toBeUndefined();
+    }
+  });
+
+  it("selects the dedicated provider for GaussDB M-mode connections", () => {
+    const provider = resolveDatabaseUserAdminProviderForConnection(connection("gaussdb", "GAUSSDB-M"));
+
+    expect(provider).toBe(gaussdbMUserAdminProvider);
+  });
+
+  it("quotes role result aliases for M-mode and PostgreSQL-compatible providers", () => {
+    const gaussdbMSql = gaussdbMUserAdminProvider.listUsersSql();
+    const postgresSql = postgresUserAdminProvider.listUsersSql();
+    const kingbaseSql = kingbaseUserAdminProvider.listUsersSql();
+
+    expect(gaussdbMSql).toContain("r.rolname AS `user`");
+    expect(gaussdbMSql).toContain("END AS `host`");
+    expect(gaussdbMSql).toContain(") AS `plugin`");
+    for (const sql of [postgresSql, kingbaseSql]) {
+      expect(sql).toContain('r.rolname AS "user"');
+      expect(sql).toContain('END AS "host"');
+      expect(sql).toContain(') AS "plugin"');
+    }
+  });
+
+  it("uses M-mode-compatible table grant SQL", () => {
+    const sql = gaussdbMUserAdminProvider.showGrantsSql({ user: "role'o", host: "LOGIN" });
+
+    expect(sql).toContain("FROM information_schema.table_privileges");
+    expect(sql).toContain("concat('Role: '");
+    expect(sql).toContain("AS `rolbypassrls`");
+    expect(sql).toContain("AS `sort`");
+    expect(sql).toContain("AS `line`");
+    expect(sql).toContain("ORDER BY `sort`, `line`");
+    expect(sql).toContain("WHERE r.rolname = 'role''o'");
+    expect(sql).not.toContain("role_table_grants");
+    expect(sql).not.toContain(" || ");
+  });
+
+  it("limits PostgreSQL table selection to native PostgreSQL", () => {
+    const gaussdb = resolveDatabaseUserAdminProviderForConnection(connection("gaussdb"));
+
+    expect(gaussdb).not.toBe(postgresUserAdminProvider);
+    expect(gaussdb?.supportsTableGrantsOnCreate).toBeUndefined();
+    expect(resolveDatabaseUserAdminProviderForConnection(connection("postgres"))).toBe(postgresUserAdminProvider);
+    expect(resolveDatabaseUserAdminProviderForConnection(connection("kingbase"))).toBe(kingbaseUserAdminProvider);
+    expect(postgresUserAdminProvider.supportsTableGrantsOnCreate).toBe(true);
+    expect(getDatabaseUserAdminProvider("gaussdb")?.supportsTableGrantsOnCreate).toBeUndefined();
+  });
+
+  it("loads direct PostgreSQL table grants with database and schema identity", () => {
+    const sql = postgresTableGrantsSql({ user: "role'o", host: "LOGIN" });
+    const grants = postgresTableGrantsResult(
+      result(
+        ["schema", "table", "privilege", "grant_option"],
+        [
+          ["sales", "orders", "SELECT", "NO"],
+          ['odd"schema', 'daily"rollup', "UPDATE", "YES"],
+        ],
+      ),
+      { database: "app-db" },
+    );
+
+    expect(sql).toContain("FROM information_schema.table_privileges");
+    expect(sql).toContain("WHERE grantee = 'role''o'");
+    expect(grants).toEqual([
+      { database: "app-db", schema: "sales", table: "orders", privilege: "SELECT", grantOption: false },
+      { database: "app-db", schema: 'odd"schema', table: 'daily"rollup', privilege: "UPDATE", grantOption: true },
+    ]);
+  });
+
+  it("uses Doris 2.x user and privilege syntax", () => {
+    const provider = getDatabaseUserAdminProvider("doris");
+
+    expect(provider?.listUsersSql()).toBe("SHOW ALL GRANTS;");
+    expect(provider?.fallbackListUsersSql?.()).toBe("SHOW GRANTS;");
+    expect(provider?.parseFallbackUsers).toBe(dorisUsersResult);
+    expect(provider?.showGrantsSql({ user: "reporter", host: "%" })).toBe("SHOW GRANTS FOR 'reporter'@'%';");
+    expect(provider?.alterPasswordSql?.({ user: "reporter", host: "%" }, "new'secret")).toBe("SET PASSWORD FOR 'reporter'@'%' = PASSWORD('new''secret');");
+    expect(dorisPrivilegeTargetSql("analytics", "daily`rollup")).toBe("`internal`.`analytics`.`daily``rollup`");
+    expect(dorisGrantPrivilegesSql({ user: { user: "reporter", host: "%" }, privileges: ["select_priv", "LOAD_PRIV"], database: "analytics", grantOption: true })).toBe("GRANT SELECT_PRIV, LOAD_PRIV ON `internal`.`analytics`.* TO 'reporter'@'%';");
+    expect(provider?.alterLoginSql).toBeUndefined();
+    expect(provider?.privilegesForScope?.("table")).toEqual(["SELECT_PRIV", "LOAD_PRIV", "ALTER_PRIV", "CREATE_PRIV", "DROP_PRIV", "SHOW_VIEW_PRIV"]);
+  });
+
+  it("parses Doris SHOW GRANTS users and structured privileges", () => {
+    const grants = result(["UserIdentity", "Comment", "Password", "Roles", "GlobalPrivs", "DatabasePrivs", "TablePrivs"], [["'root'@'%'", "ROOT", "No", "operator", "Admin_priv", "internal.analytics: Select_priv", null]]);
+
+    expect(dorisUsersResult(grants)).toEqual([{ user: "root", host: "%" }]);
+    expect(dorisGrantsResult(grants)).toEqual(["Roles: operator", "GlobalPrivs: Admin_priv", "DatabasePrivs: internal.analytics: Select_priv"]);
+  });
+
+  it("syncs loaded grants only for the MySQL provider", () => {
+    const mysqlProvider = getDatabaseUserAdminProvider("mysql");
+    const dorisProvider = getDatabaseUserAdminProvider("doris");
+    const postgresProvider = getDatabaseUserAdminProvider("postgres");
+    const starrocksProvider = getDatabaseUserAdminProvider("starrocks");
+
+    expect(
+      mysqlProvider?.privilegeSelectionFromGrants?.({
+        grants: ["GRANT INSERT ON `app`.* TO 'user'@'%'"],
+        database: "app",
+        table: "*",
+        availablePrivileges: mysqlProvider.privilegesForScope?.("mysql") ?? [],
+      }),
+    ).toEqual({ privileges: ["INSERT"], grantOption: false });
+    expect(postgresProvider?.privilegeSelectionFromGrants).toBeUndefined();
+    expect(dorisProvider?.privilegeSelectionFromGrants).toBeUndefined();
+    expect(starrocksProvider?.privilegeSelectionFromGrants).toBeUndefined();
+    expect(postgresProvider?.parseTableGrants).toBe(postgresTableGrantsResult);
+    expect(starrocksProvider?.parseTableGrants).toBe(starrocksTableGrantsResult);
+    expect(mysqlProvider?.defaultPrivilegesForScope?.("mysql")).toEqual(["SELECT"]);
+    expect(postgresProvider?.defaultPrivilegesForScope?.("database")).toEqual(["CONNECT"]);
+    expect(dorisProvider?.defaultPrivilegesForScope?.("table")).toEqual(["SELECT_PRIV"]);
+    expect(starrocksProvider?.defaultPrivilegesForScope?.("table")).toEqual(["SELECT"]);
+  });
+
+  it("parses StarRocks table grants with catalog and escaped identifiers", () => {
+    const grants = starrocksTableGrantsResult(
+      result(
+        ["UserIdentity", "Catalog", "Grants"],
+        [
+          ["'reader'@'%'", "default", "GRANT SELECT ON ALL TABLES IN DATABASE `sales.db` TO USER 'reader'@'%'"],
+          ["'reader'@'%'", "ice`berg", "GRANT INSERT, UPDATE ON TABLE `sales.db`.`daily``rollup` TO USER 'reader'@'%' WITH GRANT OPTION"],
+          ["'reader'@'%'", null, "GRANT analyst TO USER 'reader'@'%'"],
+        ],
+      ),
+    );
+
+    expect(grants).toEqual([
+      { catalog: "default_catalog", database: "sales.db", table: "*", privilege: "SELECT", grantOption: false },
+      { catalog: "ice`berg", database: "sales.db", table: "daily`rollup", privilege: "INSERT", grantOption: true },
+      { catalog: "ice`berg", database: "sales.db", table: "daily`rollup", privilege: "UPDATE", grantOption: true },
+    ]);
+  });
+
+  it("uses sys_catalog for Kingbase role metadata", () => {
+    const provider = getDatabaseUserAdminProvider("kingbase");
+
+    expect(provider).not.toBeNull();
+    expect(provider?.dialect).toBe("postgres");
+    expect(provider?.listUsersSql()).toContain("FROM sys_catalog.sys_roles r");
+    expect(provider?.listUsersSql()).not.toContain("pg_catalog");
+  });
+
+  it("builds Kingbase grant SQL without PostgreSQL catalog tables", () => {
+    const sql = kingbaseShowGrantsSql({ user: "role'o", host: "LOGIN" });
+
+    expect(sql).toContain("FROM sys_catalog.sys_roles r");
+    expect(sql).toContain("FROM sys_catalog.sys_auth_members m");
+    expect(sql).toContain("CROSS JOIN sys_catalog.sys_database d");
+    expect(sql).toContain("CROSS JOIN sys_catalog.sys_namespace n");
+    expect(sql).toContain("FROM information_schema.table_privileges");
+    expect(sql).toContain("CAST(privilege_type AS text)");
+    expect(sql).toContain("CAST(is_grantable AS text)");
+    expect(sql).toContain("concat('Table: '");
+    expect(sql).not.toContain(" || ");
+    expect(sql).not.toContain("role_table_grants");
+    expect(sql).toContain("WHERE r.rolname = 'role''o'");
+    expect(sql).not.toContain("pg_catalog");
+    expect(sql).not.toContain("pg_roles");
+  });
+});

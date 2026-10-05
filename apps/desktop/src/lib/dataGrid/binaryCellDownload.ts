@@ -1,0 +1,465 @@
+import type { CellValue } from "@/lib/dataGrid/cellValue";
+import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import type { DatabaseType } from "@/types/database";
+
+export type BinaryCellDownloadMode = "binary" | "utf8" | "gbk";
+
+export interface BinaryCellPosition {
+  rowIndex: number;
+  col: number;
+}
+
+export interface BinaryCellDownloadPayload {
+  data: Uint8Array | string;
+  mimeType: string;
+  extension: string;
+}
+
+export interface BinaryCellDownloadResult {
+  kind: "saved" | "browser-download" | "cancelled";
+  path?: string;
+  fileName?: string;
+}
+
+export const BINARY_CELL_DOWNLOAD_MODES: BinaryCellDownloadMode[] = ["binary", "utf8", "gbk"];
+
+/**
+ * 单个 BLOB/BYTEA 单元格从文件导入的最大字节数。
+ *
+ * 设立此上限的原因：导入路径会用 `@tauri-apps/plugin-fs` 的 `readFile(path)` 把整个文件
+ * 一次性读进 `Uint8Array` 经 IPC 返回前端，再经 `binaryCellBytesToHexValue` 转成
+ * `0x<hex>` 字符串（长度约为文件字节的 2 倍）作为脏值常驻内存，直到保存或放弃编辑。
+ * 几百 MB 的 BLOB 即可造成 OOM/卡死，故在进入 readFile + hex 转换路径之前先按文件大小拦截。
+ * 16 MB 对单个单元格导入已相当宽裕，分块流式 + 后端参数绑定属后续更大改造，不在此处处理。
+ */
+export const MAX_BINARY_CELL_IMPORT_BYTES = 16 * 1024 * 1024;
+
+/**
+ * 文件超过 {@link MAX_BINARY_CELL_IMPORT_BYTES} 时抛出的错误。
+ * 调用方据 `code === "binary-import-too-large"` 选择专门的提示文案，
+ * 其余失败仍走通用错误提示。
+ */
+export class BinaryCellImportTooLargeError extends Error {
+  readonly code = "binary-import-too-large" as const;
+  readonly bytes: number;
+  readonly limit: number;
+  constructor(bytes: number, limit: number) {
+    super(`File is ${bytes} bytes, exceeds the ${limit}-byte import limit.`);
+    this.name = "BinaryCellImportTooLargeError";
+    this.bytes = bytes;
+    this.limit = limit;
+  }
+}
+
+export function binaryCellBytesToHexValue(bytes: Uint8Array): string {
+  let hex = "0x";
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+  return hex;
+}
+
+function openBinaryCellFileInBrowser(): Promise<Uint8Array | undefined> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.onchange = async () => {
+      try {
+        const file = input.files?.[0];
+        if (!file) {
+          resolve(undefined);
+          return;
+        }
+        // 尺寸闸门：File.size 在读取前即可用，避免大文件进入 arrayBuffer + hex 路径。
+        if (file.size > MAX_BINARY_CELL_IMPORT_BYTES) {
+          reject(new BinaryCellImportTooLargeError(file.size, MAX_BINARY_CELL_IMPORT_BYTES));
+          return;
+        }
+        resolve(new Uint8Array(await file.arrayBuffer()));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    input.click();
+  });
+}
+
+export async function openBinaryCellFile(): Promise<Uint8Array | undefined> {
+  if (!isTauriRuntime()) return openBinaryCellFileInBrowser();
+
+  const [{ open }, { readFile, stat }] = await Promise.all([import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-fs")]);
+  const selected = await open({ multiple: false });
+  const path = Array.isArray(selected) ? selected[0] : selected;
+  if (!path) return undefined;
+  // 尺寸闸门：在 readFile 之前用 stat 取文件大小，避免大文件被全量读入内存。
+  // stat 不可用（权限/平台差异等）时降级为不阻断，保留原 readFile 行为，避免功能完全不可用。
+  try {
+    const info = await stat(path);
+    if (info.size > MAX_BINARY_CELL_IMPORT_BYTES) {
+      throw new BinaryCellImportTooLargeError(info.size, MAX_BINARY_CELL_IMPORT_BYTES);
+    }
+  } catch (error) {
+    if (error instanceof BinaryCellImportTooLargeError) throw error;
+    console.warn("[binaryCellDownload] stat failed, skipping size gate:", error);
+  }
+  return readFile(path);
+}
+
+export function retainBinaryCellDownloadMenuForHover(openCell: BinaryCellPosition | null, hoveredCell: BinaryCellPosition): BinaryCellPosition | null {
+  return openCell?.rowIndex === hoveredCell.rowIndex && openCell.col === hoveredCell.col ? openCell : null;
+}
+
+const HEX_VALUE_RE = /^(?:0[xX]|\\x)([0-9a-fA-F\s]*)$/;
+const TRUNCATED_HEX_VALUE_RE = /^(?:0[xX]|\\x)[0-9a-fA-F\s]+\.\.\.$/;
+const BARE_HEX_RE = /^[0-9a-fA-F\s]+$/;
+const HEX_ESCAPE_RE = /^(?:\\x[0-9a-fA-F]{2}|\s)+$/;
+const BINARY_TYPE_RE = /^(?:blob|tinyblob|mediumblob|longblob|bytea|bytes|binary|varbinary|image|raw|long\s+raw)(?:\b|\()/i;
+const FIXED_BINARY_TYPE_RE = /^binary(?:\b|\()/i;
+const BINARY_STRING_TYPE_RE = /^(?:binary|varbinary)(?:\b|\()/i;
+const VARBINARY_TYPE_RE = /^varbinary(?:\b|\()/i;
+const BLOB_TYPE_RE = /^(?:blob|tinyblob|mediumblob|longblob)(?:\b|\()/i;
+const MYSQL_FILE_IMPORT_TYPE_RE = /^(?:blob|tinyblob|mediumblob|longblob|binary|varbinary)(?:\b|\()/i;
+const OPAQUE_AGG_STATE_TYPE_RE = /^agg_state\s*<\s*[^>\s][^>]*>$/i;
+
+function copyBytesForBlob(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(bytes);
+}
+
+export function parseBinaryCellHexValue(value: CellValue): Uint8Array | null {
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(HEX_VALUE_RE);
+  if (!match) return null;
+
+  return bytesFromHex(match[1]);
+}
+
+function bytesFromHex(value: string): Uint8Array | null {
+  const hex = value.replace(/\s+/g, "");
+  if (hex.length === 0) return new Uint8Array();
+  if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) return null;
+
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    const parsed = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(parsed)) return null;
+    bytes[i] = parsed;
+  }
+  return bytes;
+}
+
+function bytesFromByteArray(value: unknown): Uint8Array | null {
+  if (!Array.isArray(value)) return null;
+  const bytes = new Uint8Array(value.length);
+  for (let i = 0; i < value.length; i++) {
+    const item = value[i];
+    if (!Number.isInteger(item) || item < 0 || item > 255) return null;
+    bytes[i] = item;
+  }
+  return bytes;
+}
+
+function bytesFromBufferLikeObject(value: unknown): Uint8Array | null {
+  if (!value || typeof value !== "object") return null;
+  const data = (value as { data?: unknown }).data;
+  return bytesFromByteArray(data);
+}
+
+export function parseBinaryCellBytes(value: unknown, columnType?: string, databaseType?: DatabaseType): Uint8Array | null {
+  if (typeof value === "string") {
+    const prefixed = parseBinaryCellHexValue(value);
+    if (prefixed) return prefixed;
+
+    const trimmed = value.trim();
+    if (HEX_ESCAPE_RE.test(trimmed)) {
+      return bytesFromHex(trimmed.replace(/\\x/gi, ""));
+    }
+
+    if (databaseType !== "tdengine" && isBinaryCellColumnType(columnType) && BARE_HEX_RE.test(trimmed)) {
+      return bytesFromHex(trimmed);
+    }
+  }
+
+  return bytesFromByteArray(value) ?? bytesFromBufferLikeObject(value);
+}
+
+export function isBinaryCellColumnType(columnType?: string): boolean {
+  const type = (columnType ?? "").trim();
+  return !!type && (BINARY_TYPE_RE.test(type) || OPAQUE_AGG_STATE_TYPE_RE.test(type));
+}
+
+export function isOpaqueAggregateStateColumnType(columnType?: string): boolean {
+  return OPAQUE_AGG_STATE_TYPE_RE.test((columnType ?? "").trim());
+}
+
+export function hasUnsafeOpaqueAggregateStatePredicate(columnTypes: readonly (string | undefined)[], row: readonly CellValue[]): boolean {
+  return columnTypes.some((columnType, index) => isOpaqueAggregateStateColumnType(columnType) && row[index] !== null);
+}
+
+export function mergeOpaqueReadonlyColumnIndexes(readonlyColumnIndexes: readonly number[] | undefined, columnTypes: readonly (string | undefined)[]): ReadonlySet<number> | undefined {
+  const merged = new Set(readonlyColumnIndexes ?? []);
+  columnTypes.forEach((columnType, index) => {
+    if (isOpaqueAggregateStateColumnType(columnType)) merged.add(index);
+  });
+  return merged.size ? merged : undefined;
+}
+
+export function isBlobCellColumnType(columnType?: string): boolean {
+  const type = (columnType ?? "").trim();
+  return !!type && BLOB_TYPE_RE.test(type);
+}
+
+export function canImportBinaryCellFile(databaseType?: DatabaseType, columnType?: string): boolean {
+  const type = (columnType ?? "").trim();
+  if (databaseType === "postgres") return /^bytea(?:\b|\()/i.test(type);
+  if (databaseType === "mysql") return MYSQL_FILE_IMPORT_TYPE_RE.test(type);
+  return false;
+}
+
+export function canDownloadBinaryCellValue(value: unknown, columnType?: string, databaseType?: DatabaseType): boolean {
+  return !!parseBinaryCellBytes(value, columnType, databaseType);
+}
+
+export function binaryCellDisplayText(value: unknown, columnType?: string, originalBytes?: number, databaseType?: DatabaseType): string | null {
+  if (typeof value === "string" && isBinaryCellColumnType(columnType) && TRUNCATED_HEX_VALUE_RE.test(value.trim())) {
+    const size = originalBytes === undefined ? "..." : formatBinaryCellByteSize(originalBytes);
+    return `${binaryCellDisplayLabel(columnType)} [${size}]`;
+  }
+  const bytes = parseBinaryCellBytes(value, columnType, databaseType);
+  if (!bytes || !isBinaryCellColumnType(columnType)) return null;
+  if (isBinaryCellTextPreviewColumn(columnType, databaseType)) {
+    const text = binaryCellTextPreviewBytes(bytes, columnType, databaseType);
+    if (text !== null) return text;
+  }
+  return `${binaryCellDisplayLabel(columnType)} [${formatBinaryCellByteSize(bytes.length)}]`;
+}
+
+export function binaryCellUtf8Text(value: unknown, columnType?: string, databaseType?: DatabaseType): string | null {
+  if (!isBinaryCellColumnType(columnType) || !isBinaryCellTextPreviewColumn(columnType, databaseType)) return null;
+  const bytes = parseBinaryCellBytes(value, columnType, databaseType);
+  if (!bytes) return null;
+  return binaryCellUtf8TextBytes(bytes, columnType);
+}
+
+/** 单元格详情里「以文本查看」可选的字符集。 */
+export type BinaryCellTextEncoding = "utf8" | "gbk";
+
+export const BINARY_CELL_TEXT_ENCODINGS: BinaryCellTextEncoding[] = ["utf8", "gbk"];
+
+/**
+ * 显式文本预览（「以文本查看」）的失败原因，调用方据此给出不同文案：
+ *
+ * - `notBinary`：值不是 binary canonical form（含 hex 已被截断、列类型非 binary 的情况）；
+ * - `incomplete`：大值预览闸门截断了原始值，bytes 不完整，继续解码会把残缺内容当成文本；
+ * - `undecodable`：bytes 完整，但严格解码失败（非法序列，或图片/压缩包等二进制的控制字符）。
+ */
+export type BinaryCellTextPreviewError = "notBinary" | "incomplete" | "undecodable";
+
+export type BinaryCellTextPreviewResult = { ok: true; text: string; encoding: BinaryCellTextEncoding; byteLength: number } | { ok: false; error: BinaryCellTextPreviewError };
+
+/**
+ * issue #9505：把 binary canonical value（`0x<hex>`）按用户显式选择的字符集解码成**只读**文本。
+ *
+ * 与「下载为 UTF-8/GBK」共用同一套 bytes primitive（{@link parseBinaryCellBytes} +
+ * `binaryPreviewBytes`），但刻意不复用 `binaryCellDownloadPayload` 的宽松 `TextDecoder`：
+ * 预览必须走严格解码（见 {@link binaryCellUtf8TextBytes} / {@link printableGbkText}），
+ * 否则图片头等真实二进制会被替换字符伪装成「正常文本」。
+ *
+ * 与 `binaryCellUtf8Text` 的区别是**不做数据库白名单**：MySQL BLOB 的自动文本预览只对 mysql
+ * 连接开启（显示/编辑语义需要一致），而这里由用户在单元格详情里显式点击，属于只读 presentation，
+ * 因此任何被 `isBinaryCellColumnType()` 识别的 binary 列（BLOB/TINYBLOB/MEDIUMBLOB/LONGBLOB、
+ * BINARY/VARBINARY、BYTEA、BYTES、IMAGE、RAW/LONG RAW…）都可查看，且不参与解码闸门之外的任何写回路径。
+ * 入口可见性完全复用 `isBinaryCellColumnType()`，本次不为未知类型名称放宽该闸门。
+ *
+ * 返回值只用于展示：原始 `0x<hex>`、`detail.value` / `rawValue`、编辑草稿和数据库 bytes 都不受影响。
+ */
+export function binaryCellTextPreview(value: unknown, encoding: BinaryCellTextEncoding, columnType?: string, databaseType?: DatabaseType, incomplete?: boolean): BinaryCellTextPreviewResult {
+  if (incomplete) return { ok: false, error: "incomplete" };
+  if (!isBinaryCellColumnType(columnType)) return { ok: false, error: "notBinary" };
+  // 大值闸门会把 `0x<hex>` 本身截成 `0x...`，此时可解析的前缀不是完整 bytes，不能拿去解码。
+  if (typeof value === "string" && TRUNCATED_HEX_VALUE_RE.test(value.trim())) return { ok: false, error: "notBinary" };
+  const bytes = parseBinaryCellBytes(value, columnType, databaseType);
+  if (!bytes) return { ok: false, error: "notBinary" };
+  const preview = binaryPreviewBytes(bytes, columnType);
+  const text = encoding === "gbk" ? printableGbkText(preview) : printableUtf8Text(preview);
+  if (text === null) return { ok: false, error: "undecodable" };
+  return { ok: true, text, encoding, byteLength: bytes.length };
+}
+
+// 复制到剪贴板时，把「文本型」MySQL VARBINARY 单元格还原成其原始字符串。
+// DBX 后端为保留任意 bytes，把该值统一序列化成 `0x<hex>`；前端只有在严格 UTF-8 解码、
+// 无控制字符且重新编码后与原 bytes 完全一致时，才把 payload（如 token）复制为文本；
+// UTF-8 解码失败时再按网格预览同一闸门尝试 GBK，保持「显示成 GBK 文本的单元格复制时
+// 还原成原字符串」。其余情况返回 null，让调用方沿用无损 hex。范围严格限定 MySQL
+// VARBINARY，避免改变 MySQL BINARY/BLOB、SQL Server VARBINARY、PostgreSQL BYTEA、
+// Oracle RAW 等现有语义。
+export function binaryCellClipboardText(value: unknown, columnType?: string, databaseType?: DatabaseType): string | null {
+  if (databaseType !== "mysql" || !VARBINARY_TYPE_RE.test((columnType ?? "").trim())) return null;
+  // MySQL QueryResult 的 binary canonical form 是 `0x<hex>`；不要把普通的偶数长度
+  // 文本（例如 "abcd"）猜测成 hex bytes。
+  const bytes = typeof value === "string" ? parseBinaryCellHexValue(value) : null;
+  if (!bytes) return null;
+  const text = binaryCellUtf8TextBytes(bytes, columnType);
+  if (text !== null) {
+    const encoded = new TextEncoder().encode(text);
+    // UTF-8 可解码但无法 byte-for-byte 回编码（如解码会吞掉的 BOM）时保持 null，
+    // 与 GBK 回退无关，沿用 hex。
+    return encoded.length === bytes.length && encoded.every((byte, index) => byte === bytes[index]) ? text : null;
+  }
+  return printableGbkText(binaryPreviewBytes(bytes, columnType));
+}
+
+// MySQL BLOB 的文本预览必须与编辑写回路径（coerceMysqlBlobTextValue，仅 mysql）走同一闸门：
+// SQLite/DuckDB/H2/Firebird 等库同样暴露 `blob` 列，若一律按文本预览会出现
+// “显示是文本、编辑器却是十六进制”的不一致，故 blob 文本预览仅在 mysql 连接开启。
+// binary/varbinary 的文本预览早于该特性存在（如 TDengine BINARY 文本），保持全库通用。
+function isBinaryCellTextPreviewColumn(columnType: string | undefined, databaseType: DatabaseType | undefined): boolean {
+  if (isOpaqueAggregateStateColumnType(columnType)) return false;
+  if (BINARY_STRING_TYPE_RE.test((columnType ?? "").trim())) return true;
+  return isBlobCellColumnType(columnType) && databaseType === "mysql";
+}
+
+// 显示/复制路径的解码链：先严格 UTF-8，仅 MySQL 连接的 binary/varbinary 再回退严格
+// GBK——中文存量库里 varbinary 常见 GBK 写入（Navicat 等工具按连接字符集直接显示），
+// UTF-8 优先保证 ASCII/UTF-8 数据永远不受影响。两处刻意不覆盖：
+// 1) 编辑写回路径（dataGridCellEditorText/coerceMysqlBlobTextValue）保持纯 UTF-8，
+//    编辑保存会把文本重新按 UTF-8 编码，放 GBK 文本进去会静默翻转该单元格的字节编码；
+// 2) MySQL BLOB 列，其文本预览与编辑路径共享同一闸门（见 isBinaryCellTextPreviewColumn），
+//    GBK 回退会把该闸门凿开。varbinary 的「显示文本、编辑 hex」不对称是既有行为，不受影响。
+function binaryCellTextPreviewBytes(bytes: Uint8Array, columnType?: string, databaseType?: DatabaseType): string | null {
+  const utf8Text = binaryCellUtf8TextBytes(bytes, columnType);
+  if (utf8Text !== null) return utf8Text;
+  if (databaseType !== "mysql" || isBlobCellColumnType(columnType)) return null;
+  return printableGbkText(binaryPreviewBytes(bytes, columnType));
+}
+
+function binaryCellUtf8TextBytes(bytes: Uint8Array, columnType?: string): string | null {
+  return printableUtf8Text(binaryPreviewBytes(bytes, columnType));
+}
+
+function binaryPreviewBytes(bytes: Uint8Array, columnType?: string): Uint8Array {
+  return FIXED_BINARY_TYPE_RE.test((columnType ?? "").trim()) ? trimTrailingNullBytes(bytes) : bytes;
+}
+
+function trimTrailingNullBytes(bytes: Uint8Array): Uint8Array {
+  let end = bytes.length;
+  while (end > 0 && bytes[end - 1] === 0) end--;
+  return bytes.subarray(0, end);
+}
+
+function printableUtf8Text(bytes: Uint8Array): string | null {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+  return printableText(text) ? text : null;
+}
+
+// GBK 回退的解码闸门：fatal 解码拒绝非法序列，可打印过滤剔除控制字符，另加拒绝
+// Unicode 私用区（真实文本不含 PUA，而 0xFF 等字节的高段 GBK 序列常落在 PUA，是随机
+// 二进制的强信号）。TextEncoder 只有 UTF-8，GBK 没有 encode 侧、做不了 UTF-8 分支
+// 那样的往返校验；但 fatal 解码对合法序列是双射，随机二进制仍可能恰好全部组成合法
+// GBK 序列（如 0xdeadbeef → 两个 URO 汉字），此时显示/复制与网格预览一致地输出解码
+// 文本，原始 bytes 无损保留在 0x<hex> 值中。
+function printableGbkText(bytes: Uint8Array): string | null {
+  let text: string;
+  try {
+    text = new TextDecoder("gbk", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+  if (!printableText(text)) return null;
+  for (const char of text) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (codePoint >= 0xe000 && codePoint <= 0xf8ff) return null;
+  }
+  return text;
+}
+
+function printableText(text: string): boolean {
+  for (const char of text) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    const allowedWhitespace = codePoint === 9 || codePoint === 10 || codePoint === 13;
+    if (!allowedWhitespace && (codePoint <= 31 || (codePoint >= 127 && codePoint <= 159))) return false;
+  }
+  return true;
+}
+
+function binaryCellDisplayLabel(columnType?: string): string {
+  if (isOpaqueAggregateStateColumnType(columnType)) return "AGG_STATE";
+  const base = (columnType ?? "")
+    .trim()
+    .split(/[(:\s]/)[0]
+    .toUpperCase();
+  if (!base) return "BLOB";
+  if (base.includes("BLOB")) return "BLOB";
+  return base;
+}
+
+export function formatBinaryCellByteSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+export function binaryCellDownloadPayload(value: unknown, mode: BinaryCellDownloadMode, columnType?: string, databaseType?: DatabaseType): BinaryCellDownloadPayload {
+  const bytes = parseBinaryCellBytes(value, columnType, databaseType);
+  if (!bytes) {
+    throw new Error("Cell value is not a downloadable binary value.");
+  }
+
+  if (mode === "binary") {
+    return {
+      data: bytes,
+      mimeType: "application/octet-stream",
+      extension: "bin",
+    };
+  }
+
+  const decoder = new TextDecoder(mode === "gbk" ? "gbk" : "utf-8", { fatal: false });
+  return {
+    data: decoder.decode(bytes),
+    mimeType: "text/plain;charset=utf-8",
+    extension: "txt",
+  };
+}
+
+export function binaryCellDownloadFileName(options: { column: string; rowNumber: number; mode: BinaryCellDownloadMode; extension: string }): string {
+  const column = options.column
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "_")
+    .slice(0, 48);
+  const safeColumn = column || "cell";
+  const suffix = options.mode === "binary" ? "" : `-${options.mode}`;
+  return `${safeColumn}-row-${options.rowNumber}${suffix}.${options.extension}`;
+}
+
+export async function downloadBinaryCellPayload(payload: BinaryCellDownloadPayload, fileName: string): Promise<BinaryCellDownloadResult> {
+  if (isTauriRuntime()) {
+    const [{ save }, fs] = await Promise.all([import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-fs")]);
+    const path = await save({
+      defaultPath: fileName,
+      filters: [{ name: payload.extension.toUpperCase(), extensions: [payload.extension] }],
+    });
+    if (!path) return { kind: "cancelled" };
+    if (typeof payload.data === "string") {
+      await fs.writeTextFile(path, payload.data);
+    } else {
+      await fs.writeFile(path, payload.data);
+    }
+    return { kind: "saved", path };
+  }
+
+  const blob = new Blob([typeof payload.data === "string" ? payload.data : copyBytesForBlob(payload.data)], {
+    type: payload.mimeType,
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return { kind: "browser-download", fileName };
+}

@@ -1,0 +1,272 @@
+import assert from "node:assert/strict";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import test from "node:test";
+import { isDesktopVersionOnlyCargoLockChange } from "./release-lock.mjs";
+
+const repoRoot = new URL("..", import.meta.url).pathname;
+const releaseScript = join(repoRoot, "scripts/release.mjs");
+const releaseWorkflow = join(repoRoot, ".github/workflows/release.yml");
+const packagesWorkflow = join(repoRoot, ".github/workflows/mcp-release.yml");
+const vsignConfigPath = join(repoRoot, "src-tauri/tauri.vsign.conf.json");
+const appImageBundlerSetup = join(repoRoot, ".github/scripts/prepare-appimage-bundler.sh");
+const appImageGtkWrapper = join(repoRoot, ".github/scripts/linuxdeploy-plugin-gtk-wrapper.sh");
+const appImageVerifier = join(repoRoot, ".github/scripts/verify-appimage-input-methods.sh");
+
+function runRelease(args, env = {}) {
+  return spawnSync(process.execPath, [releaseScript, ...args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1", ...env },
+  });
+}
+
+function createMockGh() {
+  const directory = mkdtempSync(join(tmpdir(), "dbx-release-test-"));
+  const ghPath = join(directory, "gh");
+  writeFileSync(
+    ghPath,
+    [
+      "#!/usr/bin/env node",
+      'import { appendFileSync } from "node:fs";',
+      "",
+      "const args = process.argv.slice(2);",
+      'if (args[0] === "auth" || (args[0] === "workflow" && args[1] === "view")) process.exit(0);',
+      'if (args[0] === "workflow" && args[1] === "run") {',
+      '  appendFileSync(process.env.GH_LOG, args.join(" ") + "\\n");',
+      "  process.exit(0);",
+      "}",
+      'if (args[0] === "release" && args[1] === "view") {',
+      '  const explicitTag = args[2]?.startsWith("v") ? args[2] : null;',
+      "  const tagName = explicitTag ?? process.env.MOCK_LATEST_TAG;",
+      "  const version = tagName.slice(1);",
+      "  const assets = [",
+      '    "latest.json",',
+      '    "DBX_" + version + "_" + (process.env.MOCK_ARM64_DMG_ARCH || "arm64") + ".dmg",',
+      '    "DBX_" + version + "_x64.dmg",',
+      '    "DBX_" + version + "_x64-setup.exe",',
+      '    "DBX_" + version + "_arm64-setup.exe",',
+      "  ].map((name) => ({ name }));",
+      '  process.stdout.write(JSON.stringify({ tagName, isDraft: false, isPrerelease: false, publishedAt: "2026-07-21T00:00:00Z", assets }));',
+      "  process.exit(0);",
+      "}",
+      'process.stderr.write("Unexpected gh command: " + args.join(" "));',
+      "process.exit(1);",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(ghPath, 0o755);
+  return directory;
+}
+
+test("rollback dry-run prints all affected channels without invoking GitHub", () => {
+  const result = runRelease(["rollback", "v0.5.63", "--dry-run", "--skip-fetch"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Emergency app rollback/);
+  assert.match(result.stdout, /publish-packages\.yml.*notify=false/);
+  assert.match(result.stdout, /sync-cnb-release-assets\.yml/);
+  assert.match(result.stdout, /rollback-docker-latest\.yml/);
+  assert.match(result.stdout, /does not downgrade clients/);
+});
+
+test("rollback dispatches each distribution workflow after validation", () => {
+  const mockBin = createMockGh();
+  const logPath = join(mockBin, "gh.log");
+  const result = runRelease(["rollback", "v0.5.63", "--yes", "--skip-fetch"], {
+    PATH: `${mockBin}:${process.env.PATH}`,
+    GH_LOG: logPath,
+    MOCK_LATEST_TAG: "v0.5.64",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const commands = readFileSync(logPath, "utf8").trim().split("\n");
+  assert.deepEqual(commands, [
+    "workflow run publish-packages.yml --repo t8y2/dbx -f tag=v0.5.63 -f notify=false",
+    "workflow run sync-cnb-release-assets.yml --repo t8y2/dbx -f tag=v0.5.63",
+    "workflow run rollback-docker-latest.yml --repo t8y2/dbx -f tag=v0.5.63",
+  ]);
+});
+
+test("rollback rejects a target that is not older than latest", () => {
+  const mockBin = createMockGh();
+  const logPath = join(mockBin, "gh.log");
+  const result = runRelease(["rollback", "v0.5.64", "--yes", "--skip-fetch"], {
+    PATH: `${mockBin}:${process.env.PATH}`,
+    GH_LOG: logPath,
+    MOCK_LATEST_TAG: "v0.5.64",
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /must be older than the current latest release v0\.5\.64/);
+});
+
+test("rollback accepts pre-rename releases that ship the aarch64 dmg asset", () => {
+  const mockBin = createMockGh();
+  const logPath = join(mockBin, "gh.log");
+  const result = runRelease(["rollback", "v0.5.63", "--yes", "--skip-fetch"], {
+    PATH: `${mockBin}:${process.env.PATH}`,
+    GH_LOG: logPath,
+    MOCK_LATEST_TAG: "v0.5.64",
+    MOCK_ARM64_DMG_ARCH: "aarch64",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const commands = readFileSync(logPath, "utf8").trim().split("\n");
+  assert.equal(commands.length, 3);
+});
+
+test("rollback rejects a release missing both arm64 dmg asset names", () => {
+  const mockBin = createMockGh();
+  const result = runRelease(["rollback", "v0.5.63", "--yes", "--skip-fetch"], {
+    PATH: `${mockBin}:${process.env.PATH}`,
+    MOCK_LATEST_TAG: "v0.5.64",
+    MOCK_ARM64_DMG_ARCH: "armv7",
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /missing required distribution assets: DBX_0\.5\.63_arm64\.dmg or DBX_0\.5\.63_aarch64\.dmg/);
+});
+
+test("rollback rejects prerelease tag syntax", () => {
+  const result = runRelease(["rollback", "v0.5.63-rc.1", "--dry-run", "--skip-fetch"]);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /only supports stable vX\.Y\.Z app releases/);
+});
+
+test("launcher packages bypass filtered publishing for provenance", () => {
+  const workflow = readFileSync(packagesWorkflow, "utf8");
+
+  assert.match(workflow, /pnpm publish "\.\/packages\/cli" --access public --provenance --no-git-checks/);
+  assert.match(workflow, /pnpm publish "\.\/packages\/mcp-server" --access public --provenance --no-git-checks/);
+  assert.doesNotMatch(workflow, /pnpm --filter "@dbx-app\/(?:cli|mcp-server)" publish/);
+});
+
+test("Tauri VSign script resolves from the src-tauri working directory", () => {
+  const config = JSON.parse(readFileSync(vsignConfigPath, "utf8"));
+  const args = config.bundle.windows.signCommand.args;
+  const fileArgumentIndex = args.indexOf("-File");
+
+  assert.notEqual(fileArgumentIndex, -1);
+  const scriptPath = args[fileArgumentIndex + 1];
+  assert.equal(typeof scriptPath, "string");
+  assert.equal(existsSync(resolve(repoRoot, "src-tauri", scriptPath)), true);
+});
+
+test("Windows 7 release build does not use sccache", () => {
+  const workflow = readFileSync(releaseWorkflow, "utf8");
+  const start = workflow.indexOf("  build-windows-7-offline:");
+  const end = workflow.indexOf("\n  static-browser:", start);
+
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const win7Job = workflow
+    .slice(start, end)
+    // Ignore comments; the job itself documents why sccache is absent.
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("#"))
+    .join("\n");
+  assert.doesNotMatch(win7Job, /RUSTC_WRAPPER|SCCACHE_|sccache/i);
+});
+
+test("Linux releases pin the Wayland-capable AppImage bundler before upload", () => {
+  const workflow = readFileSync(releaseWorkflow, "utf8");
+  const setup = readFileSync(appImageBundlerSetup, "utf8");
+  const wrapper = readFileSync(appImageGtkWrapper, "utf8");
+  const verifier = readFileSync(appImageVerifier, "utf8");
+  const prepareStep = workflow.indexOf("Prepare Wayland-capable AppImage bundler");
+  const buildStep = workflow.indexOf("Build Tauri app", prepareStep);
+  const verifyStep = workflow.indexOf("Verify AppImage runtime bundle", buildStep);
+
+  assert.notEqual(prepareStep, -1);
+  assert.ok(prepareStep < buildStep);
+  assert.ok(buildStep < verifyStep);
+  assert.match(workflow, /XDG_CACHE_HOME: \$\{\{ runner\.temp \}\}\/dbx-tauri-cache/);
+  assert.match(
+    workflow,
+    /LINUXDEPLOY_EXCLUDED_LIBRARIES: "libwayland-\*\.so\*;libxkbcommon\.so\*;libxcb-randr\.so\*;libxcb-render\.so\*;libxcb-shm\.so\*;libXau\.so\*;libXdmcp\.so\*"/,
+  );
+  assert.match(setup, /tauri_fix_commit=8e7028331ad37ac2db74d4ec20e66be5cacf2c40/);
+  assert.match(setup, /linuxdeploy_revision=07333c6/);
+  assert.match(setup, /36a2d7e274d12e1050d0e9ecfe11d339ed54720b2bec464c286d53f8b07f5c62/);
+  assert.match(setup, /556ab80baa98e600aa80f0dcedfb70bca0e1ce7e9f147fb345be3fcc3e91b2b1/);
+  assert.match(wrapper, /libwayland-\*\.so\*/);
+  assert.match(wrapper, /libxkbcommon\.so\*/);
+  assert.match(verifier, /GTK AppRun hook overrides GDK_BACKEND/);
+  assert.match(verifier, /for requested_backend in wayland x11/);
+  assert.match(verifier, /host Wayland\/XKB\/XCB display stack/);
+});
+
+test("AppImage GTK wrapper removes bundled display-stack libraries", () => {
+  const directory = mkdtempSync(join(tmpdir(), "dbx-appimage-wrapper-test-"));
+  const wrapper = join(directory, "linuxdeploy-plugin-gtk.sh");
+  const upstream = join(directory, "linuxdeploy-plugin-gtk-upstream.sh");
+  const appDir = join(directory, "DBX.AppDir");
+  const libDir = join(appDir, "usr", "lib");
+  const nestedLibDir = join(libDir, "nested");
+
+  copyFileSync(appImageGtkWrapper, wrapper);
+  writeFileSync(
+    upstream,
+    '#!/usr/bin/env bash\nif [[ "$1" == "--plugin-api-version" ]]; then printf "0\\n"; fi\n',
+  );
+  chmodSync(wrapper, 0o755);
+  chmodSync(upstream, 0o755);
+  mkdirSync(nestedLibDir, { recursive: true });
+  for (const path of [
+    join(libDir, "libwayland-client.so.0"),
+    join(libDir, "libxkbcommon.so.0"),
+    join(nestedLibDir, "libXau.so.6"),
+    join(libDir, "libsafe.so.1"),
+  ]) {
+    writeFileSync(path, "");
+  }
+
+  const apiVersion = spawnSync(wrapper, ["--plugin-api-version"], { encoding: "utf8" });
+  assert.equal(apiVersion.status, 0, apiVersion.stderr);
+  assert.equal(apiVersion.stdout.trim(), "0");
+
+  const cleanup = spawnSync(wrapper, ["--appdir", appDir], { encoding: "utf8" });
+  assert.equal(cleanup.status, 0, cleanup.stderr);
+  assert.equal(existsSync(join(libDir, "libwayland-client.so.0")), false);
+  assert.equal(existsSync(join(libDir, "libxkbcommon.so.0")), false);
+  assert.equal(existsSync(join(nestedLibDir, "libXau.so.6")), false);
+  assert.equal(existsSync(join(libDir, "libsafe.so.1")), true);
+});
+
+test("desktop-only Cargo.lock version refresh does not count as a Node package change", () => {
+  const before = `
+[[package]]
+name = "dbx"
+version = "0.5.95"
+dependencies = ["dbx-core"]
+
+[[package]]
+name = "dbx-web"
+version = "0.5.95"
+dependencies = ["dbx-core"]
+
+[[package]]
+name = "dbx-mcp"
+version = "0.4.73"
+dependencies = ["dbx-core"]
+`;
+  const after = before.replaceAll('version = "0.5.95"', 'version = "0.5.96"');
+
+  assert.equal(isDesktopVersionOnlyCargoLockChange(before, after), true);
+});
+
+test("Cargo.lock dependency changes still count as a Node package change", () => {
+  const before = `
+[[package]]
+name = "dbx"
+version = "0.5.95"
+dependencies = ["dbx-core"]
+`;
+  const after = before.replace('dependencies = ["dbx-core"]', 'dependencies = ["dbx-core", "dbx-mcp"]');
+
+  assert.equal(isDesktopVersionOnlyCargoLockChange(before, after), false);
+});

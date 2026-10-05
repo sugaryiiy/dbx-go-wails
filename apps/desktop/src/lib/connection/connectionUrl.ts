@@ -1,0 +1,905 @@
+import type { ConnectionConfig, DatabaseType } from "@/types/database";
+import { h2JdbcUrlHasPasswordParam, h2JdbcUrlHasUserParam, parseH2JdbcUrl } from "@/lib/database/h2Connection";
+import { damengSslFormConfig } from "@/lib/database/damengSslOptions";
+import { normalizeRedisDatabaseValue } from "@/lib/redis/redisDatabaseIndex";
+import { parseJdbcProperties } from "@/lib/connection/jdbcProperties";
+
+export interface ParsedConnectionUrl {
+  name?: string;
+  dbType: DatabaseType;
+  driverProfile: string;
+  driverLabel: string;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  database?: string;
+  urlParams: string;
+  ssl: boolean;
+  connectionString?: string;
+  oracleConnectionType?: "service_name" | "sid";
+  useMongoUrl?: boolean;
+  portExplicit?: boolean;
+  apiPath?: string;
+  basePath?: string;
+}
+
+export type ConnectionProfile = {
+  type: DatabaseType;
+  profile: string;
+  label: string;
+  defaultPort: number;
+};
+
+const SCHEME_PROFILES: Record<string, ConnectionProfile> = {
+  mysql: { type: "mysql", profile: "mysql", label: "MySQL", defaultPort: 3306 },
+  oceanbase: { type: "mysql", profile: "oceanbase", label: "OceanBase", defaultPort: 2883 },
+  mariadb: { type: "mysql", profile: "mariadb", label: "MariaDB", defaultPort: 3306 },
+  postgres: { type: "postgres", profile: "postgres", label: "PostgreSQL", defaultPort: 5432 },
+  postgresql: { type: "postgres", profile: "postgres", label: "PostgreSQL", defaultPort: 5432 },
+  cloudberry: { type: "postgres", profile: "cloudberry", label: "Apache Cloudberry", defaultPort: 5432 },
+  opentenbase: { type: "postgres", profile: "opentenbase", label: "OpenTenBase", defaultPort: 11000 },
+  redshift: { type: "redshift", profile: "redshift", label: "Redshift", defaultPort: 5439 },
+  redis: { type: "redis", profile: "redis", label: "Redis", defaultPort: 6379 },
+  rediss: { type: "redis", profile: "redis", label: "Redis", defaultPort: 6379 },
+  etcd: { type: "etcd", profile: "etcd", label: "etcd", defaultPort: 2379 },
+  consul: { type: "consul", profile: "consul", label: "Consul", defaultPort: 8500 },
+  "nacos-v2": { type: "nacos", profile: "nacos", label: "Nacos", defaultPort: 8848 },
+  "nacos-v3": { type: "nacos", profile: "nacos", label: "Nacos", defaultPort: 8848 },
+  "r-nacos": { type: "nacos", profile: "nacos", label: "r-nacos", defaultPort: 8848 },
+  nacos: { type: "nacos", profile: "nacos", label: "Nacos", defaultPort: 8848 },
+  rnacos: { type: "nacos", profile: "nacos", label: "r-nacos", defaultPort: 8848 },
+  zookeeper: { type: "zookeeper", profile: "zookeeper", label: "Apache ZooKeeper", defaultPort: 2181 },
+  mongodb: { type: "mongodb", profile: "mongodb", label: "MongoDB", defaultPort: 27017 },
+  "mongodb+srv": { type: "mongodb", profile: "mongodb", label: "MongoDB", defaultPort: 27017 },
+  dynamodb: { type: "dynamodb", profile: "dynamodb", label: "Amazon DynamoDB", defaultPort: 443 },
+  clickhouse: { type: "clickhouse", profile: "clickhouse", label: "ClickHouse", defaultPort: 8123 },
+  nebula: { type: "nebula", profile: "nebula", label: "NebulaGraph", defaultPort: 9669 },
+  sqlserver: { type: "sqlserver", profile: "sqlserver", label: "SQL Server", defaultPort: 1433 },
+  mssql: { type: "sqlserver", profile: "sqlserver", label: "SQL Server", defaultPort: 1433 },
+  oracle: { type: "oracle", profile: "oracle", label: "Oracle", defaultPort: 1521 },
+  elasticsearch: { type: "elasticsearch", profile: "elasticsearch", label: "Elasticsearch", defaultPort: 9200 },
+  easysearch: { type: "easysearch", profile: "easysearch", label: "Easysearch", defaultPort: 9200 },
+  meilisearch: { type: "meilisearch", profile: "meilisearch", label: "Meilisearch", defaultPort: 7700 },
+  solr: { type: "solr", profile: "solr", label: "Apache Solr", defaultPort: 8983 },
+  qdrant: { type: "qdrant", profile: "qdrant", label: "Qdrant", defaultPort: 6333 },
+  milvus: { type: "milvus", profile: "milvus", label: "Milvus", defaultPort: 19530 },
+  weaviate: { type: "weaviate", profile: "weaviate", label: "Weaviate", defaultPort: 8080 },
+  chromadb: { type: "chromadb", profile: "chromadb", label: "ChromaDB", defaultPort: 8000 },
+  dm: { type: "dameng", profile: "dm", label: "达梦 Dameng", defaultPort: 5236 },
+  dameng: { type: "dameng", profile: "dm", label: "达梦 Dameng", defaultPort: 5236 },
+  kingbase: { type: "kingbase", profile: "kingbase", label: "金仓KingbaseES", defaultPort: 54321 },
+  kingbase8: { type: "kingbase", profile: "kingbase", label: "金仓KingbaseES", defaultPort: 54321 },
+  gaussdb: { type: "gaussdb", profile: "gaussdb", label: "GaussDB", defaultPort: 5432 },
+  kwdb: { type: "kwdb", profile: "kwdb", label: "KWDB", defaultPort: 26257 },
+  gbase: { type: "gbase", profile: "gbase", label: "南大通用 GBase", defaultPort: 5258 },
+  "gbasedbt-sqli": { type: "gbase", profile: "gbase8s", label: "南大通用 GBase 8s", defaultPort: 9088 },
+  "informix-sqli": { type: "informix", profile: "informix", label: "Informix", defaultPort: 9088 },
+  yashandb: { type: "yashandb", profile: "yashandb", label: "YashanDB", defaultPort: 1688 },
+  opengauss: { type: "gaussdb", profile: "opengauss", label: "openGauss", defaultPort: 5432 },
+  questdb: { type: "questdb", profile: "questdb", label: "QuestDB", defaultPort: 8812 },
+  tdengine: { type: "tdengine", profile: "tdengine", label: "TDengine", defaultPort: 6041 },
+  "taos-ws": { type: "tdengine", profile: "tdengine", label: "TDengine", defaultPort: 6041 },
+  oscar: { type: "oscar", profile: "oscar", label: "神通 OSCAR", defaultPort: 2003 },
+  xugu: { type: "xugu", profile: "xugu", label: "XuguDB", defaultPort: 5138 },
+  iotdb: { type: "iotdb", profile: "iotdb", label: "Apache IoTDB", defaultPort: 6667 },
+  iris: { type: "iris", profile: "iris", label: "IRIS", defaultPort: 1972 },
+  victoriametrics: { type: "victoriametrics", profile: "victoriametrics", label: "VictoriaMetrics", defaultPort: 8428 },
+  salesforce: { type: "salesforce", profile: "salesforce", label: "Salesforce", defaultPort: 443 },
+};
+
+const OCEANBASE_ORACLE_PROFILE: ConnectionProfile = {
+  type: "oceanbase-oracle",
+  profile: "oceanbase-oracle",
+  label: "OceanBase Oracle Mode",
+  defaultPort: 2883,
+};
+
+const HTTP_SELECTED_PROFILES: Record<string, ConnectionProfile> = {
+  clickhouse: SCHEME_PROFILES.clickhouse,
+  dynamodb: SCHEME_PROFILES.dynamodb,
+  elasticsearch: SCHEME_PROFILES.elasticsearch,
+  easysearch: SCHEME_PROFILES.easysearch,
+  meilisearch: SCHEME_PROFILES.meilisearch,
+  solr: SCHEME_PROFILES.solr,
+  qdrant: SCHEME_PROFILES.qdrant,
+  milvus: SCHEME_PROFILES.milvus,
+  weaviate: SCHEME_PROFILES.weaviate,
+  chromadb: SCHEME_PROFILES.chromadb,
+  victoriametrics: SCHEME_PROFILES.victoriametrics,
+  salesforce: SCHEME_PROFILES.salesforce,
+  consul: SCHEME_PROFILES.consul,
+  "nacos-v2": SCHEME_PROFILES["nacos-v2"],
+  "nacos-v3": SCHEME_PROFILES["nacos-v3"],
+  "r-nacos": SCHEME_PROFILES["r-nacos"],
+  nacos: SCHEME_PROFILES.nacos,
+  rnacos: SCHEME_PROFILES.rnacos,
+};
+
+function decodeUrlPart(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function decodePercentEscapes(value: string): string {
+  return value.replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
+function encodeMongoUserInfoPart(value: string): string {
+  return encodeURIComponent(decodePercentEscapes(value));
+}
+
+export function normalizeMongoConnectionString(value: string): string {
+  const input = value.trim();
+  if (!input) return input;
+
+  const mongoMatch = input.match(/^(mongodb(?:\+srv)?):\/\/(?:(.+)@)?/i);
+  if (!mongoMatch) return input;
+
+  const userinfo = mongoMatch[2];
+  if (!userinfo) return input;
+
+  const [username, ...passwordParts] = userinfo.split(":");
+  const password = passwordParts.join(":");
+  const encodedUsername = encodeMongoUserInfoPart(username);
+  const encodedPassword = password ? `:${encodeMongoUserInfoPart(password)}` : "";
+
+  return input.replace(/^(mongodb(?:\+srv)?:\/\/)(?:(.+)@)?/i, `$1${encodedUsername}${encodedPassword}@`);
+}
+
+function parseMongoUrl(source: string): ParsedConnectionUrl | null {
+  const match = source.match(/^(mongodb(?:\+srv)?):\/\/(?:(.+)@)?([^/]+)(\/[^?]*)?(\?.*)?$/);
+  if (!match) return null;
+
+  const scheme = match[1].toLowerCase();
+  const userinfo = match[2] || "";
+  const hosts = match[3] || "";
+  const pathname = match[4] || "";
+  const search = match[5] || "";
+
+  const profile = SCHEME_PROFILES[scheme];
+  if (!profile) return null;
+
+  const [username, ...passwordParts] = decodeUrlPart(userinfo).split(":");
+  const password = passwordParts.join(":");
+
+  const firstHost = hosts.split(",")[0];
+  let host: string;
+  let port: number;
+  if (firstHost.startsWith("[")) {
+    const bracketEnd = firstHost.indexOf("]");
+    host = firstHost.substring(1, bracketEnd);
+    port = firstHost.substring(bracketEnd + 1).startsWith(":") ? Number(firstHost.substring(bracketEnd + 2)) || profile.defaultPort : profile.defaultPort;
+  } else if (firstHost.includes(":")) {
+    const colonIdx = firstHost.lastIndexOf(":");
+    host = firstHost.substring(0, colonIdx);
+    port = Number(firstHost.substring(colonIdx + 1)) || profile.defaultPort;
+  } else {
+    host = firstHost;
+    port = profile.defaultPort;
+  }
+
+  const database = databaseFromPath(pathname);
+  const urlParams = search.replace(/^\?/, "");
+
+  return {
+    dbType: profile.type,
+    driverProfile: profile.profile,
+    driverLabel: profile.label,
+    host,
+    port,
+    username,
+    password,
+    database,
+    urlParams,
+    ssl: scheme === "mongodb+srv",
+    connectionString: normalizeMongoConnectionString(source),
+    useMongoUrl: true,
+  };
+}
+
+function databaseFromPath(pathname: string): string | undefined {
+  const value = pathname.replace(/^\/+/, "");
+  if (!value) return undefined;
+  return decodeUrlPart(value.split("/")[0]);
+}
+
+interface RedisUrlPathParts {
+  database: string | undefined;
+  tls: boolean;
+  insecure: boolean;
+}
+
+// Users paste redis-cli invocations into the URL field (e.g.
+// "redis://host:6379/0 --tls --insecure"); WHATWG URL folds the flags into the
+// path. Salvage them: the first non-flag token is the numeric db index, --tls
+// enables TLS (like the rediss:// scheme) and --insecure skips certificate
+// verification (like the #insecure fragment).
+function parseRedisUrlPath(rawPath: string): RedisUrlPathParts {
+  const parts: RedisUrlPathParts = { database: undefined, tls: false, insecure: false };
+  for (const token of rawPath.split(/\s+/)) {
+    if (!token) continue;
+    const flag = token.toLowerCase();
+    if (flag === "--tls") parts.tls = true;
+    else if (flag === "--insecure") parts.insecure = true;
+    else if (parts.database === undefined) parts.database = normalizeRedisDatabaseValue(token);
+  }
+  return parts;
+}
+
+function dynamodbRegionFromHost(hostname: string): string | undefined {
+  return hostname.toLowerCase().match(/^dynamodb(?:-fips)?\.([a-z0-9-]+)\.(?:amazonaws\.com(?:\.cn)?|api\.aws)$/)?.[1];
+}
+
+function parseZooKeeperUrl(source: string): ParsedConnectionUrl | null {
+  const match = source.match(/^zookeeper:\/\/([^/?#]+)(\/[^?#]*)?(\?[^#]*)?$/i);
+  if (!match) return null;
+
+  const profile = SCHEME_PROFILES.zookeeper;
+  const authority = match[1];
+  const userInfoEnd = authority.lastIndexOf("@");
+  const userInfo = userInfoEnd >= 0 ? authority.slice(0, userInfoEnd) : "";
+  const endpointList = userInfoEnd >= 0 ? authority.slice(userInfoEnd + 1) : authority;
+  const [rawUsername, ...rawPasswordParts] = userInfo.split(":");
+  const username = userInfo ? decodeUrlPart(rawUsername) : "";
+  const password = userInfo ? decodeUrlPart(rawPasswordParts.join(":")) : "";
+  const endpoints = endpointList.split(",").map((endpoint) => endpoint.trim());
+  if (endpoints.some((endpoint) => !endpoint)) throw new Error("Invalid connection URL");
+
+  const normalizedEndpoints = endpoints.map((endpoint) => {
+    let endpointUrl: URL;
+    try {
+      endpointUrl = new URL(`zookeeper://${endpoint}`);
+    } catch {
+      throw new Error("Invalid connection URL");
+    }
+    if (endpointUrl.username || endpointUrl.password || (endpointUrl.pathname && endpointUrl.pathname !== "/") || endpointUrl.search || endpointUrl.hash) {
+      throw new Error("Invalid connection URL");
+    }
+    const rawHost = endpointUrl.hostname.replace(/^\[(.*)]$/, "$1");
+    const host = rawHost.includes(":") ? `[${rawHost}]` : rawHost;
+    const port = endpointUrl.port ? Number(endpointUrl.port) : profile.defaultPort;
+    return { host: rawHost, port, connectString: `${host}:${port}` };
+  });
+  const chroot = match[2] && match[2] !== "/" ? match[2] : "";
+  const urlParams = (match[3] || "").replace(/^\?/, "");
+  const name = queryParamValue(urlParams, "name")?.trim();
+
+  return {
+    ...(name ? { name } : {}),
+    dbType: profile.type,
+    driverProfile: profile.profile,
+    driverLabel: profile.label,
+    host: normalizedEndpoints[0].host,
+    port: normalizedEndpoints[0].port,
+    username,
+    password,
+    database: undefined,
+    urlParams: stripConnectionNameParam(urlParams),
+    ssl: false,
+    connectionString: `${normalizedEndpoints.map((endpoint) => endpoint.connectString).join(",")}${chroot}`,
+  };
+}
+
+function queryParamValue(params: string, key: string): string | undefined {
+  for (const part of params.split(/[&;]/)) {
+    if (!part) continue;
+    const [rawKey, ...rest] = part.split("=");
+    if (decodeUrlPart(rawKey).toLowerCase() === key.toLowerCase()) {
+      return decodeUrlPart(rest.join("=")).trim();
+    }
+  }
+  return undefined;
+}
+
+function queryParamLastValue(params: string, key: string): string | undefined {
+  let result: string | undefined;
+  for (const part of params.split(/[&;]/)) {
+    if (!part) continue;
+    const [rawKey, ...rest] = part.split("=");
+    if (decodeUrlPart(rawKey).toLowerCase() === key.toLowerCase()) {
+      result = decodeUrlPart(rest.join("=")).trim();
+    }
+  }
+  return result;
+}
+
+function extractHiveStructuredParams(params: string): { username?: string; password?: string; ssl: boolean; urlParams: string } {
+  let username: string | undefined;
+  let password: string | undefined;
+  let ssl = false;
+  const urlParams: string[] = [];
+
+  for (const part of params.split(";")) {
+    if (!part) continue;
+    const [rawKey, ...rest] = part.split("=");
+    const key = decodeUrlPart(rawKey).trim().toLowerCase();
+    const value = decodeUrlPart(rest.join("=")).trim();
+    if (key === "user" || key === "username") {
+      username = value;
+    } else if (key === "password") {
+      password = value;
+    } else if (key === "ssl") {
+      ssl = value.toLowerCase() === "true";
+    } else {
+      urlParams.push(part);
+    }
+  }
+
+  return { username, password, ssl, urlParams: urlParams.join(";") };
+}
+
+function connectionNameParam(parsed: URL): string | undefined {
+  for (const [key, value] of parsed.searchParams) {
+    if (key.toLowerCase() === "name") {
+      const name = value.trim();
+      if (name) return name;
+    }
+  }
+  return undefined;
+}
+
+function stripConnectionNameParam(params: string): string {
+  if (!params) return params;
+  return params
+    .split("&")
+    .filter((part) => {
+      if (!part) return true;
+      const [rawKey] = part.split("=");
+      return decodeUrlPart(rawKey).trim().toLowerCase() !== "name";
+    })
+    .join("&");
+}
+
+function extractMysqlCredentialParams(params: string): { username?: string; password?: string; urlParams: string } {
+  let username: string | undefined;
+  let password: string | undefined;
+  let foundCredentialParam = false;
+  const urlParams: string[] = [];
+
+  for (const part of params.split(/[&;]/)) {
+    if (!part) continue;
+    const [rawKey, ...rest] = part.split("=");
+    const key = decodeUrlPart(rawKey).trim().toLowerCase();
+    if (key === "user") {
+      username = decodeUrlPart(rest.join("=")).trim();
+      foundCredentialParam = true;
+    } else if (key === "password") {
+      password = decodeUrlPart(rest.join("=")).trim();
+      foundCredentialParam = true;
+    } else {
+      urlParams.push(part);
+    }
+  }
+
+  return { username, password, urlParams: foundCredentialParam ? urlParams.join("&") : params };
+}
+
+function urlParamsRequireTls(dbType: DatabaseType, params: string): boolean {
+  if (dbType === "dameng") {
+    return damengSslFormConfig(params).enabled;
+  }
+
+  if (dbType === "mysql") {
+    const requireSsl = queryParamLastValue(params, "require_ssl")?.toLowerCase();
+    if (requireSsl === "true" || requireSsl === "1" || requireSsl === "yes") return true;
+    const sslMode = (queryParamLastValue(params, "ssl-mode") || queryParamLastValue(params, "sslmode") || "").toLowerCase().replace("-", "_");
+    if (sslMode === "required" || sslMode === "require" || sslMode === "verify_ca" || sslMode === "verify_identity") return true;
+    if (requireSsl !== undefined || sslMode) return false;
+    const jdbcUseSsl = (queryParamLastValue(params, "useSSL") || "").toLowerCase();
+    const jdbcRequireSsl = (queryParamLastValue(params, "requireSSL") || "").toLowerCase();
+    const jdbcVerifyServerCertificate = (queryParamLastValue(params, "verifyServerCertificate") || "").toLowerCase();
+    if (["false", "0", "no", "off"].includes(jdbcUseSsl)) return false;
+    return ["true", "1", "yes", "on"].includes(jdbcRequireSsl) || ["true", "1", "yes", "on"].includes(jdbcVerifyServerCertificate);
+  }
+
+  if (dbType === "postgres" || dbType === "redshift" || dbType === "kwdb") {
+    const sslMode = (queryParamValue(params, "sslmode") || "").toLowerCase();
+    return sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full";
+  }
+
+  return false;
+}
+
+function isTidbCloudHost(host: string): boolean {
+  return host.toLowerCase().endsWith(".tidbcloud.com");
+}
+
+export function connectionProfileForScheme(scheme: string, preferredProfile?: string): ConnectionProfile | undefined {
+  const normalizedScheme = scheme.trim().toLowerCase();
+  const normalizedPreferredProfile = preferredProfile?.trim().toLowerCase();
+  if ((normalizedScheme === "http" || normalizedScheme === "https") && normalizedPreferredProfile) {
+    return HTTP_SELECTED_PROFILES[normalizedPreferredProfile];
+  }
+  if (normalizedScheme === "oceanbase" && normalizedPreferredProfile === "oceanbase-oracle") {
+    return OCEANBASE_ORACLE_PROFILE;
+  }
+  // PostgreSQL-compatible products use standard PostgreSQL URLs, so keep the
+  // selected product profile when parsing a pasted URL.
+  if ((normalizedScheme === "postgres" || normalizedScheme === "postgresql") && (normalizedPreferredProfile === "cloudberry" || normalizedPreferredProfile === "opentenbase")) {
+    return SCHEME_PROFILES[normalizedPreferredProfile];
+  }
+  return SCHEME_PROFILES[normalizedScheme];
+}
+
+function parseJdbcHiveUrl(source: string, preferredProfile?: string): ParsedConnectionUrl | null {
+  const match = /^jdbc:(?<subprotocol>hive2|inceptor2|transwarp2):\/\/(?<hosts>[^/?#;]+)(?:\/(?<path>[^?#]*))?(?<query>\?[^#]*)?(?<fragment>#.*)?$/i.exec(source);
+  if (!match?.groups) return null;
+
+  const firstHost = match.groups.hosts.split(",")[0]?.trim();
+  if (!firstHost) return null;
+
+  let endpoint: URL;
+  try {
+    endpoint = new URL(`hive2://${firstHost}`);
+  } catch {
+    return null;
+  }
+  if (!endpoint.hostname) return null;
+
+  const [rawDatabase = "", ...paramParts] = (match.groups.path || "").split(";");
+  const structured = extractHiveStructuredParams(paramParts.join(";"));
+  const urlParams = `${structured.urlParams}${match.groups.query || ""}${match.groups.fragment || ""}`;
+  const profile = preferredProfile === "transwarp-inceptor" ? preferredProfile : match.groups.subprotocol.toLowerCase() === "hive2" ? "hive" : "transwarp-inceptor";
+  const transwarp = profile !== "hive";
+
+  return {
+    dbType: transwarp ? "transwarp" : "hive",
+    driverProfile: profile,
+    driverLabel: profile === "transwarp-inceptor" ? "星环Inceptor" : "Apache Hive",
+    host: endpoint.hostname.replace(/^\[(.*)]$/, "$1"),
+    port: endpoint.port ? Number(endpoint.port) : 10000,
+    username: structured.username ?? decodeUrlPart(endpoint.username),
+    password: structured.password ?? decodeUrlPart(endpoint.password),
+    database: decodeUrlPart(rawDatabase) || undefined,
+    urlParams,
+    ssl: structured.ssl,
+    connectionString: source,
+  };
+}
+
+function parseJdbcSqlServerUrl(source: string): ParsedConnectionUrl | null {
+  const match = source.match(/^jdbc:sqlserver:\/\/([^;:/]+)(?::(\d+))?(?:;(.*))?$/i);
+  if (!match) return null;
+
+  const profile = SCHEME_PROFILES.sqlserver;
+  const props = new Map<string, string>();
+  const urlParams: string[] = [];
+  const properties = parseJdbcProperties(match[3] || "", "sqlserver");
+  if (!properties) throw new Error("Invalid SQL Server JDBC properties");
+  for (const { key, value, raw: part, quoted } of properties) {
+    const normalizedKey = key.toLowerCase();
+    // Braces are literal JDBC values; unquoted %xx values retain DBX's old import behavior.
+    const importedValue = quoted ? value : decodeUrlPart(value);
+    if (normalizedKey === "databasename" || normalizedKey === "database" || normalizedKey === "user" || normalizedKey === "password") {
+      props.set(normalizedKey, importedValue);
+    } else {
+      urlParams.push(part);
+    }
+  }
+
+  return {
+    dbType: profile.type,
+    driverProfile: profile.profile,
+    driverLabel: profile.label,
+    host: match[1],
+    port: match[2] ? Number(match[2]) : profile.defaultPort,
+    ...(match[2] ? { portExplicit: true } : {}),
+    username: props.get("user") || "",
+    password: props.get("password") || "",
+    database: props.get("databasename") || props.get("database") || undefined,
+    urlParams: urlParams.join(";"),
+    ssl: false,
+  };
+}
+
+function parseJdbcOracleUrl(source: string): ParsedConnectionUrl | null {
+  const descriptorMatch = source.match(/^jdbc:oracle:thin:@\s*\((.+)\)\s*$/i);
+  if (descriptorMatch) {
+    const profile = SCHEME_PROFILES.oracle;
+    const host = oracleDescriptorValue(source, "HOST");
+    const port = oracleDescriptorValue(source, "PORT");
+    const serviceName = oracleDescriptorValue(source, "SERVICE_NAME");
+    const sid = oracleDescriptorValue(source, "SID");
+    if (!host) return null;
+    return {
+      dbType: profile.type,
+      driverProfile: profile.profile,
+      driverLabel: profile.label,
+      host,
+      port: port ? Number(port) : profile.defaultPort,
+      username: "",
+      password: "",
+      database: serviceName || sid || undefined,
+      urlParams: "",
+      ssl: false,
+      connectionString: source,
+      oracleConnectionType: sid && !serviceName ? "sid" : "service_name",
+    };
+  }
+
+  const serviceMatch = source.match(/^jdbc:oracle:thin:@\/\/([^:/?#]+)(?::(\d+))?\/([^?]+)(?:\?(.*))?$/i);
+  if (serviceMatch) {
+    const profile = SCHEME_PROFILES.oracle;
+    return {
+      dbType: profile.type,
+      driverProfile: profile.profile,
+      driverLabel: profile.label,
+      host: serviceMatch[1],
+      port: serviceMatch[2] ? Number(serviceMatch[2]) : profile.defaultPort,
+      username: "",
+      password: "",
+      database: decodeUrlPart(serviceMatch[3]),
+      urlParams: serviceMatch[4] || "",
+      ssl: false,
+      oracleConnectionType: "service_name",
+    };
+  }
+
+  const sidMatch = source.match(/^jdbc:oracle:thin:@([^:/?#]+)(?::(\d+))?:([^?]+)(?:\?(.*))?$/i);
+  if (sidMatch) {
+    const profile = SCHEME_PROFILES.oracle;
+    return {
+      dbType: profile.type,
+      driverProfile: profile.profile,
+      driverLabel: profile.label,
+      host: sidMatch[1],
+      port: sidMatch[2] ? Number(sidMatch[2]) : profile.defaultPort,
+      username: "",
+      password: "",
+      database: decodeUrlPart(sidMatch[3]),
+      urlParams: sidMatch[4] || "",
+      ssl: false,
+      oracleConnectionType: "sid",
+    };
+  }
+
+  return null;
+}
+
+function oracleDescriptorValue(source: string, key: string): string | undefined {
+  const match = new RegExp(`\\(${key}\\s*=\\s*([^\\)]+)\\)`, "i").exec(source);
+  return match?.[1]?.trim();
+}
+
+function parseJdbcUCanAccessUrl(source: string): ParsedConnectionUrl | null {
+  const match = source.match(/^jdbc:ucanaccess:\/\/(.+?)(?:;.*)?$/i);
+  if (!match) return null;
+
+  const filePath = decodeUrlPart(match[1]);
+  const normalizedPath = filePath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(filePath) ? filePath : `/${filePath}`;
+  const database = normalizedPath.split(/[\\/]/).filter(Boolean).pop();
+
+  return {
+    dbType: "access",
+    driverProfile: "access",
+    driverLabel: "Microsoft Access",
+    host: normalizedPath,
+    port: 0,
+    username: "",
+    password: "",
+    database,
+    urlParams: "",
+    ssl: false,
+    connectionString: source,
+  };
+}
+
+function parseJdbcGbase8sUrl(source: string): ParsedConnectionUrl | null {
+  const match = /^jdbc:gbasedbt-sqli:\/\/(?:(?<userinfo>[^@/?#]*)@)?(?<host>\[[^\]]+\]|[^:/?#]+)(?::(?<port>\d+))?\/(?<database>[^:?#]*)(?::(?<params>[^?#]*))?/i.exec(source);
+  if (!match?.groups) return null;
+
+  const rawUserInfo = match.groups.userinfo || "";
+  const [rawUser = "", ...passwordParts] = rawUserInfo.split(":");
+  const host = match.groups.host.replace(/^\[/, "").replace(/\]$/, "");
+
+  return {
+    dbType: "gbase",
+    driverProfile: "gbase8s",
+    driverLabel: "南大通用 GBase 8s",
+    host,
+    port: match.groups.port ? Number(match.groups.port) : 9088,
+    username: decodeUrlPart(rawUser),
+    password: decodeUrlPart(passwordParts.join(":")),
+    database: decodeUrlPart(match.groups.database || ""),
+    urlParams: match.groups.params || "",
+    ssl: false,
+  };
+}
+
+function parseJdbcInformixUrl(source: string): ParsedConnectionUrl | null {
+  const match = /^jdbc:informix-sqli:\/\/(?:(?<userinfo>[^@/?#]*)@)?(?<host>\[[^\]]+\]|[^:/?#]+)(?::(?<port>\d+))?\/(?<database>[^:?#]*)(?::(?<params>[^?#]*))?/i.exec(source);
+  if (!match?.groups) return null;
+
+  const rawUserInfo = match.groups.userinfo || "";
+  const [rawUser = "", ...passwordParts] = rawUserInfo.split(":");
+  const host = match.groups.host.replace(/^\[/, "").replace(/\]$/, "");
+
+  return {
+    dbType: "informix",
+    driverProfile: "informix",
+    driverLabel: "Informix",
+    host,
+    port: match.groups.port ? Number(match.groups.port) : 9088,
+    username: decodeUrlPart(rawUser),
+    password: decodeUrlPart(passwordParts.join(":")),
+    database: decodeUrlPart(match.groups.database || ""),
+    urlParams: match.groups.params || "",
+    ssl: false,
+  };
+}
+
+function parseJdbcDremioUrl(source: string): ParsedConnectionUrl | null {
+  const match = /^jdbc:dremio:(?<mode>direct|zk)=(?<host>\[[^\]]+\]|[^:;]+)(?::(?<port>\d+))?(?:;(?<params>.*))?$/i.exec(source);
+  if (!match?.groups) return null;
+
+  const props = new Map<string, string>();
+  const urlParams: string[] = [];
+  for (const part of (match.groups.params || "").split(";")) {
+    if (!part) continue;
+    const [rawKey, ...rest] = part.split("=");
+    const key = rawKey.trim();
+    const value = rest.join("=");
+    const normalizedKey = key.toLowerCase();
+    if (normalizedKey === "schema" || normalizedKey === "user" || normalizedKey === "password") {
+      props.set(normalizedKey, value);
+    } else {
+      urlParams.push(part);
+    }
+  }
+
+  return {
+    dbType: "jdbc",
+    driverProfile: "dremio",
+    driverLabel: "Dremio",
+    host: match.groups.host.replace(/^\[/, "").replace(/\]$/, ""),
+    port: match.groups.port ? Number(match.groups.port) : match.groups.mode.toLowerCase() === "zk" ? 2181 : 31010,
+    username: decodeUrlPart(props.get("user") || ""),
+    password: decodeUrlPart(props.get("password") || ""),
+    database: decodeUrlPart(props.get("schema") || "") || undefined,
+    urlParams: urlParams.join(";"),
+    ssl: false,
+    connectionString: source,
+  };
+}
+
+function parseJdbcDremioArrowFlightSqlUrl(source: string): ParsedConnectionUrl | null {
+  if (!/^jdbc:arrow-flight-sql:\/\//i.test(source)) return null;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(source.replace(/^jdbc:/i, ""));
+  } catch {
+    return null;
+  }
+
+  const urlParams = parsed.search.replace(/^\?/, "");
+
+  return {
+    dbType: "jdbc",
+    driverProfile: "dremio",
+    driverLabel: "Dremio",
+    host: parsed.hostname.replace(/^\[(.*)]$/, "$1"),
+    port: parsed.port ? Number(parsed.port) : 32010,
+    username: decodeUrlPart(parsed.username),
+    password: decodeUrlPart(parsed.password),
+    database: queryParamValue(urlParams, "schema") || undefined,
+    urlParams,
+    ssl: queryParamValue(urlParams, "useEncryption")?.toLowerCase() !== "false",
+    connectionString: source,
+  };
+}
+
+export function parseConnectionUrl(value: string, preferredProfile?: string): ParsedConnectionUrl {
+  const input = value.trim();
+  if (!input) {
+    throw new Error("Connection URL is empty");
+  }
+  if (/^jdbc:oceanbase:(?:oracle:)?loadbalance:\/\//i.test(input)) {
+    throw new Error("Unsupported OceanBase JDBC URL variant: loadbalance");
+  }
+  const jdbcHive = parseJdbcHiveUrl(input, preferredProfile);
+  if (jdbcHive) return jdbcHive;
+  const jdbcH2 = parseH2JdbcUrl(input);
+  if (jdbcH2) return jdbcH2;
+  const jdbcUCanAccess = parseJdbcUCanAccessUrl(input);
+  if (jdbcUCanAccess) return jdbcUCanAccess;
+  const jdbcGbase8s = parseJdbcGbase8sUrl(input);
+  if (jdbcGbase8s) return jdbcGbase8s;
+  const jdbcInformix = parseJdbcInformixUrl(input);
+  if (jdbcInformix) return jdbcInformix;
+  const jdbcDremioArrowFlightSql = parseJdbcDremioArrowFlightSqlUrl(input);
+  if (jdbcDremioArrowFlightSql) return jdbcDremioArrowFlightSql;
+  const jdbcDremio = parseJdbcDremioUrl(input);
+  if (jdbcDremio) return jdbcDremio;
+  const jdbcOracle = parseJdbcOracleUrl(input);
+  if (jdbcOracle) return jdbcOracle;
+  const jdbcSqlServer = parseJdbcSqlServerUrl(input);
+  if (jdbcSqlServer) return jdbcSqlServer;
+  const isJdbcUrl = /^jdbc:/i.test(input);
+  const isOceanBaseOracleJdbc = /^jdbc:oceanbase:oracle:\/\//i.test(input);
+  const source = isOceanBaseOracleJdbc ? input.replace(/^jdbc:oceanbase:oracle:/i, "oceanbase:") : isJdbcUrl ? input.replace(/^jdbc:/i, "") : input;
+
+  const mongoResult = parseMongoUrl(source);
+  if (mongoResult) return mongoResult;
+
+  const zooKeeperResult = parseZooKeeperUrl(source);
+  if (zooKeeperResult) return zooKeeperResult;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(source);
+  } catch {
+    throw new Error("Invalid connection URL");
+  }
+
+  const scheme = parsed.protocol.replace(/:$/, "").toLowerCase();
+  const profile = connectionProfileForScheme(scheme, isOceanBaseOracleJdbc ? "oceanbase-oracle" : preferredProfile);
+  if (!profile) {
+    throw new Error(`Unsupported connection URL scheme: ${scheme}`);
+  }
+
+  const urlParams = parsed.search.replace(/^\?/, "");
+  const name = connectionNameParam(parsed);
+  const urlParamsWithoutName = stripConnectionNameParam(urlParams);
+  const normalizedFragment = decodeUrlPart(parsed.hash.replace(/^#/, "")).trim().toLowerCase();
+  // A Redis path can carry pasted redis-cli flags ("…/0 --tls --insecure");
+  // salvage the db index plus the TLS/insecure intent before they are dropped.
+  const redisPath = profile.type === "redis" ? parseRedisUrlPath(databaseFromPath(parsed.pathname) || "") : null;
+  const redisInsecure = redisPath?.insecure || normalizedFragment === "insecure";
+  const parsedUrlParams = profile.type === "redis" && redisInsecure && !/(^|&)insecure=/i.test(urlParamsWithoutName) ? [urlParamsWithoutName, "insecure=true"].filter(Boolean).join("&") : urlParamsWithoutName;
+  const jdbcCredentials = isJdbcUrl && (profile.type === "mysql" || profile.profile === "oceanbase-oracle") ? extractMysqlCredentialParams(parsedUrlParams) : undefined;
+  const effectiveUrlParams = jdbcCredentials?.urlParams ?? parsedUrlParams;
+  if (profile.type === "mongodb") {
+    return {
+      dbType: profile.type,
+      driverProfile: profile.profile,
+      driverLabel: profile.label,
+      host: parsed.hostname,
+      port: parsed.port ? Number(parsed.port) : profile.defaultPort,
+      username: decodeUrlPart(parsed.username),
+      password: decodeUrlPart(parsed.password),
+      database: databaseFromPath(parsed.pathname),
+      urlParams: parsedUrlParams,
+      ssl: scheme === "mongodb+srv",
+      connectionString: normalizeMongoConnectionString(source),
+      useMongoUrl: true,
+    };
+  }
+  if (profile.type === "zookeeper") {
+    return {
+      ...(name ? { name } : {}),
+      dbType: profile.type,
+      driverProfile: profile.profile,
+      driverLabel: profile.label,
+      host: parsed.hostname.replace(/^\[(.*)]$/, "$1"),
+      port: parsed.port ? Number(parsed.port) : profile.defaultPort,
+      username: decodeUrlPart(parsed.username),
+      password: decodeUrlPart(parsed.password),
+      database: undefined,
+      urlParams: urlParamsWithoutName,
+      ssl: false,
+      connectionString: zookeeperConnectStringFromUrl(parsed, profile.defaultPort),
+    };
+  }
+
+  const isMeilisearch = profile.type === "meilisearch";
+  const defaultPort = isJdbcUrl && scheme === "oceanbase" ? 3306 : isMeilisearch && scheme === "http" ? 80 : isMeilisearch && scheme === "https" ? 443 : profile.defaultPort;
+  // A Redis URL path is a numeric db index; redis-cli flags salvaged above.
+  const pathDatabase = redisPath ? redisPath.database : databaseFromPath(parsed.pathname);
+
+  return {
+    ...(name ? { name } : {}),
+    dbType: profile.type,
+    driverProfile: profile.profile,
+    driverLabel: profile.label,
+    host: parsed.hostname,
+    port: parsed.port ? Number(parsed.port) : defaultPort,
+    ...(profile.type === "sqlserver" && parsed.port ? { portExplicit: true } : {}),
+    username: jdbcCredentials?.username ?? decodeUrlPart(parsed.username),
+    password: jdbcCredentials?.password ?? decodeUrlPart(parsed.password),
+    database: profile.type === "victoriametrics" ? "metrics" : profile.type === "dynamodb" ? dynamodbRegionFromHost(parsed.hostname) : isMeilisearch || profile.type === "solr" ? undefined : pathDatabase,
+    urlParams: effectiveUrlParams,
+    ssl: scheme === "rediss" || scheme === "https" || (redisPath?.tls ?? false) || urlParamsRequireTls(profile.type, effectiveUrlParams) || (profile.type === "mysql" && isTidbCloudHost(parsed.hostname)),
+    ...(profile.type === "victoriametrics" ? { apiPath: parsed.pathname.replace(/\/+$/, "") } : {}),
+    ...(isMeilisearch ? { basePath: parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") } : {}),
+  };
+}
+
+function zookeeperConnectStringFromUrl(parsed: URL, defaultPort: number): string {
+  const rawHost = parsed.hostname.replace(/^\[(.*)]$/, "$1");
+  const host = rawHost.includes(":") ? `[${rawHost}]` : rawHost;
+  const port = parsed.port ? Number(parsed.port) : defaultPort;
+  const chroot = parsed.pathname && parsed.pathname !== "/" ? parsed.pathname : "";
+  return `${host}:${port}${chroot}`;
+}
+
+function shouldPreserveCredentialFreeUrlCredentials(config: Omit<ConnectionConfig, "id">, parsed: ParsedConnectionUrl): boolean {
+  const currentProfile = config.driver_profile?.trim();
+  return parsed.dbType === config.db_type && (!currentProfile || parsed.driverProfile === currentProfile) && !parsed.username && !parsed.password;
+}
+
+function applyParsedUsername(config: Omit<ConnectionConfig, "id">, parsed: ParsedConnectionUrl): string {
+  if (parsed.dbType === "h2" && config.db_type === "h2" && !h2JdbcUrlHasUserParam(parsed.connectionString)) {
+    return config.username || parsed.username;
+  }
+  if (parsed.dbType === "kingbase" && config.db_type === "kingbase" && !parsed.username) {
+    return config.username;
+  }
+  if (shouldPreserveCredentialFreeUrlCredentials(config, parsed)) {
+    return config.username || parsed.username;
+  }
+  return parsed.username;
+}
+
+function applyParsedPassword(config: Omit<ConnectionConfig, "id">, parsed: ParsedConnectionUrl): string {
+  if (parsed.dbType === "h2" && config.db_type === "h2" && !h2JdbcUrlHasPasswordParam(parsed.connectionString)) {
+    return config.password || parsed.password;
+  }
+  if (parsed.dbType === "kingbase" && config.db_type === "kingbase" && !parsed.password) {
+    return config.password;
+  }
+  if (shouldPreserveCredentialFreeUrlCredentials(config, parsed)) {
+    return config.password || parsed.password;
+  }
+  return parsed.password;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+export function applyMeilisearchBasePathToExternalConfig(existing: unknown, basePath: string | undefined): unknown {
+  const next = isRecord(existing) ? { ...existing } : {};
+  delete next.base_path;
+  if (basePath) {
+    next.basePath = basePath;
+  } else {
+    delete next.basePath;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+function parsedExternalConfig(existing: unknown, parsed: ParsedConnectionUrl): unknown {
+  if (parsed.dbType === "victoriametrics") {
+    const next = isRecord(existing) ? { ...existing } : {};
+    next.apiPath = parsed.apiPath || "/prometheus";
+    return next;
+  }
+  if (parsed.dbType === "meilisearch") {
+    return applyMeilisearchBasePathToExternalConfig(existing, parsed.basePath);
+  }
+  if (parsed.dbType !== "sqlserver") return existing;
+
+  const next = isRecord(existing) ? { ...existing } : {};
+  delete next.port_explicit;
+  if (parsed.portExplicit) {
+    next.portExplicit = true;
+  } else {
+    delete next.portExplicit;
+  }
+  return Object.keys(next).length > 0 ? next : undefined;
+}
+
+export function applyParsedConnectionUrl(config: Omit<ConnectionConfig, "id">, parsed: ParsedConnectionUrl): Omit<ConnectionConfig, "id"> {
+  return {
+    ...config,
+    db_type: parsed.dbType,
+    driver_profile: parsed.driverProfile,
+    driver_label: parsed.driverLabel,
+    host: parsed.host,
+    port: parsed.port,
+    name: parsed.name?.trim() || config.name,
+    username: applyParsedUsername(config, parsed),
+    password: applyParsedPassword(config, parsed),
+    database: parsed.dbType === "dynamodb" ? parsed.database || config.database || "us-east-1" : parsed.database,
+    url_params: parsed.urlParams,
+    ssl: parsed.ssl,
+    connection_string: parsed.connectionString,
+    oracle_connection_type: parsed.oracleConnectionType,
+    external_config: parsedExternalConfig(config.external_config, parsed),
+  };
+}

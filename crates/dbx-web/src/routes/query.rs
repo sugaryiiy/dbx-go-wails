@@ -1,0 +1,1495 @@
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::extract::State;
+use axum::http::{header, HeaderMap, HeaderValue};
+use axum::response::Response;
+use axum::Json;
+use serde::Deserialize;
+use tokio::sync::oneshot;
+
+use crate::error::AppError;
+use crate::state::WebState;
+use dbx_core::query_cancel::RunningTaskMetadata;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteQueryRequest {
+    pub connection_id: String,
+    pub database: String,
+    pub sql: String,
+    pub schema: Option<String>,
+    pub catalog: Option<String>,
+    pub execution_id: Option<String>,
+    pub max_rows: Option<usize>,
+    pub fetch_size: Option<usize>,
+    pub page_size: Option<usize>,
+    pub row_offset: Option<usize>,
+    pub max_result_bytes: Option<usize>,
+    #[serde(default)]
+    pub result_key_columns: Vec<String>,
+    #[serde(default)]
+    pub table_data_preview: bool,
+    pub result_session_id: Option<String>,
+    pub client_session_id: Option<String>,
+    pub timeout_secs: Option<u64>,
+    pub use_transaction: Option<bool>,
+    pub continue_on_error: Option<bool>,
+    pub execution_mode: Option<dbx_core::query::QueryExecutionMode>,
+    /// MySQL auto-commit tabs: keep a transaction the user opened explicitly
+    /// (`BEGIN` / `START TRANSACTION`) open across executions until COMMIT /
+    /// ROLLBACK. Defaults to the historical cleanup when omitted.
+    #[serde(default)]
+    pub preserve_explicit_transaction: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelRequest {
+    pub execution_id: String,
+}
+
+const CONDITIONAL_UPDATE_CANCEL_WAIT: Duration = Duration::from_secs(10);
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseSessionRequest {
+    pub connection_id: String,
+    pub database: String,
+    pub session_id: String,
+    pub catalog: Option<String>,
+    pub client_session_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseClientConnectionSessionRequest {
+    pub connection_id: String,
+    pub database: String,
+    pub catalog: Option<String>,
+    pub client_session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteBatchRequest {
+    pub connection_id: String,
+    pub database: String,
+    pub statements: Vec<String>,
+    pub schema: Option<String>,
+    pub catalog: Option<String>,
+    pub timeout_secs: Option<u64>,
+    pub destructive_confirmed: Option<bool>,
+    /// Opt-in single transaction for the whole batch (see
+    /// [`dbx_core::query::execute_statements_with_transaction_option`]).
+    pub use_transaction: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyzeSqlReferencesRequest {
+    pub sql: String,
+    pub dialect: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyzeEditableQueryRequest {
+    pub sql: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindStatementAtCursorRequest {
+    pub sql: String,
+    pub cursor_pos: usize,
+    pub database_type: Option<dbx_core::models::connection::DatabaseType>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareQueryPaginationExecutionPlanRequest {
+    pub options: dbx_core::query_result_sql::QueryPaginationExecutionPlanOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSortedQuerySqlRequest {
+    pub options: dbx_core::query_result_sql::SortedQuerySqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildExplainSqlRequest {
+    pub options: dbx_core::query_execution_sql::ExplainSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDroppedFilePreviewSqlRequest {
+    pub options: dbx_core::query_execution_sql::DroppedFilePreviewSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildTableSelectSqlRequest {
+    pub options: dbx_core::sql_dialect::TableDataSelectSqlOptions,
+    #[serde(default)]
+    pub include_database_name: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDatabaseSearchSqlRequest {
+    pub options: dbx_core::database_search_sql::DatabaseSearchSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSearchResultWhereRequest {
+    pub options: dbx_core::database_search_sql::SearchResultWhereOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildRenameObjectSqlRequest {
+    pub options: dbx_core::db_admin_sql::RenameObjectSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildRenameDatabaseSqlRequest {
+    pub database_type: Option<dbx_core::models::connection::DatabaseType>,
+    pub old_name: String,
+    pub new_name: String,
+    pub terminate_connections: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildRenameDatabasePreflightSqlRequest {
+    pub database_type: Option<dbx_core::models::connection::DatabaseType>,
+    pub database_name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildCreateDatabaseSqlRequest {
+    pub options: dbx_core::db_admin_sql::CreateDatabaseSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg(feature = "duckdb-sidecar")]
+pub struct BuildDuckDbAttachDatabaseSqlRequest {
+    pub options: dbx_core::db_admin_sql::DuckDbAttachDatabaseSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSqliteAttachDatabaseSqlRequest {
+    pub options: dbx_core::db_admin_sql::SqliteAttachDatabaseSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDropObjectSqlRequest {
+    pub options: dbx_core::db_admin_sql::DropObjectSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildTableAdminSqlRequest {
+    pub options: dbx_core::db_admin_sql::TableAdminSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildVacuumTableSqlRequest {
+    pub options: dbx_core::db_admin_sql::VacuumTableSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildMysqlAutoIncrementSqlRequest {
+    pub options: dbx_core::db_admin_sql::MysqlAutoIncrementSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDropTableChildObjectSqlRequest {
+    pub options: dbx_core::db_admin_sql::DropTableChildObjectSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDatabaseNameSqlRequest {
+    pub options: dbx_core::db_admin_sql::DatabaseNameSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSchemaNameSqlRequest {
+    pub options: dbx_core::db_admin_sql::SchemaNameSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDatabasePropertyEditSqlRequest {
+    pub options: dbx_core::db_admin_sql::DatabasePropertyEditSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDuplicateTableStructureSqlRequest {
+    pub options: dbx_core::db_admin_sql::DuplicateTableStructureSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildCopyTableDataSqlRequest {
+    pub options: dbx_core::db_admin_sql::CopyTableDataSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildExecutableObjectSourceRequest {
+    pub input: dbx_core::object_source_sql::EditableObjectSourceSqlInput,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildRoutineRenameObjectSourceRequest {
+    pub input: dbx_core::object_source_sql::RoutineRenameObjectSourceInput,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildViewDdlRequest {
+    pub input: dbx_core::object_source_sql::BuildViewDdlInput,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildTableStructureSqlRequest {
+    pub options: dbx_core::table_structure_sql::TableStructureSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildTableOwnerChangeSqlRequest {
+    pub options: dbx_core::table_structure_sql::TableOwnerChangeSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildTablePartitionOperationSqlRequest {
+    pub options: dbx_core::table_structure_sql::TablePartitionSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildCreatePartitionedTableSqlRequest {
+    pub options: dbx_core::table_structure_sql::TableStructureSqlOptions,
+    pub partitioning: dbx_core::table_structure_sql::TablePartitionDefinition,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewSqliteTableStructureChangeRequest {
+    pub connection_id: String,
+    pub database: String,
+    pub options: dbx_core::table_structure_sql::TableStructureSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplySqliteTableStructureChangeRequest {
+    pub connection_id: String,
+    pub database: String,
+    pub options: dbx_core::table_structure_sql::TableStructureSqlOptions,
+    pub schema_revision: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildSingleColumnAlterSqlRequest {
+    pub options: dbx_core::table_structure_sql::SingleColumnAlterSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrepareDataGridSaveRequest {
+    pub options: dbx_core::data_grid_sql::DataGridSaveStatementOptions,
+    #[serde(default)]
+    pub driver_profile: Option<String>,
+}
+
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractDataGridSelectionRequest {
+    pub request: dbx_core::data_grid_extractors::DataGridExtractRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDataGridCopyUpdateStatementsRequest {
+    pub options: dbx_core::data_grid_sql::DataGridCopyUpdateStatementOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDataGridCopyInsertStatementRequest {
+    pub options: dbx_core::data_grid_sql::DataGridCopyInsertStatementOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDmlChangePreviewSqlRequest {
+    pub options: dbx_core::dml_preview_sql::DmlChangePreviewSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDataGridContextFilterConditionRequest {
+    pub options: dbx_core::data_grid_sql::DataGridContextFilterConditionOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDataGridColumnValueFilterConditionRequest {
+    pub options: dbx_core::data_grid_sql::DataGridColumnValueFilterConditionOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDataGridColumnValuesFilterConditionRequest {
+    pub options: dbx_core::data_grid_sql::DataGridColumnValuesFilterConditionOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDataGridColumnDistinctValuesSqlRequest {
+    pub options: dbx_core::data_grid_sql::DataGridColumnDistinctValuesSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDataGridCountSqlRequest {
+    pub options: dbx_core::data_grid_sql::DataGridCountSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDataGridConditionalUpdateSqlRequest {
+    pub options: dbx_core::data_grid_sql::DataGridConditionalUpdateSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildHiveTablePropertiesSqlRequest {
+    pub options: dbx_core::data_grid_sql::HiveTablePropertiesSqlOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildExportInsertStatementsRequest {
+    pub options: dbx_core::database_export::BuildExportInsertStatementsOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildExportSqlInsertRequest {
+    pub options: dbx_core::database_export::BuildExportSqlInsertOptions,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildDatabaseSqlExportRequest {
+    pub options: dbx_core::database_export::BuildDatabaseSqlExportOptions,
+}
+
+pub async fn execute_query(
+    State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
+    Json(req): Json<ExecuteQueryRequest>,
+) -> Result<Json<dbx_core::db::QueryResult>, AppError> {
+    let allow_database_switch = req.client_session_id.as_deref().is_some_and(|id| !id.trim().is_empty());
+    let database = super::mcp_policy::ensure_sql(
+        &state,
+        &headers,
+        &req.connection_id,
+        &req.database,
+        &req.sql,
+        allow_database_switch,
+    )
+    .await?;
+    let requested_execution_id = req.execution_id.filter(|id| !id.trim().is_empty());
+    let keep_timeout_reachable = requested_execution_id.is_some();
+    let execution_id = requested_execution_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let registered = state.app.running_queries.register_task(
+        execution_id.clone(),
+        RunningTaskMetadata::query(req.connection_id.clone(), database.clone(), req.client_session_id.clone()),
+    );
+    let cancel_token = registered.token();
+
+    tracing::debug!(connection_id = %req.connection_id, "execute_query");
+
+    let result = dbx_core::query::execute_sql_statement_with_options_typed(
+        &state.app,
+        &req.connection_id,
+        &database,
+        &req.sql,
+        req.schema.as_deref(),
+        Some(cancel_token),
+        dbx_core::query::QueryExecutionOptions {
+            max_rows: req.max_rows,
+            fetch_size: req.fetch_size,
+            page_size: req.page_size,
+            row_offset: req.row_offset,
+            max_result_bytes: req.max_result_bytes,
+            result_key_columns: req.result_key_columns,
+            table_data_preview: req.table_data_preview,
+            catalog: req.catalog,
+            result_session_id: req.result_session_id,
+            client_session_id: req.client_session_id,
+            timeout_secs: req.timeout_secs,
+            execution_id: Some(execution_id),
+            use_transaction: req.use_transaction,
+            execution_mode: req.execution_mode.unwrap_or_default(),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    registered.finish_with_late_cancel(&result, keep_timeout_reachable);
+
+    let result = result.map_err(|error| AppError::from(error.into_backend_error()))?;
+    Ok(Json(result))
+}
+
+pub async fn execute_conditional_update(
+    State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
+    Json(req): Json<ExecuteQueryRequest>,
+) -> Result<Json<dbx_core::db::QueryResult>, AppError> {
+    let allow_database_switch = req.client_session_id.as_deref().is_some_and(|id| !id.trim().is_empty());
+    let database = super::mcp_policy::ensure_sql(
+        &state,
+        &headers,
+        &req.connection_id,
+        &req.database,
+        &req.sql,
+        allow_database_switch,
+    )
+    .await?;
+
+    let execution_id = req.execution_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let registered = state.app.running_queries.register_task_for_terminal_confirmation(
+        execution_id.clone(),
+        RunningTaskMetadata::query(req.connection_id.clone(), database.clone(), req.client_session_id.clone()),
+    );
+    let cancel_token = registered.token();
+    let response_timeout = dbx_core::query::query_timeout_duration(req.timeout_secs);
+    let app = state.app.clone();
+    let (result_tx, result_rx) = oneshot::channel();
+
+    tokio::spawn(async move {
+        let result = dbx_core::query::execute_sql_statement_with_options_typed(
+            &app,
+            &req.connection_id,
+            &database,
+            &req.sql,
+            req.schema.as_deref(),
+            Some(cancel_token),
+            dbx_core::query::QueryExecutionOptions {
+                max_rows: req.max_rows,
+                fetch_size: req.fetch_size,
+                page_size: req.page_size,
+                row_offset: req.row_offset,
+                max_result_bytes: req.max_result_bytes,
+                result_key_columns: req.result_key_columns,
+                table_data_preview: req.table_data_preview,
+                catalog: req.catalog,
+                result_session_id: req.result_session_id,
+                client_session_id: req.client_session_id,
+                // The outer response timeout reports uncertainty to the client
+                // without dropping this task. The task remains reachable for a
+                // later cancel and only releases its registration on terminal
+                // completion.
+                timeout_secs: Some(0),
+                await_cancel_completion: true,
+                execution_id: Some(execution_id),
+                use_transaction: req.use_transaction,
+                execution_mode: req.execution_mode.unwrap_or_default(),
+                ..Default::default()
+            },
+        )
+        .await;
+        let _ = result_tx.send(result);
+        drop(registered);
+    });
+
+    let result = match response_timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, result_rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => return Err(AppError::internal("Conditional update execution task stopped unexpectedly")),
+            Err(_) => {
+                return Err(AppError::from(
+                    dbx_core::query::QueryExecutionError::Timeout(format!(
+                        "Query timed out after {} seconds",
+                        timeout.as_secs().max(1)
+                    ))
+                    .into_backend_error(),
+                ));
+            }
+        },
+        None => match result_rx.await {
+            Ok(result) => result,
+            Err(_) => return Err(AppError::internal("Conditional update execution task stopped unexpectedly")),
+        },
+    };
+    result.map(Json).map_err(|error| AppError::from(error.into_backend_error()))
+}
+
+pub async fn execute_multi(
+    State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
+    Json(req): Json<ExecuteQueryRequest>,
+) -> Result<Response, AppError> {
+    let allow_database_switch = req.client_session_id.as_deref().is_some_and(|id| !id.trim().is_empty());
+    let database = super::mcp_policy::ensure_sql(
+        &state,
+        &headers,
+        &req.connection_id,
+        &req.database,
+        &req.sql,
+        allow_database_switch,
+    )
+    .await?;
+    let requested_execution_id = req.execution_id.filter(|id| !id.trim().is_empty());
+    let keep_timeout_reachable = requested_execution_id.is_some();
+    let execution_id = requested_execution_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    let registered = state.app.running_queries.register_task(
+        execution_id.clone(),
+        RunningTaskMetadata::query(req.connection_id.clone(), database.clone(), req.client_session_id.clone()),
+    );
+    let cancel_token = registered.token();
+
+    tracing::debug!(connection_id = %req.connection_id, "execute_multi");
+
+    let core_started_at = std::time::Instant::now();
+    let result = dbx_core::query::execute_multi_core_with_options_for_client_typed(
+        &state.app,
+        &req.connection_id,
+        &database,
+        &req.sql,
+        req.schema.as_deref(),
+        Some(cancel_token),
+        dbx_core::query::QueryExecutionOptions {
+            max_rows: req.max_rows,
+            fetch_size: req.fetch_size,
+            page_size: req.page_size,
+            row_offset: req.row_offset,
+            max_result_bytes: req.max_result_bytes,
+            result_key_columns: req.result_key_columns,
+            table_data_preview: req.table_data_preview,
+            catalog: req.catalog,
+            result_session_id: req.result_session_id,
+            client_session_id: req.client_session_id,
+            timeout_secs: req.timeout_secs,
+            await_cancel_completion: false,
+            execution_id: Some(execution_id),
+            use_transaction: req.use_transaction,
+            continue_on_error: req.continue_on_error.unwrap_or(false),
+            execution_mode: req.execution_mode.unwrap_or_default(),
+            preserve_explicit_transaction: req.preserve_explicit_transaction,
+        },
+    )
+    .await;
+    let core_ms = core_started_at.elapsed().as_millis();
+
+    registered.finish_with_late_cancel(&result, keep_timeout_reachable);
+
+    let result = result.map_err(|error| AppError::from(error.into_backend_error()))?;
+    execute_multi_response(result, core_ms)
+}
+
+fn execute_multi_response(
+    result: Vec<dbx_core::query::ExecuteMultiResult>,
+    core_ms: u128,
+) -> Result<Response, AppError> {
+    let serialize_started_at = std::time::Instant::now();
+    let body = serde_json::to_vec(&result).map_err(|error| AppError::internal(error.to_string()))?;
+    let serialize_ms = serialize_started_at.elapsed().as_millis();
+    let mut response = Response::new(axum::body::Body::from(body));
+    response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response.headers_mut().insert(
+        "x-dbx-core-ms",
+        HeaderValue::from_str(&core_ms.to_string()).map_err(|error| AppError::internal(error.to_string()))?,
+    );
+    response.headers_mut().insert(
+        "x-dbx-serialize-ms",
+        HeaderValue::from_str(&serialize_ms.to_string()).map_err(|error| AppError::internal(error.to_string()))?,
+    );
+    Ok(response)
+}
+
+pub async fn execute_batch(
+    State(state): State<Arc<WebState>>,
+    headers: HeaderMap,
+    Json(req): Json<ExecuteBatchRequest>,
+) -> Result<Json<dbx_core::db::QueryResult>, AppError> {
+    let database = super::mcp_policy::resolve_database(&state, &headers, &req.connection_id, &req.database).await?;
+    for statement in &req.statements {
+        super::mcp_policy::ensure_sql(&state, &headers, &req.connection_id, &database, statement, false).await?;
+    }
+    tracing::debug!(connection_id = %req.connection_id, "execute_batch");
+    let result = dbx_core::query::execute_statements_with_transaction_option(
+        &state.app,
+        &req.connection_id,
+        &database,
+        &req.statements,
+        req.schema.as_deref(),
+        req.use_transaction == Some(true),
+        req.timeout_secs,
+    )
+    .await
+    .map_err(AppError::from)?;
+
+    Ok(Json(result))
+}
+
+pub async fn cancel_query(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<CancelRequest>,
+) -> Json<serde_json::Value> {
+    let cancelled = state.app.running_queries.cancel(&req.execution_id);
+    Json(serde_json::json!({ "cancelled": cancelled }))
+}
+
+pub async fn cancel_conditional_update(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<CancelRequest>,
+) -> Json<dbx_core::query_cancel::CancellationWaitResult> {
+    Json(state.app.running_queries.cancel_and_wait(&req.execution_id, CONDITIONAL_UPDATE_CANCEL_WAIT).await)
+}
+
+pub async fn close_query_session(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<CloseSessionRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let closed = dbx_core::query::close_query_session(
+        &state.app,
+        &req.connection_id,
+        &req.database,
+        &req.session_id,
+        req.client_session_id.as_deref(),
+        req.catalog.as_deref(),
+    )
+    .await
+    .map_err(AppError::from)?;
+
+    Ok(Json(serde_json::json!(closed)))
+}
+
+pub async fn close_client_connection_session(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<CloseClientConnectionSessionRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let database = query_session_database(&req.database, req.catalog.as_deref());
+    let closed = state
+        .app
+        .close_client_session_pool(&req.connection_id, database, &req.client_session_id)
+        .await
+        .map_err(AppError::from)?;
+
+    Ok(Json(serde_json::json!(closed)))
+}
+fn query_session_database<'a>(database: &'a str, catalog: Option<&str>) -> Option<&'a str> {
+    if database.trim().is_empty() || catalog.is_some() {
+        None
+    } else {
+        Some(database)
+    }
+}
+
+pub async fn execute_script(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ExecuteQueryRequest>,
+) -> Result<Json<dbx_core::db::QueryResult>, AppError> {
+    tracing::debug!(connection_id = %req.connection_id, "execute_script");
+    let db_type = {
+        let configs = state.app.configs.read().await;
+        configs.get(&req.connection_id).map(|config| config.db_type)
+    };
+    let statements = db_type
+        .map(|db_type| dbx_core::sql::split_sql_statements_for_database(&req.sql, db_type))
+        .unwrap_or_else(|| dbx_core::sql::split_sql_statements(&req.sql));
+    let result = dbx_core::query::execute_statements(
+        &state.app,
+        &req.connection_id,
+        &req.database,
+        &statements,
+        req.schema.as_deref(),
+        None,
+    )
+    .await
+    .map_err(AppError::from)?;
+
+    Ok(Json(result))
+}
+
+pub async fn execute_in_transaction(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ExecuteBatchRequest>,
+) -> Result<Json<dbx_core::db::QueryResult>, AppError> {
+    tracing::debug!(connection_id = %req.connection_id, "execute_in_transaction");
+    let result = dbx_core::query::execute_statements_in_transaction(
+        &state.app,
+        &req.connection_id,
+        &req.database,
+        &req.statements,
+        req.schema.as_deref(),
+        req.catalog.as_deref(),
+    )
+    .await
+    .map_err(AppError::from)?;
+
+    Ok(Json(result))
+}
+
+pub async fn execute_script_with_2pc(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ExecuteBatchRequest>,
+) -> Result<Json<dbx_core::query::SchemaDiffDeployResult>, AppError> {
+    tracing::debug!(connection_id = %req.connection_id, "execute_script_with_2pc");
+    // Single-connection real transaction (not per-statement auto-commit 2PC).
+    let result = dbx_core::query::execute_schema_diff_deploy(
+        &state.app,
+        &req.connection_id,
+        &req.database,
+        &req.statements,
+        req.schema.as_deref(),
+        req.destructive_confirmed.unwrap_or(false),
+    )
+    .await;
+    if schema_diff_deploy_may_have_changed_schema(&result) {
+        let prefix = super::schema::object_metadata_cache_prefix(&req.connection_id, &req.database);
+        if let Err(error) = state.app.storage.delete_schema_cache_prefix(&prefix).await {
+            tracing::warn!(connection_id = %req.connection_id, database = %req.database, %error, "failed to invalidate schema metadata cache after deploy");
+        }
+    }
+    Ok(Json(result))
+}
+
+fn schema_diff_deploy_may_have_changed_schema(result: &dbx_core::query::SchemaDiffDeployResult) -> bool {
+    result.statement_count > 0 && matches!(result.status.as_str(), "committed" | "mixed")
+}
+
+pub async fn analyze_sql_references(
+    Json(req): Json<AnalyzeSqlReferencesRequest>,
+) -> Result<Json<dbx_core::sql_analysis::SqlReferenceAnalysis>, AppError> {
+    dbx_core::sql_analysis::analyze_sql_references(&req.sql, req.dialect.as_deref()).map(Json).map_err(AppError::from)
+}
+
+pub async fn find_statement_at_cursor(Json(req): Json<FindStatementAtCursorRequest>) -> Json<String> {
+    Json(
+        req.database_type
+            .map(|db_type| dbx_core::sql::find_statement_at_cursor_for_database(&req.sql, req.cursor_pos, db_type))
+            .unwrap_or_else(|| dbx_core::sql::find_statement_at_cursor(&req.sql, req.cursor_pos)),
+    )
+}
+
+pub async fn prepare_query_pagination_execution_plan(
+    Json(req): Json<PrepareQueryPaginationExecutionPlanRequest>,
+) -> Json<dbx_core::query_result_sql::QueryPaginationExecutionPlan> {
+    Json(dbx_core::query_result_sql::build_query_pagination_execution_plan(req.options))
+}
+
+pub async fn build_sorted_query_sql(
+    Json(req): Json<BuildSortedQuerySqlRequest>,
+) -> Json<dbx_core::query_result_sql::QuerySqlBuildResult> {
+    Json(dbx_core::query_result_sql::build_sorted_query_sql(req.options))
+}
+
+pub async fn build_explain_sql(
+    Json(req): Json<BuildExplainSqlRequest>,
+) -> Json<dbx_core::query_execution_sql::ExplainSqlBuildResult> {
+    Json(dbx_core::query_execution_sql::build_explain_sql(req.options))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetExplainInfoRequest {
+    pub connection_id: String,
+    pub database: Option<String>,
+    pub schema: Option<String>,
+    pub sql: String,
+    pub mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPluginPlanCapabilitiesRequest {
+    pub connection_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildCreateUserSqlRequest {
+    pub username: String,
+    pub password: String,
+    pub tablespace: String,
+}
+
+pub async fn get_explain_info(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<GetExplainInfoRequest>,
+) -> Result<Json<String>, AppError> {
+    let plan = dbx_core::agent_explain::get_agent_explain_info_core(
+        &state.app,
+        &req.connection_id,
+        req.database.as_deref(),
+        req.schema.as_deref(),
+        &req.sql,
+        req.mode.as_deref(),
+        None,
+    )
+    .await
+    .map_err(AppError::from)?;
+    Ok(Json(plan))
+}
+
+/// Plugin Host API: what the current host and connection can plan, reported
+/// without connecting or running any SQL.
+pub async fn get_plugin_plan_capabilities(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<GetPluginPlanCapabilitiesRequest>,
+) -> Result<Json<dbx_core::query::plugin_plan::PluginPlanCapabilities>, AppError> {
+    let capabilities = dbx_core::query::plugin_plan::plugin_plan_capabilities(&state.app, &req.connection_id)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(capabilities))
+}
+
+/// Plugin Host API: read-only estimated plan acquisition. The request carries
+/// the original SQL only; the host generates and owns the EXPLAIN.
+pub async fn get_plugin_estimated_plan(
+    State(state): State<Arc<WebState>>,
+    Json(request): Json<dbx_core::query::plugin_plan::PluginPlanRequest>,
+) -> Result<Json<dbx_core::query::plugin_plan::PluginPlanResult>, AppError> {
+    let result =
+        dbx_core::query::plugin_plan::explain_estimated_plan(&state.app, request).await.map_err(AppError::from)?;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryPluginDataRequest {
+    pub plugin_id: String,
+    pub request: dbx_core::query::plugin_data::PluginDataQueryRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDataGrantRequest {
+    pub plugin_id: String,
+    #[serde(default)]
+    pub connection_id: String,
+    #[serde(default)]
+    pub granted: bool,
+}
+
+/// Plugin Host API: consent-gated read-only data query (`host.data:read`).
+pub async fn query_plugin_data(
+    State(state): State<Arc<WebState>>,
+    Json(body): Json<QueryPluginDataRequest>,
+) -> Result<Json<dbx_core::query::plugin_data::PluginDataQueryResult>, AppError> {
+    let result = dbx_core::query::plugin_data::query_plugin_data(&state.app, &body.plugin_id, body.request)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(result))
+}
+
+pub async fn get_plugin_data_grants(
+    State(state): State<Arc<WebState>>,
+    Json(body): Json<PluginDataGrantRequest>,
+) -> Result<Json<Vec<dbx_core::query::plugin_data::PluginDataGrant>>, AppError> {
+    let grants = dbx_core::query::plugin_data::list_plugin_data_grants(&state.app, &body.plugin_id)
+        .await
+        .map_err(AppError::from)?;
+    Ok(Json(grants))
+}
+
+pub async fn set_plugin_data_grant(
+    State(state): State<Arc<WebState>>,
+    Json(body): Json<PluginDataGrantRequest>,
+) -> Result<Json<Vec<dbx_core::query::plugin_data::PluginDataGrant>>, AppError> {
+    let grants = dbx_core::query::plugin_data::set_plugin_data_grant(
+        &state.app,
+        &body.plugin_id,
+        &body.connection_id,
+        body.granted,
+    )
+    .await
+    .map_err(AppError::bad_request)?;
+    Ok(Json(grants))
+}
+
+pub async fn build_create_user_sql(Json(req): Json<BuildCreateUserSqlRequest>) -> Result<Json<String>, AppError> {
+    Ok(Json(dbx_core::db_admin_sql::build_create_user_sql(&req.username, &req.password, &req.tablespace)))
+}
+
+pub async fn build_dropped_file_preview_sql(
+    Json(req): Json<BuildDroppedFilePreviewSqlRequest>,
+) -> Json<Option<String>> {
+    Json(dbx_core::query_execution_sql::build_dropped_file_preview_sql(req.options))
+}
+
+pub async fn build_table_select_sql(Json(req): Json<BuildTableSelectSqlRequest>) -> Json<String> {
+    Json(dbx_core::sql_dialect::build_table_data_select_sql_with_database(req.options, req.include_database_name))
+}
+
+pub async fn build_database_search_sql(
+    Json(req): Json<BuildDatabaseSearchSqlRequest>,
+) -> Json<Option<dbx_core::database_search_sql::DatabaseSearchSql>> {
+    Json(dbx_core::database_search_sql::build_database_search_sql(req.options))
+}
+
+pub async fn build_search_result_where(Json(req): Json<BuildSearchResultWhereRequest>) -> Json<String> {
+    Json(dbx_core::database_search_sql::build_search_result_where(req.options))
+}
+
+pub async fn build_rename_object_sql(Json(req): Json<BuildRenameObjectSqlRequest>) -> Result<Json<String>, AppError> {
+    dbx_core::db_admin_sql::build_rename_object_sql(req.options).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_rename_database_sql(
+    Json(req): Json<BuildRenameDatabaseSqlRequest>,
+) -> Result<Json<String>, AppError> {
+    dbx_core::db_admin_sql::build_rename_database_sql(
+        req.database_type,
+        &req.old_name,
+        &req.new_name,
+        req.terminate_connections,
+    )
+    .map(Json)
+    .map_err(AppError::from)
+}
+
+pub async fn build_rename_database_preflight_sql(
+    Json(req): Json<BuildRenameDatabasePreflightSqlRequest>,
+) -> Result<Json<String>, AppError> {
+    dbx_core::db_admin_sql::build_rename_database_preflight_sql(req.database_type, &req.database_name)
+        .map(Json)
+        .map_err(AppError::from)
+}
+
+pub async fn build_create_database_sql(
+    Json(req): Json<BuildCreateDatabaseSqlRequest>,
+) -> Result<Json<String>, AppError> {
+    dbx_core::db_admin_sql::build_create_database_sql(req.options).map(Json).map_err(AppError::from)
+}
+
+#[cfg(feature = "duckdb-sidecar")]
+pub async fn build_duckdb_attach_database_sql(Json(req): Json<BuildDuckDbAttachDatabaseSqlRequest>) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_duckdb_attach_database_sql(req.options))
+}
+
+pub async fn build_sqlite_attach_database_sql(Json(req): Json<BuildSqliteAttachDatabaseSqlRequest>) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_sqlite_attach_database_sql(req.options))
+}
+
+pub async fn build_drop_object_sql(Json(req): Json<BuildDropObjectSqlRequest>) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_drop_object_sql(req.options))
+}
+
+pub async fn build_drop_table_sql(Json(req): Json<BuildTableAdminSqlRequest>) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_drop_table_sql(req.options))
+}
+
+pub async fn build_drop_table_child_object_sql(
+    Json(req): Json<BuildDropTableChildObjectSqlRequest>,
+) -> Result<Json<String>, AppError> {
+    dbx_core::db_admin_sql::build_drop_table_child_object_sql(req.options).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_empty_table_sql(Json(req): Json<BuildTableAdminSqlRequest>) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_empty_table_sql(req.options))
+}
+
+pub async fn build_truncate_table_sql(Json(req): Json<BuildTableAdminSqlRequest>) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_truncate_table_sql(req.options))
+}
+
+pub async fn build_vacuum_table_sql(Json(req): Json<BuildVacuumTableSqlRequest>) -> Result<Json<String>, AppError> {
+    dbx_core::db_admin_sql::build_vacuum_table_sql(req.options).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_mysql_auto_increment_sql(
+    Json(req): Json<BuildMysqlAutoIncrementSqlRequest>,
+) -> Result<Json<String>, AppError> {
+    dbx_core::db_admin_sql::build_mysql_auto_increment_sql(req.options).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_drop_database_sql(Json(req): Json<BuildDatabaseNameSqlRequest>) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_drop_database_sql(req.options))
+}
+
+pub async fn build_create_schema_sql(Json(req): Json<BuildSchemaNameSqlRequest>) -> Result<Json<String>, AppError> {
+    dbx_core::db_admin_sql::build_create_schema_sql(req.options).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_update_database_properties_sql(
+    Json(req): Json<BuildDatabasePropertyEditSqlRequest>,
+) -> Result<Json<String>, AppError> {
+    dbx_core::db_admin_sql::build_update_database_properties_sql(req.options).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_drop_schema_sql(Json(req): Json<BuildSchemaNameSqlRequest>) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_drop_schema_sql(req.options))
+}
+
+pub async fn build_duplicate_table_structure_sql(
+    Json(req): Json<BuildDuplicateTableStructureSqlRequest>,
+) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_duplicate_table_structure_sql(req.options))
+}
+
+pub async fn build_copy_table_data_sql(Json(req): Json<BuildCopyTableDataSqlRequest>) -> Json<String> {
+    Json(dbx_core::db_admin_sql::build_copy_table_data_sql(req.options))
+}
+
+pub async fn build_executable_object_source_statements(
+    Json(req): Json<BuildExecutableObjectSourceRequest>,
+) -> Result<Json<Vec<String>>, AppError> {
+    dbx_core::object_source_sql::build_executable_object_source_statements(req.input).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_executable_object_source_sql(
+    Json(req): Json<BuildExecutableObjectSourceRequest>,
+) -> Result<Json<String>, AppError> {
+    dbx_core::object_source_sql::build_executable_object_source_sql(req.input).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_editable_object_source(Json(req): Json<BuildExecutableObjectSourceRequest>) -> Json<String> {
+    Json(dbx_core::object_source_sql::build_editable_object_source(req.input))
+}
+
+pub async fn build_routine_rename_object_source_statements(
+    Json(req): Json<BuildRoutineRenameObjectSourceRequest>,
+) -> Result<Json<Vec<String>>, AppError> {
+    dbx_core::object_source_sql::build_routine_rename_object_source_statements(req.input)
+        .map(Json)
+        .map_err(AppError::from)
+}
+
+pub async fn build_view_ddl_sql(Json(req): Json<BuildViewDdlRequest>) -> Json<String> {
+    Json(dbx_core::object_source_sql::build_view_ddl_sql(req.input))
+}
+
+pub async fn build_table_structure_change_sql(
+    Json(req): Json<BuildTableStructureSqlRequest>,
+) -> Json<dbx_core::table_structure_sql::TableStructureSqlResult> {
+    Json(dbx_core::table_structure_sql::build_table_structure_change_sql(req.options))
+}
+
+pub async fn build_table_owner_change_sql(
+    Json(req): Json<BuildTableOwnerChangeSqlRequest>,
+) -> Json<dbx_core::table_structure_sql::TableStructureSqlResult> {
+    Json(dbx_core::table_structure_sql::build_table_owner_change_sql(req.options))
+}
+
+pub async fn build_table_partition_operation_sql(
+    Json(req): Json<BuildTablePartitionOperationSqlRequest>,
+) -> Json<dbx_core::table_structure_sql::TableStructureSqlResult> {
+    Json(dbx_core::table_structure_sql::build_table_partition_operation_sql(req.options))
+}
+
+pub async fn build_create_partitioned_table_sql(
+    Json(req): Json<BuildCreatePartitionedTableSqlRequest>,
+) -> Json<dbx_core::table_structure_sql::TableStructureSqlResult> {
+    Json(dbx_core::table_structure_sql::build_create_partitioned_table_sql(req.options, req.partitioning))
+}
+
+pub async fn preview_sqlite_table_structure_change(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<PreviewSqliteTableStructureChangeRequest>,
+) -> Result<Json<dbx_core::table_structure_sql::SqliteTableStructurePreview>, AppError> {
+    dbx_core::table_structure_sql::preview_sqlite_table_structure_change(
+        &state.app,
+        &req.connection_id,
+        &req.database,
+        req.options,
+    )
+    .await
+    .map(Json)
+    .map_err(AppError::from)
+}
+
+pub async fn apply_sqlite_table_structure_change(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<ApplySqliteTableStructureChangeRequest>,
+) -> Result<Json<dbx_core::db::QueryResult>, AppError> {
+    dbx_core::table_structure_sql::apply_sqlite_table_structure_change(
+        &state.app,
+        &req.connection_id,
+        &req.database,
+        req.options,
+        &req.schema_revision,
+    )
+    .await
+    .map(Json)
+    .map_err(AppError::from)
+}
+
+pub async fn build_create_table_sql(
+    Json(req): Json<BuildTableStructureSqlRequest>,
+) -> Json<dbx_core::table_structure_sql::TableStructureSqlResult> {
+    Json(dbx_core::table_structure_sql::build_create_table_sql(req.options))
+}
+
+pub async fn build_single_column_alter_sql(
+    Json(req): Json<BuildSingleColumnAlterSqlRequest>,
+) -> Json<dbx_core::table_structure_sql::TableStructureSqlResult> {
+    Json(dbx_core::table_structure_sql::build_single_column_alter_sql(req.options))
+}
+
+pub async fn analyze_editable_query_editability(
+    Json(req): Json<AnalyzeEditableQueryRequest>,
+) -> Json<dbx_core::sql_editability::QueryEditability> {
+    Json(dbx_core::sql_editability::analyze_editable_query_editability(&req.sql))
+}
+
+pub async fn prepare_data_grid_save(
+    Json(req): Json<PrepareDataGridSaveRequest>,
+) -> Json<dbx_core::data_grid_sql::DataGridSavePreparation> {
+    Json(dbx_core::data_grid_sql::prepare_data_grid_save_for_driver_profile(req.options, req.driver_profile.as_deref()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/query/extract-data-grid-selection",
+    request_body = ExtractDataGridSelectionRequest,
+    responses(
+        (status = 200, description = "Selection extracted successfully", body = dbx_core::data_grid_extractors::DataGridExtractResult),
+        (status = 400, description = "Invalid selection or extractor configuration", body = dbx_core::data_grid_extractors::DataGridExtractError),
+        (status = 413, description = "Request body exceeds the extractor upload limit"),
+        (status = 422, description = "Request body does not match the extractor contract"),
+        (status = 500, description = "Extractor worker failed", body = dbx_core::data_grid_extractors::DataGridExtractError)
+    ),
+    tag = "data-grid"
+)]
+pub async fn extract_data_grid_selection(
+    Json(req): Json<ExtractDataGridSelectionRequest>,
+) -> Result<
+    Json<dbx_core::data_grid_extractors::DataGridExtractResult>,
+    (axum::http::StatusCode, Json<dbx_core::data_grid_extractors::DataGridExtractError>),
+> {
+    tokio::task::spawn_blocking(move || {
+        // Cells pasted from the grid land in a spreadsheet, so formula-triggering text
+        // is neutralized before the extractor renders it (see dbx_core::data::grid_clipboard_guard).
+        let request = dbx_core::data::grid_clipboard_guard::neutralize_spreadsheet_formulas(req.request);
+        dbx_core::data_grid_extractors::extract_data_grid_selection(request)
+    })
+    .await
+    .map_err(|error| {
+        let error = dbx_core::data_grid_extractors::DataGridExtractError::new(
+            dbx_core::data_grid_extractors::DataGridExtractErrorCode::ExecutionFailed,
+            format!("Data grid extractor worker failed: {error}"),
+        );
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(error))
+    })?
+    .map(Json)
+    .map_err(|error| (axum::http::StatusCode::BAD_REQUEST, Json(error)))
+}
+
+pub async fn build_data_grid_copy_update_statements(
+    Json(req): Json<BuildDataGridCopyUpdateStatementsRequest>,
+) -> Json<Vec<String>> {
+    Json(dbx_core::data_grid_sql::build_data_grid_copy_update_statements(req.options))
+}
+
+pub async fn build_data_grid_copy_insert_statement(
+    Json(req): Json<BuildDataGridCopyInsertStatementRequest>,
+) -> Json<Option<String>> {
+    Json(dbx_core::data_grid_sql::build_data_grid_copy_insert_statement(req.options))
+}
+
+pub async fn build_dml_change_preview_sql(
+    Json(req): Json<BuildDmlChangePreviewSqlRequest>,
+) -> Result<Json<dbx_core::dml_preview_sql::DmlChangePreviewSqlResult>, (axum::http::StatusCode, Json<String>)> {
+    dbx_core::dml_preview_sql::build_dml_change_preview_sql(req.options)
+        .map(Json)
+        .map_err(|message| (axum::http::StatusCode::BAD_REQUEST, Json(message)))
+}
+
+pub async fn build_data_grid_context_filter_condition(
+    Json(req): Json<BuildDataGridContextFilterConditionRequest>,
+) -> Json<Option<String>> {
+    Json(dbx_core::data_grid_sql::build_data_grid_context_filter_condition(req.options))
+}
+
+pub async fn build_data_grid_column_value_filter_condition(
+    Json(req): Json<BuildDataGridColumnValueFilterConditionRequest>,
+) -> Json<Option<String>> {
+    Json(dbx_core::data_grid_sql::build_data_grid_column_value_filter_condition(req.options))
+}
+
+pub async fn build_data_grid_column_values_filter_condition(
+    Json(req): Json<BuildDataGridColumnValuesFilterConditionRequest>,
+) -> Json<Option<String>> {
+    Json(dbx_core::data_grid_sql::build_data_grid_column_values_filter_condition(req.options))
+}
+
+pub async fn build_data_grid_column_distinct_values_sql(
+    Json(req): Json<BuildDataGridColumnDistinctValuesSqlRequest>,
+) -> Json<String> {
+    Json(dbx_core::data_grid_sql::build_data_grid_column_distinct_values_sql(req.options))
+}
+
+pub async fn build_data_grid_count_sql(Json(req): Json<BuildDataGridCountSqlRequest>) -> Json<String> {
+    Json(dbx_core::data_grid_sql::build_data_grid_count_sql(req.options))
+}
+
+pub async fn build_data_grid_conditional_update_sql(
+    Json(req): Json<BuildDataGridConditionalUpdateSqlRequest>,
+) -> Json<Option<String>> {
+    Json(dbx_core::data_grid_sql::build_data_grid_conditional_update_sql(req.options))
+}
+
+pub async fn build_hive_table_properties_sql(Json(req): Json<BuildHiveTablePropertiesSqlRequest>) -> Json<String> {
+    Json(dbx_core::data_grid_sql::build_hive_table_properties_sql(req.options))
+}
+
+pub async fn build_export_insert_statements(
+    Json(req): Json<BuildExportInsertStatementsRequest>,
+) -> Result<Json<Vec<String>>, AppError> {
+    dbx_core::database_export::build_export_insert_statements(req.options).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_export_sql_insert(Json(req): Json<BuildExportSqlInsertRequest>) -> Result<Json<String>, AppError> {
+    dbx_core::database_export::build_export_sql_insert(req.options).map(Json).map_err(AppError::from)
+}
+
+pub async fn build_database_sql_export(
+    State(state): State<Arc<WebState>>,
+    Json(req): Json<BuildDatabaseSqlExportRequest>,
+) -> Result<Json<String>, AppError> {
+    let mut options = req.options;
+    // Sort tables by FK dependency when connection info is available.
+    if let (Some(ref conn_id), Some(ref database), Some(ref schema)) =
+        (&options.connection_id, &options.database, &options.schema)
+    {
+        if options.tables.len() > 1 {
+            let table_names: Vec<String> = options.tables.iter().filter_map(|t| t.table_name.clone()).collect();
+            if table_names.len() > 1 {
+                if let Ok(sorted_names) = dbx_core::transfer::sort_tables_by_fk_dependency(
+                    &state.app,
+                    conn_id,
+                    database,
+                    schema,
+                    &table_names,
+                    true,
+                )
+                .await
+                {
+                    options.tables.sort_by_key(|t| {
+                        sorted_names
+                            .iter()
+                            .position(|n| Some(n.as_str()) == t.table_name.as_deref())
+                            .unwrap_or(usize::MAX)
+                    });
+                }
+            }
+        }
+    }
+    dbx_core::database_export::build_database_sql_export(options).map(Json).map_err(AppError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::WebState;
+    use axum::extract::State as AxumState;
+    use dbx_core::connection::AppState;
+
+    async fn test_web_state() -> (Arc<WebState>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("dbx-web-query-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let storage = dbx_core::persistence::test_storage::open(&dir.join("storage.db")).await.unwrap();
+        let app = Arc::new(AppState::new_with_plugin_dir(storage, dir.join("plugins")));
+        let state = Arc::new(WebState::for_tests(app, dir.clone()));
+        (state, dir)
+    }
+
+    fn deploy_result(status: &str, statement_count: usize) -> dbx_core::query::SchemaDiffDeployResult {
+        dbx_core::query::SchemaDiffDeployResult {
+            transaction_id: "deploy-test".to_string(),
+            status: status.to_string(),
+            participants: Vec::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            executed_count: 0,
+            statement_count,
+            error: None,
+            metadata: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn schema_diff_cache_invalidation_covers_committed_and_partial_deploys() {
+        assert!(schema_diff_deploy_may_have_changed_schema(&deploy_result("committed", 1)));
+        assert!(schema_diff_deploy_may_have_changed_schema(&deploy_result("mixed", 1)));
+        assert!(!schema_diff_deploy_may_have_changed_schema(&deploy_result("rolled_back", 1)));
+        assert!(!schema_diff_deploy_may_have_changed_schema(&deploy_result("committed", 0)));
+    }
+
+    #[tokio::test]
+    async fn execute_script_with_2pc_returns_structured_result() {
+        let (state, _dir) = test_web_state().await;
+        let req = ExecuteBatchRequest {
+            connection_id: "conn-1".to_string(),
+            database: "testdb".to_string(),
+            statements: vec!["SELECT 1".to_string()],
+            schema: None,
+            catalog: None,
+            timeout_secs: None,
+            destructive_confirmed: None,
+            use_transaction: None,
+        };
+
+        let result = execute_script_with_2pc(AxumState(state), Json(req))
+            .await
+            .expect("execute_script_with_2pc should return Ok(Json(...))");
+        let log = result.0;
+        assert!(!log.transaction_id.is_empty());
+        assert!(!log.participants.is_empty());
+        assert_eq!(log.status, "rolled_back");
+        assert!(log.error.as_ref().is_some_and(|e| !e.is_empty()));
+        assert_eq!(log.statement_count, 1);
+        assert_eq!(log.executed_count, 0);
+    }
+
+    #[tokio::test]
+    async fn execute_script_with_2pc_empty_statements_succeeds() {
+        let (state, _dir) = test_web_state().await;
+        let req = ExecuteBatchRequest {
+            connection_id: "conn-empty".to_string(),
+            database: "testdb".to_string(),
+            statements: vec![],
+            schema: None,
+            catalog: None,
+            timeout_secs: None,
+            destructive_confirmed: None,
+            use_transaction: None,
+        };
+
+        let result = execute_script_with_2pc(AxumState(state), Json(req)).await.expect("empty deploy should succeed");
+        let log = result.0;
+        assert_eq!(log.status, "committed");
+        assert_eq!(log.statement_count, 0);
+        assert_eq!(log.executed_count, 0);
+        assert!(log.error.is_none());
+        assert_eq!(log.participants.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn execute_script_with_2pc_propagates_structured_failure_fields() {
+        let (state, _dir) = test_web_state().await;
+        let req = ExecuteBatchRequest {
+            connection_id: "missing-conn".to_string(),
+            database: "testdb".to_string(),
+            statements: vec!["CREATE TABLE t1 (id INT)".to_string(), "CREATE TABLE t2 (id INT)".to_string()],
+            schema: None,
+            catalog: None,
+            timeout_secs: None,
+            destructive_confirmed: None,
+            use_transaction: None,
+        };
+
+        let result = execute_script_with_2pc(AxumState(state), Json(req))
+            .await
+            .expect("deploy endpoint should return structured JSON even on failure");
+        let log = result.0;
+        assert!(log.status == "rolled_back" || log.status == "mixed", "status={}", log.status);
+        assert_eq!(log.statement_count, 2);
+        assert!(log.error.as_ref().is_some_and(|e| !e.is_empty()));
+        // Missing connection cannot have applied statements.
+        assert_eq!(log.executed_count, 0);
+    }
+
+    #[tokio::test]
+    async fn execute_script_with_2pc_blocks_unconfirmed_destructive_sql() {
+        let (state, _dir) = test_web_state().await;
+        let req = ExecuteBatchRequest {
+            connection_id: "missing-conn".to_string(),
+            database: "testdb".to_string(),
+            statements: vec!["DROP INDEX idx_old ON users".to_string()],
+            schema: None,
+            catalog: None,
+            timeout_secs: None,
+            destructive_confirmed: None,
+            use_transaction: None,
+        };
+
+        let result = execute_script_with_2pc(AxumState(state), Json(req))
+            .await
+            .expect("destructive deploy should return a structured block result");
+        let log = result.0;
+        assert_eq!(log.status, "rolled_back");
+        assert_eq!(log.executed_count, 0);
+        assert_eq!(log.metadata["blocked"], "destructive_confirmation_required");
+    }
+
+    #[tokio::test]
+    async fn execute_multi_response_preserves_nested_original_error_detail() {
+        let result = dbx_core::query::ExecuteMultiResult {
+            result: dbx_core::db::QueryResult {
+                columns: vec!["Error".to_string()],
+                column_types: vec![],
+                column_sortables: vec![],
+                spatial_columns: vec![],
+                spatial_values: vec![],
+                rows: vec![vec![serde_json::json!("relation customer_orders does not exist")]],
+                affected_rows: 0,
+                execution_time_ms: 0,
+                server_execute_time_us: None,
+                query_timings_ms: None,
+                truncated: false,
+                session_id: None,
+                has_more: false,
+                elasticsearch_raw_body: None,
+                messages: Vec::new(),
+            },
+            large_value_cells: Vec::new(),
+            execution_error: true,
+            statement_index: Some(1),
+            error: Some(dbx_core::backend_error::BackendError::from_sql_detail(
+                "relation customer_orders does not exist",
+            )),
+            server_message: false,
+            manual_transaction_proven_read_only: false,
+            manual_transaction_no_statement: false,
+            auto_commit_open_transaction: None,
+            auto_commit_explicit_transaction_rolled_back: false,
+            auto_commit_session_autocommit_rolled_back: false,
+        };
+
+        let response = execute_multi_response(vec![result], 17).unwrap();
+        assert_eq!(response.headers()["x-dbx-core-ms"], "17");
+        assert!(response.headers()["x-dbx-serialize-ms"].to_str().unwrap().parse::<u128>().is_ok());
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+        let body = response.into_body();
+        let payload =
+            serde_json::from_slice::<serde_json::Value>(&axum::body::to_bytes(body, usize::MAX).await.unwrap())
+                .unwrap();
+
+        assert_eq!(payload[0]["statement_index"], 1);
+        assert_eq!(payload[0]["error"]["code"], "DBX-JDBC-4001");
+        assert_eq!(payload[0]["error"]["detail"], "relation customer_orders does not exist");
+    }
+}

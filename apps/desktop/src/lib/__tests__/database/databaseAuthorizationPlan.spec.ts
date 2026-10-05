@@ -1,0 +1,364 @@
+import { describe, expect, it } from "vitest";
+import { dorisUserAdminProvider, mysqlUserAdminProvider, postgresUserAdminProvider, starrocksUserAdminProvider } from "@/lib/database/databaseUserAdmin";
+import { authorizationPlanSql, buildCreateDatabaseAuthorizationPlan, buildCreateUserAuthorizationPlan, buildGrantAuthorizationPlan, databaseAuthorizationsFromTableGrants, executeAuthorizationPlan } from "@/lib/database/databaseAuthorizationPlan";
+
+describe("database authorization plans", () => {
+  it("grants PostgreSQL presets across user schemas and future objects", () => {
+    const plan = buildCreateUserAuthorizationPlan({
+      provider: postgresUserAdminProvider,
+      principal: { user: "app_user", host: "LOGIN", password: "secret", canLogin: true },
+      accountType: "standard",
+      databases: [
+        {
+          database: "app_db",
+          preset: "readWrite",
+          schemas: ["public", "app", "pg_catalog", "information_schema", "SYS_CATALOG"],
+        },
+      ],
+    });
+    const sql = authorizationPlanSql(plan);
+
+    expect(sql).toContain('GRANT USAGE, CREATE ON SCHEMA "public" TO "app_user";');
+    expect(sql).toContain('GRANT USAGE, CREATE ON SCHEMA "app" TO "app_user";');
+    expect(sql).toContain('GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON ALL TABLES IN SCHEMA "app" TO "app_user";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO "app_user";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT USAGE, CREATE ON SCHEMAS TO "app_user";');
+    expect(sql).toContain('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA "app" TO "app_user";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT EXECUTE ON FUNCTIONS TO "app_user";');
+    expect(sql).not.toContain('SCHEMA "pg_catalog"');
+    expect(sql).not.toContain('SCHEMA "information_schema"');
+    expect(sql).not.toContain('SCHEMA "SYS_CATALOG"');
+  });
+
+  it("includes current and future PostgreSQL object grants after database creation", () => {
+    const plan = buildCreateDatabaseAuthorizationPlan({
+      provider: postgresUserAdminProvider,
+      database: "app_db",
+      createSql: 'CREATE DATABASE "app_db";',
+      users: [{ user: "app_user", host: "LOGIN" }],
+    });
+    const sql = authorizationPlanSql(plan);
+
+    expect(sql).toContain('GRANT ALL PRIVILEGES ON DATABASE "app_db" TO "app_user";');
+    expect(sql).toContain('GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA "public" TO "app_user";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON SCHEMAS TO "app_user";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON TABLES TO "app_user";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON SEQUENCES TO "app_user";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES GRANT ALL PRIVILEGES ON FUNCTIONS TO "app_user";');
+  });
+
+  it("cross-grants future PostgreSQL schemas and objects between linked users", () => {
+    const plan = buildCreateDatabaseAuthorizationPlan({
+      provider: postgresUserAdminProvider,
+      database: "app_db",
+      createSql: 'CREATE DATABASE "app_db";',
+      users: [
+        { user: "alice", host: "LOGIN" },
+        { user: "bob", host: "LOGIN" },
+      ],
+    });
+    const sql = authorizationPlanSql(plan);
+
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES FOR ROLE "alice" GRANT ALL PRIVILEGES ON SCHEMAS TO "bob";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES FOR ROLE "alice" GRANT ALL PRIVILEGES ON TABLES TO "bob";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES FOR ROLE "bob" GRANT ALL PRIVILEGES ON SEQUENCES TO "alice";');
+    expect(sql).toContain('ALTER DEFAULT PRIVILEGES FOR ROLE "bob" GRANT ALL PRIVILEGES ON FUNCTIONS TO "alice";');
+    expect(plan.steps.every((step) => !step.sql.includes("\n"))).toBe(true);
+  });
+
+  it("keeps PostgreSQL read-only sequence access non-mutating", () => {
+    const plan = buildCreateUserAuthorizationPlan({
+      provider: postgresUserAdminProvider,
+      principal: { user: "reader", host: "LOGIN", password: "secret", canLogin: true },
+      accountType: "standard",
+      databases: [{ database: "app_db", preset: "readOnly", schemas: ["app"] }],
+    });
+    const sql = authorizationPlanSql(plan);
+
+    expect(sql).toContain('GRANT SELECT ON ALL SEQUENCES IN SCHEMA "app" TO "reader";');
+    expect(sql).not.toContain('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA "app" TO "reader";');
+  });
+
+  it("grants only selected PostgreSQL tables across schemas with quoted identifiers", () => {
+    const plan = buildCreateUserAuthorizationPlan({
+      provider: postgresUserAdminProvider,
+      principal: { user: 'report"reader', host: "LOGIN", password: "secret", canLogin: true },
+      accountType: "standard",
+      databases: [
+        {
+          database: "app-db",
+          preset: "readWrite",
+          schemas: ["public", "sales", "audit"],
+          tables: [
+            { schema: "sales", name: "orders" },
+            { schema: "audit", name: "orders" },
+            { schema: 'odd"schema', name: 'daily"rollup' },
+          ],
+        },
+      ],
+    });
+    const sql = authorizationPlanSql(plan);
+
+    expect(sql).toContain('GRANT CONNECT ON DATABASE "app-db" TO "report""reader";');
+    expect(sql).toContain('GRANT USAGE ON SCHEMA "sales" TO "report""reader";');
+    expect(sql).toContain('GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE "sales"."orders" TO "report""reader";');
+    expect(sql).toContain('ON TABLE "audit"."orders"');
+    expect(sql).toContain('ON TABLE "odd""schema"."daily""rollup"');
+    expect(sql).not.toContain("ON ALL TABLES");
+    expect(sql).not.toContain("ALTER DEFAULT PRIVILEGES");
+  });
+
+  it("diffs PostgreSQL table grants and revokes only existing privileges", () => {
+    const selection = [{ database: "app_db", preset: "custom" as const, privileges: ["SELECT", "INSERT"], tables: [{ schema: "tenant", name: "orders" }] }];
+    const currentGrants = [{ database: "app_db", schema: "tenant", table: "orders", privilege: "SELECT", grantOption: false }];
+    const grant = buildGrantAuthorizationPlan({ provider: postgresUserAdminProvider, user: { user: "reader", host: "LOGIN" }, databases: selection, currentGrants });
+    const revoke = buildGrantAuthorizationPlan({ provider: postgresUserAdminProvider, user: { user: "reader", host: "LOGIN" }, databases: selection, currentGrants, revoke: true });
+
+    expect(grant.steps).toHaveLength(1);
+    expect(grant.steps[0]).toMatchObject({ database: "app_db", targetDatabase: "app_db", targetSchema: "tenant", targetTable: "orders" });
+    expect(grant.steps[0].sql).toBe('GRANT INSERT ON TABLE "tenant"."orders" TO "reader";');
+    expect(revoke.steps).toHaveLength(1);
+    expect(revoke.steps[0].sql).toBe('REVOKE SELECT ON TABLE "tenant"."orders" FROM "reader";');
+  });
+
+  it("revokes existing PostgreSQL table privileges across a selected schema", () => {
+    const plan = buildGrantAuthorizationPlan({
+      provider: postgresUserAdminProvider,
+      user: { user: "reader", host: "LOGIN" },
+      databases: [{ database: "app_db", preset: "custom", privileges: ["SELECT"], schemas: ["sales"], tables: undefined }],
+      currentGrants: [{ database: "app_db", schema: "sales", table: "orders", privilege: "SELECT", grantOption: false }],
+      revoke: true,
+    });
+
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0].sql).toBe('REVOKE SELECT ON ALL TABLES IN SCHEMA "sales" FROM "reader";');
+  });
+
+  it("keeps same-named PostgreSQL tables in distinct schemas when restoring grants", () => {
+    const loaded = databaseAuthorizationsFromTableGrants(postgresUserAdminProvider, [
+      { database: "app_db", schema: "sales", table: "orders", privilege: "SELECT", grantOption: false },
+      { database: "app_db", schema: "audit", table: "orders", privilege: "SELECT", grantOption: false },
+    ]);
+
+    expect(loaded.selections).toEqual([
+      {
+        database: "app_db",
+        preset: "custom",
+        privileges: ["SELECT"],
+        tables: [
+          { name: "orders", schema: "sales" },
+          { name: "orders", schema: "audit" },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps MySQL database grants scoped to the selected database", () => {
+    const plan = buildCreateDatabaseAuthorizationPlan({
+      provider: mysqlUserAdminProvider,
+      database: "app-db",
+      createSql: "CREATE DATABASE `app-db`;",
+      users: [{ user: "app", host: "%" }],
+    });
+
+    expect(authorizationPlanSql(plan)).toContain("GRANT ALL PRIVILEGES ON `app-db`.* TO 'app'@'%';");
+  });
+
+  it("keeps creation plans usable when authorization capabilities are unavailable", () => {
+    const createOnlyProvider = { ...mysqlUserAdminProvider, grantPrivilegesSql: undefined };
+    const databasePlan = buildCreateDatabaseAuthorizationPlan({
+      provider: createOnlyProvider,
+      database: "app_db",
+      createSql: "CREATE DATABASE `app_db`;",
+      users: [{ user: "app", host: "%" }],
+    });
+    const unsupportedUserPlan = buildCreateUserAuthorizationPlan({
+      provider: { ...createOnlyProvider, createUserSql: undefined },
+      principal: { user: "app", host: "%", password: "secret" },
+      accountType: "standard",
+      databases: [{ database: "app_db", preset: "readOnly" }],
+    });
+
+    expect(databasePlan.steps.map((step) => step.operation)).toEqual(["createDatabase"]);
+    expect(unsupportedUserPlan.steps).toEqual([]);
+  });
+
+  it("keeps result metadata structured for IPv6 hosts and colon-containing databases", () => {
+    const plan = buildCreateUserAuthorizationPlan({
+      provider: mysqlUserAdminProvider,
+      principal: { user: "app", host: "2001:db8::1", password: "secret" },
+      accountType: "standard",
+      databases: [{ database: "db:prod", preset: "readOnly" }],
+    });
+    const grant = plan.steps.find((step) => step.operation === "grantDatabase");
+
+    expect(grant).toMatchObject({ subject: "app@2001:db8::1", targetDatabase: "db:prod" });
+  });
+
+  it("grants only selected MySQL tables and filters database-only privileges", () => {
+    const plan = buildCreateUserAuthorizationPlan({
+      provider: mysqlUserAdminProvider,
+      principal: { user: "table_reader", host: "%", password: "secret" },
+      accountType: "standard",
+      databases: [{ database: "app_db", preset: "readWrite", tables: [{ name: "orders" }, { name: "audit`log" }, { name: "orders" }] }],
+    });
+    const sql = authorizationPlanSql(plan);
+    const grants = plan.steps.filter((step) => step.operation === "grantDatabase");
+
+    expect(grants).toHaveLength(2);
+    expect(grants.map((step) => step.targetTable)).toEqual(["orders", "audit`log"]);
+    expect(sql).toContain("GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES, SHOW VIEW, CREATE VIEW, TRIGGER ON `app_db`.`orders` TO 'table_reader'@'%';");
+    expect(sql).toContain("ON `app_db`.`audit``log`");
+    expect(sql).not.toContain("ON `app_db`.*");
+    expect(sql).not.toContain("EVENT");
+    expect(sql).not.toContain("CREATE ROUTINE");
+    expect(sql).not.toContain("LOCK TABLES");
+  });
+
+  it("keeps database-wide MySQL grants as the default", () => {
+    const plan = buildCreateUserAuthorizationPlan({
+      provider: mysqlUserAdminProvider,
+      principal: { user: "db_reader", host: "%", password: "secret" },
+      accountType: "standard",
+      databases: [{ database: "app_db", preset: "readOnly" }],
+    });
+
+    expect(authorizationPlanSql(plan)).toContain("GRANT SELECT, SHOW VIEW ON `app_db`.* TO 'db_reader'@'%';");
+  });
+
+  it("builds StarRocks grants in the selected catalog with StarRocks privileges", () => {
+    const plan = buildCreateUserAuthorizationPlan({
+      provider: starrocksUserAdminProvider,
+      principal: { user: "table_reader", host: "%", password: "secret" },
+      accountType: "standard",
+      databases: [
+        {
+          catalog: "ice`berg",
+          database: "sales-db",
+          preset: "readWrite",
+          tables: [{ name: "orders" }, { name: "audit`log" }],
+        },
+      ],
+    });
+    const grants = plan.steps.filter((step) => step.operation === "grantDatabase");
+
+    expect(grants).toHaveLength(2);
+    expect(grants[0]).toMatchObject({ database: "sales-db", targetCatalog: "ice`berg", targetDatabase: "sales-db", targetTable: "orders" });
+    expect(grants[0].sql).toBe("SET CATALOG `ice``berg`;\nGRANT SELECT, INSERT, UPDATE, DELETE, ALTER, DROP, EXPORT ON TABLE `sales-db`.`orders` TO USER 'table_reader'@'%';");
+    expect(grants[1].sql).toContain("ON TABLE `sales-db`.`audit``log`");
+    expect(authorizationPlanSql(plan)).not.toContain("SHOW VIEW");
+    expect(authorizationPlanSql(plan)).not.toContain("TRIGGER");
+  });
+
+  it("does not emit a fallback grant for an empty PostgreSQL or StarRocks table selection", () => {
+    const postgres = buildCreateUserAuthorizationPlan({
+      provider: postgresUserAdminProvider,
+      principal: { user: "reader", host: "LOGIN", password: "secret" },
+      accountType: "standard",
+      databases: [{ database: "app_db", preset: "readOnly", tables: [] }],
+    });
+    const starrocks = buildCreateUserAuthorizationPlan({
+      provider: starrocksUserAdminProvider,
+      principal: { user: "reader", host: "%", password: "secret" },
+      accountType: "standard",
+      databases: [{ catalog: "default_catalog", database: "app_db", preset: "readOnly", tables: [] }],
+    });
+
+    expect(postgres.steps.map((step) => step.operation)).toEqual(["createUser"]);
+    expect(starrocks.steps.map((step) => step.operation)).toEqual(["createUser"]);
+    expect(authorizationPlanSql(postgres)).not.toContain("ON TABLE");
+    expect(authorizationPlanSql(starrocks)).not.toContain("GRANT SELECT");
+  });
+
+  it("diffs StarRocks table grants before grant and revoke", () => {
+    const databases = [{ catalog: "hive", database: "analytics", preset: "custom" as const, privileges: ["SELECT", "INSERT"], tables: [{ name: "events" }] }];
+    const currentGrants = [{ catalog: "hive", database: "analytics", table: "events", privilege: "SELECT", grantOption: false }];
+    const user = { user: "reporter", host: "10.%" };
+    const grant = buildGrantAuthorizationPlan({ provider: starrocksUserAdminProvider, user, databases, currentGrants });
+    const revoke = buildGrantAuthorizationPlan({ provider: starrocksUserAdminProvider, user, databases, currentGrants, revoke: true });
+
+    expect(grant.steps[0].sql).toBe("SET CATALOG `hive`;\nGRANT INSERT ON TABLE `analytics`.`events` TO USER 'reporter'@'10.%';");
+    expect(revoke.steps[0].sql).toBe("SET CATALOG `hive`;\nREVOKE SELECT ON TABLE `analytics`.`events` FROM USER 'reporter'@'10.%';");
+  });
+
+  it("reports PostgreSQL object grants independently", async () => {
+    const plan = buildCreateDatabaseAuthorizationPlan({
+      provider: postgresUserAdminProvider,
+      database: "app_db",
+      createSql: 'CREATE DATABASE "app_db";',
+      users: [{ user: "app_user", host: "LOGIN" }],
+    });
+    const results = await executeAuthorizationPlan(plan, async (step) => {
+      if (step.operation === "grantCurrentObjects" && step.objectScope === "tables") {
+        return [{ columns: ["error"], rows: [["table grant failed"]], affected_rows: 0, execution_time_ms: 0, execution_error: true }];
+      }
+      return [];
+    });
+
+    expect(results.find((result) => result.step.operation === "grantCurrentObjects" && result.step.objectScope === "tables")?.status).toBe("failed");
+    expect(results.find((result) => result.step.operation === "grantCurrentObjects" && result.step.objectScope === "sequences")?.status).toBe("success");
+  });
+
+  it("skips dependent grants after a failed creation step", async () => {
+    const plan = buildCreateDatabaseAuthorizationPlan({
+      provider: mysqlUserAdminProvider,
+      database: "app_db",
+      createSql: "CREATE DATABASE `app_db`;",
+      users: [{ user: "app", host: "%" }],
+    });
+    const results = await executeAuthorizationPlan(plan, async (step) => {
+      if (step.id === "create-database") throw new Error("create failed");
+      return [];
+    });
+
+    expect(results.map((result) => result.status)).toEqual(["failed", "skipped"]);
+  });
+
+  it("expands an existing user's privilege change into one statement per selected table", () => {
+    const plan = buildGrantAuthorizationPlan({
+      provider: mysqlUserAdminProvider,
+      user: { user: "app_user", host: "%" },
+      databases: [{ database: "app_db", preset: "readOnly", tables: [{ name: "orders" }, { name: "audit_log" }] }],
+      grantOption: true,
+    });
+    const sql = authorizationPlanSql(plan);
+
+    expect(plan.steps).toHaveLength(2);
+    expect(plan.steps.map((step) => step.operation)).toEqual(["grantDatabase", "grantDatabase"]);
+    expect(plan.steps.map((step) => step.targetTable)).toEqual(["orders", "audit_log"]);
+    expect(sql).toContain("GRANT SELECT, SHOW VIEW ON `app_db`.`orders` TO 'app_user'@'%' WITH GRANT OPTION;");
+    expect(sql).toContain("GRANT SELECT, SHOW VIEW ON `app_db`.`audit_log` TO 'app_user'@'%' WITH GRANT OPTION;");
+    expect(sql).not.toContain("CREATE ROUTINE");
+  });
+
+  it("keeps the global scope as *.* for grant and revoke", () => {
+    const selected = [{ database: "*", preset: "readOnly" as const }];
+    const grant = buildGrantAuthorizationPlan({ provider: mysqlUserAdminProvider, user: { user: "local_admin", host: "%" }, databases: selected });
+    const revoke = buildGrantAuthorizationPlan({ provider: mysqlUserAdminProvider, user: { user: "local_admin", host: "%" }, databases: selected, revoke: true });
+
+    expect(authorizationPlanSql(grant)).toContain("GRANT SELECT, SHOW VIEW ON *.* TO 'local_admin'@'%';");
+    expect(authorizationPlanSql(revoke)).toContain("REVOKE SELECT, SHOW VIEW ON *.* FROM 'local_admin'@'%';");
+  });
+
+  it("builds REVOKE steps without grant options", () => {
+    const plan = buildGrantAuthorizationPlan({
+      provider: mysqlUserAdminProvider,
+      user: { user: "app_user", host: "%" },
+      databases: [{ database: "app_db", preset: "readWrite", tables: [{ name: "orders" }] }],
+      grantOption: true,
+      revoke: true,
+    });
+
+    expect(plan.steps.map((step) => step.operation)).toEqual(["revokePrivileges"]);
+    expect(plan.steps[0].targetTable).toBe("orders");
+    expect(authorizationPlanSql(plan)).toBe("-- revoke app_user@% app_db.orders (connection scope)\nREVOKE SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, INDEX, REFERENCES, SHOW VIEW, CREATE VIEW, TRIGGER ON `app_db`.`orders` FROM 'app_user'@'%';");
+    expect(authorizationPlanSql(plan)).not.toContain("GRANT OPTION");
+  });
+
+  it("keeps unsupported Doris table grants behind its capability", () => {
+    expect(dorisUserAdminProvider.grantPrivilegesSql).toBeTypeOf("function");
+    const plan = buildGrantAuthorizationPlan({ provider: dorisUserAdminProvider, user: { user: "app_user", host: "%" }, databases: [{ database: "app_db", preset: "readOnly" }] });
+
+    expect(plan.steps).toEqual([]);
+  });
+});

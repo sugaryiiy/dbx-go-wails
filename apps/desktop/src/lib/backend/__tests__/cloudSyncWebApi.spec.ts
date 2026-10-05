@@ -1,0 +1,152 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+describe("WebDAV sync HTTP API", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function stubFetch(response: unknown = undefined) {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue(response),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function lastCall(fetchMock: ReturnType<typeof stubFetch>): { url: string; body: Record<string, unknown> } {
+    const [url, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
+    return { url, body: JSON.parse(String(init.body)) as Record<string, unknown> };
+  }
+
+  const config = {
+    endpoint: "https://dav.example.com/remote.php/dav/files/alice/",
+    username: "alice",
+    password: "app-password",
+    remotePath: "DBX/sync/snapshot.json",
+  };
+
+  it("routes WebDAV connectivity and saved-password operations through the Web backend", async () => {
+    const fetchMock = stubFetch({ hasSavedPassword: true });
+    const { forgetWebdavSavedPassword, saveWebdavSavedPassword, webdavPasswordStatus, webdavSyncTest } = await import("@/lib/backend/http");
+
+    await webdavSyncTest(config);
+    expect(lastCall(fetchMock)).toEqual({ url: "/api/cloud-sync/webdav/test", body: { config } });
+
+    await expect(webdavPasswordStatus(config)).resolves.toEqual({ hasSavedPassword: true });
+    expect(lastCall(fetchMock)).toEqual({ url: "/api/cloud-sync/webdav/password-status", body: { config } });
+
+    await saveWebdavSavedPassword(config, "saved-password");
+    expect(lastCall(fetchMock)).toEqual({ url: "/api/cloud-sync/webdav/save-password", body: { config, password: "saved-password" } });
+
+    await forgetWebdavSavedPassword(config);
+    expect(lastCall(fetchMock)).toEqual({ url: "/api/cloud-sync/webdav/forget-password", body: { config } });
+  });
+
+  it("routes WebDAV secret preferences and snapshot transfers through the Web backend", async () => {
+    const fetchMock = stubFetch({ bytes: 42, remotePath: config.remotePath });
+    const { forgetWebdavSyncSecretsPassphrase, saveWebdavSyncSecretsPreference, webdavSyncDownload, webdavSyncSecretsStatus, webdavSyncUpload } = await import("@/lib/backend/http");
+
+    await webdavSyncSecretsStatus();
+    expect(lastCall(fetchMock)).toEqual({ url: "/api/cloud-sync/webdav/sync-secrets-status", body: {} });
+
+    await saveWebdavSyncSecretsPreference(true, "sync-passphrase");
+    expect(lastCall(fetchMock)).toEqual({
+      url: "/api/cloud-sync/webdav/save-sync-secrets-preference",
+      body: { enabled: true, passphrase: "sync-passphrase" },
+    });
+
+    await forgetWebdavSyncSecretsPassphrase();
+    expect(lastCall(fetchMock)).toEqual({ url: "/api/cloud-sync/webdav/forget-sync-secrets-passphrase", body: {} });
+
+    const editorSettings = { theme: "dark" };
+    await webdavSyncUpload(config, editorSettings, "sync-passphrase", true);
+    expect(lastCall(fetchMock)).toEqual({
+      url: "/api/cloud-sync/webdav/upload",
+      body: { config, editorSettings, secretsPassphrase: "sync-passphrase", includeSecrets: true },
+    });
+
+    await webdavSyncDownload(config, "sync-passphrase", true);
+    expect(lastCall(fetchMock)).toEqual({
+      url: "/api/cloud-sync/webdav/download",
+      body: { config, secretsPassphrase: "sync-passphrase", restoreSecrets: true },
+    });
+  });
+
+  it("requests a selectable catalog and sends the selected snapshot items", async () => {
+    const fetchMock = stubFetch({ connections: [{ id: "db-1", label: "Production" }] });
+    const { cloudSyncLocalCatalog, webdavSyncInspect, webdavSyncUpload, webdavSyncDownload } = await import("@/lib/backend/http");
+    const editorSettings = { theme: "dark" };
+    const catalog = await cloudSyncLocalCatalog(editorSettings);
+    expect(catalog.connections).toEqual([{ id: "db-1", label: "Production" }]);
+    expect(lastCall(fetchMock)).toEqual({ url: "/api/cloud-sync/catalog/local", body: { editorSettings } });
+
+    await webdavSyncInspect(config, "sync-password");
+    expect(lastCall(fetchMock)).toEqual({
+      url: "/api/cloud-sync/webdav/inspect",
+      body: { config, secretsPassphrase: "sync-password" },
+    });
+
+    const selection = {
+      connections: ["db-1"],
+      connectionSecrets: ["db-1"],
+      tunnelProfiles: [],
+      tunnelSecrets: [],
+      savedSqlFolders: [],
+      savedSqlFiles: [],
+      desktopSettings: ["iconTheme"],
+      editorSettings: ["theme"],
+      aiConfigs: [],
+      pluginUiStorage: [],
+      sidebarLayout: false,
+      pinnedTreeNodeIds: false,
+      includeSecrets: true,
+      syncCredentials: false,
+    };
+    await webdavSyncUpload(config, editorSettings, "sync-password", true, selection);
+    expect(lastCall(fetchMock)).toEqual({
+      url: "/api/cloud-sync/webdav/upload",
+      body: { config, editorSettings, secretsPassphrase: "sync-password", includeSecrets: true, selection },
+    });
+
+    await webdavSyncDownload(config, "sync-password", true, selection);
+    expect(lastCall(fetchMock)).toEqual({
+      url: "/api/cloud-sync/webdav/download",
+      body: { config, secretsPassphrase: "sync-password", restoreSecrets: true, selection },
+    });
+  });
+
+  it("accepts the migration cleanup endpoint's empty 204 response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { migrationCleanupBackups } = await import("@/lib/backend/http");
+
+    await expect(migrationCleanupBackups()).resolves.toBeUndefined();
+    expect(lastCall(fetchMock)).toEqual({ url: "/api/migration/cleanup-backups", body: {} });
+  });
+});
+
+describe("GitLab snippet sync HTTP API", () => {
+  it("passes the selected instance to settings, ID, and transfer requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    const { snippetSyncSettings, saveSnippetSyncId, snippetSyncTest } = await import("@/lib/backend/http");
+    const instanceUrl = "https://gitlab.example.com";
+    await snippetSyncSettings("gitlab", instanceUrl);
+    let [url, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
+    expect(url).toBe("/api/cloud-sync/snippet/settings");
+    expect(JSON.parse(String(init.body))).toEqual({ provider: "gitlab", instanceUrl });
+
+    await saveSnippetSyncId("gitlab", "42", instanceUrl);
+    [url, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
+    expect(url).toBe("/api/cloud-sync/snippet/save-id");
+    expect(JSON.parse(String(init.body))).toEqual({ provider: "gitlab", snippetId: "42", instanceUrl });
+
+    await snippetSyncTest({ provider: "gitlab", instanceUrl, token: "test-token" });
+    [url, init] = fetchMock.mock.calls.at(-1) as [string, RequestInit];
+    expect(url).toBe("/api/cloud-sync/snippet/test");
+    expect(JSON.parse(String(init.body))).toEqual({ config: { provider: "gitlab", instanceUrl, token: "test-token" } });
+    vi.unstubAllGlobals();
+  });
+});

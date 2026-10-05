@@ -1,0 +1,170 @@
+export type McpExecutionMode = "read_only" | "safe_write" | "high_risk_write";
+
+export interface McpCapabilityRow {
+  labelKey: string;
+  read_only: boolean;
+  safe_write: boolean;
+  high_risk_write: boolean;
+}
+
+export const MCP_EXECUTION_MODE_COLUMNS: ReadonlyArray<{ mode: McpExecutionMode; labelKey: string }> = [
+  { mode: "read_only", labelKey: "settings.mcpExecutionModeReadOnly" },
+  { mode: "safe_write", labelKey: "settings.mcpExecutionModeSafeWrite" },
+  { mode: "high_risk_write", labelKey: "settings.mcpExecutionModeHighRiskWrite" },
+];
+
+export const MCP_CAPABILITY_ROWS: readonly McpCapabilityRow[] = [
+  { labelKey: "settings.mcpCapabilityRead", read_only: true, safe_write: true, high_risk_write: true },
+  { labelKey: "settings.mcpCapabilityScopedMutation", read_only: false, safe_write: true, high_risk_write: true },
+  { labelKey: "settings.mcpCapabilityBroadMutation", read_only: false, safe_write: false, high_risk_write: true },
+  { labelKey: "settings.mcpCapabilitySchemaAdmin", read_only: false, safe_write: false, high_risk_write: true },
+  { labelKey: "settings.mcpCapabilityConnectionManagement", read_only: false, safe_write: true, high_risk_write: true },
+];
+
+export const MCP_TOOL_OPTIONS = [
+  { name: "dbx_list_connections", labelKey: "settings.mcpToolListConnections" },
+  { name: "dbx_list_databases", labelKey: "settings.mcpToolListDatabases" },
+  { name: "dbx_list_tables", labelKey: "settings.mcpToolListTables" },
+  { name: "dbx_describe_table", labelKey: "settings.mcpToolDescribeTable" },
+  { name: "dbx_list_routines", labelKey: "settings.mcpToolListRoutines" },
+  { name: "dbx_get_routine_source", labelKey: "settings.mcpToolGetRoutineSource" },
+  { name: "dbx_get_schema_context", labelKey: "settings.mcpToolGetSchemaContext" },
+  { name: "dbx_execute_query", labelKey: "settings.mcpToolExecuteQuery" },
+  { name: "dbx_execute_batch", labelKey: "settings.mcpToolExecuteBatch" },
+  { name: "dbx_list_saved_sql", labelKey: "settings.mcpToolListSavedSql" },
+  { name: "dbx_get_saved_sql", labelKey: "settings.mcpToolGetSavedSql" },
+  { name: "dbx_save_sql", labelKey: "settings.mcpToolSaveSql" },
+  { name: "dbx_search_history", labelKey: "settings.mcpToolSearchHistory" },
+  { name: "dbx_open_session", labelKey: "settings.mcpToolOpenSession" },
+  { name: "dbx_begin_transaction", labelKey: "settings.mcpToolBeginTransaction" },
+  { name: "dbx_commit_transaction", labelKey: "settings.mcpToolCommitTransaction" },
+  { name: "dbx_rollback_transaction", labelKey: "settings.mcpToolRollbackTransaction" },
+  { name: "dbx_close_session", labelKey: "settings.mcpToolCloseSession" },
+  { name: "dbx_execute_redis_command", labelKey: "settings.mcpToolExecuteRedisCommand" },
+  { name: "dbx_salesforce_current_user", labelKey: "settings.mcpToolSalesforceCurrentUser" },
+  { name: "dbx_salesforce_prepare_write", labelKey: "settings.mcpToolSalesforcePrepareWrite" },
+  { name: "dbx_salesforce_apply_write", labelKey: "settings.mcpToolSalesforceApplyWrite" },
+  { name: "dbx_peek_messages", labelKey: "settings.mcpToolPeekMessages" },
+  { name: "dbx_send_message", labelKey: "settings.mcpToolSendMessage" },
+  { name: "dbx_add_connection", labelKey: "settings.mcpToolAddConnection" },
+  { name: "dbx_duplicate_connection", labelKey: "settings.mcpToolDuplicateConnection" },
+  { name: "dbx_remove_connection", labelKey: "settings.mcpToolRemoveConnection" },
+  { name: "dbx_open_table", labelKey: "settings.mcpToolOpenTable" },
+  { name: "dbx_execute_and_show", labelKey: "settings.mcpToolExecuteAndShow" },
+  { name: "dbx_plugin_list", labelKey: "settings.mcpToolPluginList" },
+  { name: "dbx_plugin_tools", labelKey: "settings.mcpToolPluginTools" },
+  { name: "dbx_plugin_call", labelKey: "settings.mcpToolPluginCall" },
+] as const;
+
+export interface McpExecutionPolicyFields {
+  readOnly: boolean;
+  allowDangerousSql: boolean;
+}
+
+export interface McpPolicyMutationState {
+  loading: boolean;
+  saving: boolean;
+  loadError: string;
+}
+
+export interface McpScopeConnectionLike {
+  id: string;
+}
+
+export interface McpScopeConnectionGroups<T extends McpScopeConnectionLike> {
+  allowed: T[];
+  available: T[];
+  unavailableAllowedIds: string[];
+}
+
+export function isMcpPolicyMutationBlocked(state: McpPolicyMutationState): boolean {
+  return state.loading || state.saving || state.loadError.length > 0;
+}
+
+export function matchesMcpSearchQuery(rawQuery: string, values: readonly unknown[]): boolean {
+  const query = rawQuery.trim().toLocaleLowerCase();
+  if (!query) return true;
+  return values.some((value) => value !== null && value !== undefined && String(value).toLocaleLowerCase().includes(query));
+}
+
+export function groupMcpScopeConnections<T extends McpScopeConnectionLike>(connections: readonly T[], allowedConnectionIds: readonly string[] | null): McpScopeConnectionGroups<T> {
+  if (allowedConnectionIds === null) {
+    return {
+      allowed: [...connections],
+      available: [],
+      unavailableAllowedIds: [],
+    };
+  }
+
+  const allowedIds = new Set(allowedConnectionIds);
+  const connectionIds = new Set(connections.map((connection) => connection.id));
+  return {
+    allowed: connections.filter((connection) => allowedIds.has(connection.id)),
+    available: connections.filter((connection) => !allowedIds.has(connection.id)),
+    unavailableAllowedIds: allowedConnectionIds.filter((id) => !connectionIds.has(id)),
+  };
+}
+
+export function mcpExecutionModeFromPolicy(policy: McpExecutionPolicyFields): McpExecutionMode {
+  if (policy.readOnly) return "read_only";
+  return policy.allowDangerousSql ? "high_risk_write" : "safe_write";
+}
+
+export function mcpPolicyFieldsForExecutionMode(mode: McpExecutionMode): McpExecutionPolicyFields {
+  switch (mode) {
+    case "read_only":
+      return { readOnly: true, allowDangerousSql: false };
+    case "safe_write":
+      return { readOnly: false, allowDangerousSql: false };
+    case "high_risk_write":
+      return { readOnly: false, allowDangerousSql: true };
+  }
+}
+
+export function toggleMcpAllowedConnectionId(current: readonly string[] | null, availableConnectionIds: readonly string[], connectionId: string, allowed: boolean): string[] {
+  return updateMcpAllowedConnectionIds(current, availableConnectionIds, [connectionId], allowed);
+}
+
+/**
+ * Allowlist entry that exposes every discovered plugin tool (`dbx_<prefix>__*`
+ * scopes to one plugin). Plugin tool names come from sidecars at runtime, so
+ * the static options above cannot name them; the backend matcher expands the
+ * wildcard, and static tool names never contain the `__` separator.
+ */
+export const MCP_PLUGIN_TOOLS_WILDCARD = "dbx_*__*";
+
+export function toggleMcpAllowedToolName(current: readonly string[] | null, toolName: string, allowed: boolean): string[] {
+  // A null allowlist means "everything", including every discovered plugin
+  // tool. The first toggle materializes the list: seed the plugin wildcard so
+  // checking one static tool does not silently strip every dynamic plugin
+  // tool — removing the wildcard is an explicit settings action.
+  const selected = new Set<string>(current === null ? [...MCP_TOOL_OPTIONS.map((tool) => tool.name), MCP_PLUGIN_TOOLS_WILDCARD] : current);
+  if (allowed) selected.add(toolName);
+  else selected.delete(toolName);
+  return [...selected];
+}
+
+/** Adds a free-form allowlist entry (a plugin tool name or a `dbx_<prefix>__*` wildcard). */
+export function addMcpAllowedToolName(current: readonly string[] | null, rawName: string): { names: string[]; added: boolean } {
+  const name = rawName.trim();
+  if (!name) return { names: [...(current ?? MCP_TOOL_OPTIONS.map((tool) => tool.name))], added: false };
+  const selected = new Set<string>(current === null ? MCP_TOOL_OPTIONS.map((tool) => tool.name) : current);
+  const added = !selected.has(name);
+  if (added) selected.add(name);
+  return { names: [...selected], added };
+}
+
+/** Saved allowlist entries beyond the static options: plugin tool names and wildcards. */
+export function customMcpAllowedToolNames(current: readonly string[] | null): string[] {
+  const staticNames = new Set<string>(MCP_TOOL_OPTIONS.map((tool) => tool.name));
+  return (current ?? []).filter((name) => !staticNames.has(name));
+}
+
+export function updateMcpAllowedConnectionIds(current: readonly string[] | null, availableConnectionIds: readonly string[], connectionIds: readonly string[], allowed: boolean): string[] {
+  const selected = new Set(current === null ? availableConnectionIds : current);
+  for (const connectionId of connectionIds) {
+    if (allowed) selected.add(connectionId);
+    else selected.delete(connectionId);
+  }
+  return [...selected];
+}

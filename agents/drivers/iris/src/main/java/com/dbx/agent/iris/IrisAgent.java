@@ -1,0 +1,264 @@
+package com.dbx.agent.iris;
+
+import com.dbx.agent.ConfiguredJdbcAgent;
+import com.dbx.agent.ColumnInfo;
+import com.dbx.agent.ConnectParams;
+import com.dbx.agent.JdbcAgentProfile;
+import com.dbx.agent.JdbcExecutor;
+import com.dbx.agent.MultiSessionJsonRpcServer;
+import com.dbx.agent.StandardJdbcMetadata;
+
+import com.intersystems.jdbc.IRISConnection;
+
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.Types;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+public final class IrisAgent extends ConfiguredJdbcAgent {
+    public static final JdbcAgentProfile IRIS_PROFILE = new JdbcAgentProfile(
+        "com.intersystems.jdbc.IRISDriver",
+        "jdbc:IRIS://{host}:{port}/{database}",
+        1972,
+        true
+    );
+
+    public IrisAgent() {
+        super(IRIS_PROFILE);
+    }
+
+    // The InterSystems driver's default query prefetch block (32768 bytes) means
+    // one server round trip per ~32KB of result data. Large result sets over
+    // high-latency links then spend most of their wall time waiting on the
+    // network instead of transferring rows, while other clients that negotiate
+    // larger fetch blocks finish several times faster. Statement.setFetchSize
+    // does not help here: intersystems-jdbc stores that value but never sends
+    // it to the server. The connection-level query prefetch size is the only
+    // effective knob, so raise it for every DBX IRIS connection. This is
+    // advisory: servers that reject the value keep the driver default, and the
+    // driver only round-trips when the value actually changes.
+    static final int IRIS_QUERY_PREFETCH_SIZE = 262144;
+
+    @Override
+    protected void afterConnect(ConnectParams params, Connection connection) {
+        super.afterConnect(params, connection);
+        applyQueryPrefetchSize(connection);
+    }
+
+    static void applyQueryPrefetchSize(Connection connection) {
+        if (!(connection instanceof IRISConnection)) {
+            return;
+        }
+        try {
+            ((IRISConnection) connection).setQueryPrefetchSize(IRIS_QUERY_PREFETCH_SIZE);
+        } catch (Exception ignored) {
+            // Performance tuning only; keep the connection usable with the
+            // driver default when a server refuses the larger prefetch.
+        }
+    }
+
+    @Override
+    protected Object resultValue(ResultSet rs, int index, int sqlType) {
+        switch (sqlType) {
+            case Types.BIGINT:
+            case Types.INTEGER:
+            case Types.SMALLINT:
+            case Types.TINYINT:
+                // InterSystems can expose values outside the Java primitive range
+                // implied by its JDBC metadata. Preserve them without narrowing.
+                return unchecked(() -> {
+                    Object value = rs.getBigDecimal(index);
+                    return rs.wasNull() ? null : value;
+                });
+            case Types.BIT:
+            case Types.BOOLEAN:
+                // IRIS has no boolean type: %Boolean is stored as 1/0 and only
+                // the JDBC driver turns it into a Java boolean, which would
+                // surface as true/false in the grid. Report the stored 1/0.
+                return unchecked(() -> {
+                    int value = rs.getInt(index);
+                    return rs.wasNull() ? null : value;
+                });
+            case Types.OTHER:
+                return unchecked(() -> JdbcExecutor.normalizeResultValue(rs.getObject(index)));
+            default:
+                return super.resultValue(rs, index, sqlType);
+        }
+    }
+
+    @Override
+    public List<String> listSchemas() {
+        return dedupeCaseInsensitiveSchemas(StandardJdbcMetadata.INSTANCE.listSchemas(requireConnection(), IRIS_PROFILE));
+    }
+
+    @Override
+    public List<ColumnInfo> getColumns(String schema, String table) {
+        return irisColumns(requireConnection(), schema, table);
+    }
+
+    static List<ColumnInfo> irisColumns(Connection conn, String schema, String table) {
+        return unchecked(() -> {
+            List<ColumnInfo> columns = new ArrayList<>();
+            try (PreparedStatement stmt = conn.prepareStatement(columnSql(schema))) {
+                int index = 1;
+                if (!isBlank(schema)) {
+                    stmt.setString(index++, schema.trim());
+                }
+                stmt.setString(index, table);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    while (rs.next()) {
+                        String name = rs.getString("COLUMN_NAME");
+                        if (isBlank(name)) {
+                            continue;
+                        }
+                        columns.add(new ColumnInfo(
+                            name,
+                            stringOrDefault(rs, "DATA_TYPE", "Unknown"),
+                            !"NO".equalsIgnoreCase(stringOrNull(rs, "IS_NULLABLE")),
+                            stringOrNull(rs, "COLUMN_DEFAULT"),
+                            "YES".equalsIgnoreCase(stringOrNull(rs, "PRIMARY_KEY")),
+                            null,
+                            stringOrNull(rs, "DESCRIPTION"),
+                            intOrNull(rs, "NUMERIC_PRECISION"),
+                            intOrNull(rs, "NUMERIC_SCALE"),
+                            intOrNull(rs, "CHARACTER_MAXIMUM_LENGTH")
+                        ));
+                    }
+                }
+            }
+            if (!hasPrimaryKey(columns)) {
+                markPrimaryKeys(columns, irisPrimaryKeys(conn, schema, table));
+            }
+            return columns;
+        });
+    }
+
+    static List<String> dedupeCaseInsensitiveSchemas(List<String> schemas) {
+        Map<String, String> byNormalizedName = new LinkedHashMap<>();
+        for (String schema : schemas) {
+            if (schema == null || schema.trim().isEmpty()) {
+                continue;
+            }
+            String name = schema.trim();
+            byNormalizedName.putIfAbsent(name.toUpperCase(Locale.ROOT), name);
+        }
+        return new ArrayList<>(byNormalizedName.values());
+    }
+
+    private static Set<String> irisPrimaryKeys(Connection conn, String schema, String table) {
+        Set<String> keys = jdbcPrimaryKeys(conn, schema, table);
+        return keys.isEmpty() ? nativePrimaryKeys(conn, schema, table) : keys;
+    }
+
+    private static Set<String> jdbcPrimaryKeys(Connection conn, String schema, String table) {
+        Set<String> keys = new LinkedHashSet<>();
+        try {
+            DatabaseMetaData meta = conn.getMetaData();
+            try (ResultSet rs = meta.getPrimaryKeys(null, isBlank(schema) ? null : schema.trim(), table)) {
+                addPrimaryKeys(keys, rs);
+            }
+        } catch (Exception ignored) {
+        }
+        return keys;
+    }
+
+    private static Set<String> nativePrimaryKeys(Connection conn, String schema, String table) {
+        Set<String> keys = new LinkedHashSet<>();
+        try (PreparedStatement stmt = conn.prepareStatement(primaryKeySql(schema))) {
+            int index = 1;
+            if (!isBlank(schema)) {
+                stmt.setString(index++, schema.trim());
+            }
+            stmt.setString(index, table);
+            try (ResultSet rs = stmt.executeQuery()) {
+                addPrimaryKeys(keys, rs);
+            }
+        } catch (Exception ignored) {
+            // Primary key metadata is optional for display; column listing must keep working.
+        }
+        return keys;
+    }
+
+    private static String columnSql(String schema) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, "
+                + "PRIMARY_KEY, DESCRIPTION, NUMERIC_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH "
+                + "FROM INFORMATION_SCHEMA.COLUMNS WHERE "
+        );
+        if (!isBlank(schema)) {
+            sql.append("UPPER(TABLE_SCHEMA) = UPPER(?) AND ");
+        }
+        sql.append("UPPER(TABLE_NAME) = UPPER(?) ORDER BY ORDINAL_POSITION");
+        return sql.toString();
+    }
+
+    private static void addPrimaryKeys(Set<String> keys, ResultSet rs) throws Exception {
+        while (rs.next()) {
+            String column = rs.getString("COLUMN_NAME");
+            if (!isBlank(column)) {
+                keys.add(column.toUpperCase(Locale.ROOT));
+            }
+        }
+    }
+
+    private static boolean hasPrimaryKey(List<ColumnInfo> columns) {
+        for (ColumnInfo column : columns) {
+            if (column.getIs_primary_key()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void markPrimaryKeys(List<ColumnInfo> columns, Set<String> primaryKeys) {
+        for (ColumnInfo column : columns) {
+            if (primaryKeys.contains(column.getName().toUpperCase(Locale.ROOT))) {
+                column.setIs_primary_key(true);
+            }
+        }
+    }
+
+    private static String primaryKeySql(String schema) {
+        StringBuilder sql = new StringBuilder(
+            "SELECT k.COLUMN_NAME "
+                + "FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k "
+                + "WHERE k.CONSTRAINT_TYPE = 'PRIMARY KEY' AND "
+        );
+        if (!isBlank(schema)) {
+            sql.append("UPPER(k.TABLE_SCHEMA) = UPPER(?) AND ");
+        }
+        sql.append("UPPER(k.TABLE_NAME) = UPPER(?) ORDER BY k.ORDINAL_POSITION");
+        return sql.toString();
+    }
+
+    private static String stringOrDefault(ResultSet rs, String column, String fallback) throws Exception {
+        String value = stringOrNull(rs, column);
+        return isBlank(value) ? fallback : value;
+    }
+
+    private static String stringOrNull(ResultSet rs, String column) throws Exception {
+        String value = rs.getString(column);
+        return rs.wasNull() ? null : value;
+    }
+
+    private static Integer intOrNull(ResultSet rs, String column) throws Exception {
+        Object value = rs.getObject(column);
+        return value instanceof Number ? ((Number) value).intValue() : null;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    public static void main(String[] args) {
+        new MultiSessionJsonRpcServer(IrisAgent::new).run();
+    }
+}

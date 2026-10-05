@@ -1,0 +1,544 @@
+// @vitest-environment happy-dom
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { createApp, defineComponent, h, nextTick, type App } from "vue";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import i18n from "@/i18n";
+
+const { resolveSshPromptMock } = vi.hoisted(() => ({
+  resolveSshPromptMock: vi.fn(),
+}));
+
+vi.mock("@/lib/backend/api", () => ({ resolveSshPrompt: resolveSshPromptMock }));
+vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => false }));
+vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
+
+vi.mock("@/components/ui/dialog", async () => {
+  const { defineComponent, h, Teleport } = await import("vue");
+  const passthrough = defineComponent({
+    setup(_props, { slots }) {
+      return () => h("div", slots.default?.());
+    },
+  });
+  const dialog = defineComponent({
+    props: { open: Boolean },
+    setup(props, { slots }) {
+      return () => (props.open ? h("div", slots.default?.()) : null);
+    },
+  });
+  const dialogContent = defineComponent({
+    props: {
+      class: [String, Array, Object],
+      overlayClass: [String, Array, Object],
+      portalClass: [String, Array, Object],
+    },
+    inheritAttrs: false,
+    setup(props, { slots }) {
+      return () => h(Teleport, { to: "body" }, [h("div", { class: ["dialog-overlay", "z-50", props.overlayClass] }), h("div", { class: ["dialog-positioner", "z-50", props.portalClass] }, [h("div", { class: ["dialog-content", props.class] }, slots.default?.())])]);
+    },
+  });
+  return {
+    Dialog: dialog,
+    DialogContent: dialogContent,
+    DialogDescription: passthrough,
+    DialogFooter: passthrough,
+    DialogHeader: passthrough,
+    DialogTitle: passthrough,
+  };
+});
+
+vi.mock("@/components/ui/button", async () => {
+  const { defineComponent, h } = await import("vue");
+  return {
+    Button: defineComponent({
+      inheritAttrs: false,
+      setup(_props, { attrs, slots }) {
+        return () => h("button", attrs, slots.default?.());
+      },
+    }),
+  };
+});
+
+import SshHostKeyPromptDialog from "@/components/ssh/SshHostKeyPromptDialog.vue";
+
+const dialogSource = readFileSync(resolve(process.cwd(), "apps/desktop/src/components/ssh/SshHostKeyPromptDialog.vue"), "utf8");
+
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+
+  readonly url: string;
+  onmessage: ((event: MessageEvent<string>) => void) | null = null;
+  onopen: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  closed = false;
+
+  constructor(url: string | URL) {
+    this.url = String(url);
+    MockEventSource.instances.push(this);
+  }
+
+  emit(data: unknown) {
+    this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(data) }));
+  }
+
+  open() {
+    this.onopen?.();
+  }
+
+  error() {
+    this.onerror?.();
+  }
+
+  close() {
+    this.closed = true;
+  }
+}
+
+const mountedApps: App[] = [];
+
+beforeEach(() => {
+  resolveSshPromptMock.mockReset().mockResolvedValue(undefined);
+  MockEventSource.instances = [];
+  vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [] } as Response));
+  i18n.global.locale.value = "en";
+});
+
+afterEach(() => {
+  for (const app of mountedApps.splice(0)) app.unmount();
+  document.body.innerHTML = "";
+  vi.unstubAllGlobals();
+});
+
+async function mountDialog() {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const app = createApp(
+    defineComponent({
+      setup() {
+        return () => h(SshHostKeyPromptDialog);
+      },
+    }),
+  );
+  mountedApps.push(app);
+  app.use(i18n);
+  app.mount(container);
+  await nextTick();
+}
+
+describe("SshHostKeyPromptDialog web bridge", () => {
+  it("requires an explicit answer for blocking SSH prompts", () => {
+    expect(dialogSource).toContain(':show-close-button="false"');
+    expect(dialogSource).toContain("@interact-outside.prevent");
+    expect(dialogSource).toContain("@escape-key-down.prevent");
+    expect(dialogSource).not.toContain(':dismissible="false"');
+  });
+
+  it("keeps the prompt above a later body-mounted connection dialog and answerable", async () => {
+    await mountDialog();
+
+    const eventSource = MockEventSource.instances[0];
+    eventSource?.emit({
+      type: "prompt",
+      request: {
+        id: "prompt-layered",
+        kind: "HostKeyVerify",
+        host: "layered.example.test",
+        port: 22,
+        key_type: "ssh-ed25519",
+        fingerprint: "SHA256:layered",
+      },
+    });
+    await nextTick();
+
+    // Simulate ConnectionDialog opening after the global prompt: its portal is
+    // appended later and remains on the shared default z-50 layer.
+    const connectionPositioner = document.createElement("div");
+    connectionPositioner.className = "dialog-positioner z-50";
+    connectionPositioner.textContent = "New connection";
+    document.body.append(connectionPositioner);
+
+    const promptPositioner = document.body.querySelector<HTMLElement>(".dialog-positioner.\\!z-\\[200\\]");
+    const promptOverlay = document.body.querySelector<HTMLElement>(".dialog-overlay.\\!z-\\[200\\]");
+    expect(promptPositioner).not.toBeNull();
+    expect(promptOverlay).not.toBeNull();
+    expect(connectionPositioner.classList.contains("z-50")).toBe(true);
+    expect(promptPositioner?.classList.contains("!z-[200]")).toBe(true);
+    expect(promptOverlay?.classList.contains("!z-[200]")).toBe(true);
+    expect(document.body.textContent).toContain("layered.example.test:22");
+
+    const buttons = document.body.querySelectorAll<HTMLButtonElement>("button");
+    buttons.item(buttons.length - 1).click();
+    await vi.waitFor(() => {
+      expect(resolveSshPromptMock).toHaveBeenCalledWith({
+        id: "prompt-layered",
+        action: "accept",
+        remember: true,
+        secret: undefined,
+      });
+    });
+  });
+
+  it("shows an SSE host-key prompt and posts the user's acceptance", async () => {
+    await mountDialog();
+
+    const eventSource = MockEventSource.instances[0];
+    expect(eventSource?.url).toBe("/api/ssh/prompts");
+
+    eventSource?.emit({
+      type: "prompt",
+      request: {
+        id: "prompt-1",
+        kind: "HostKeyVerify",
+        host: "ssh.example.test",
+        port: 22,
+        key_type: "ssh-ed25519",
+        fingerprint: "SHA256:test-fingerprint",
+      },
+    });
+    await nextTick();
+
+    expect(document.body.textContent).toContain("ssh.example.test:22");
+    expect(document.body.textContent).toContain("SHA256:test-fingerprint");
+
+    const buttons = document.body.querySelectorAll<HTMLButtonElement>("button");
+    buttons.item(buttons.length - 1).click();
+
+    await vi.waitFor(() => {
+      expect(resolveSshPromptMock).toHaveBeenCalledWith({
+        id: "prompt-1",
+        action: "accept",
+        remember: true,
+        secret: undefined,
+      });
+    });
+  });
+
+  it("shows a changed host-key prompt and updates the saved fingerprint", async () => {
+    await mountDialog();
+
+    const eventSource = MockEventSource.instances[0];
+    eventSource?.emit({
+      type: "prompt",
+      request: {
+        id: "changed-1",
+        kind: "HostKeyChanged",
+        host: "192.168.1.111",
+        port: 22,
+        key_type: "ssh-ed25519",
+        fingerprint: "SHA256:new-fingerprint",
+        previous_fingerprint: "SHA256:old-fingerprint",
+      },
+    });
+    await nextTick();
+
+    expect(document.body.textContent).toContain("Host fingerprint has changed");
+    expect(document.body.textContent).toContain("new-fingerprint");
+    expect(document.body.textContent).toContain("old-fingerprint");
+    expect(document.body.textContent).toContain("Saved fingerprint");
+
+    const buttons = [...document.body.querySelectorAll("button")].map((button) => button.textContent?.trim());
+    expect(buttons).toContain("Close");
+    expect(buttons).toContain("Continue");
+    expect(buttons).toContain("Update and Continue");
+
+    const update = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Update and Continue");
+    update?.click();
+
+    await vi.waitFor(() => {
+      expect(resolveSshPromptMock).toHaveBeenCalledWith({
+        id: "changed-1",
+        action: "accept",
+        remember: true,
+        secret: undefined,
+      });
+    });
+  });
+
+  it("continues a changed host key for this session only", async () => {
+    await mountDialog();
+
+    MockEventSource.instances[0]?.emit({
+      type: "prompt",
+      request: {
+        id: "changed-2",
+        kind: "HostKeyChanged",
+        host: "board.example.test",
+        port: 22,
+        key_type: "ssh-ed25519",
+        fingerprint: "SHA256:new",
+        previous_fingerprint: "SHA256:old",
+      },
+    });
+    await nextTick();
+
+    const cont = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Continue");
+    cont?.click();
+
+    await vi.waitFor(() => {
+      expect(resolveSshPromptMock).toHaveBeenCalledWith({
+        id: "changed-2",
+        action: "accept",
+        remember: false,
+        secret: undefined,
+      });
+    });
+  });
+
+  it("clears prompts that are no longer pending after an SSE reconnect snapshot", async () => {
+    await mountDialog();
+
+    const eventSource = MockEventSource.instances[0];
+    eventSource?.emit({
+      type: "prompt",
+      request: {
+        id: "prompt-2",
+        kind: "HostKeyVerify",
+        host: "stale.example.test",
+        port: 22,
+        key_type: "ssh-ed25519",
+        fingerprint: "SHA256:stale",
+      },
+    });
+    await nextTick();
+    expect(document.body.textContent).toContain("stale.example.test:22");
+
+    eventSource?.emit({ type: "sync", pendingIds: [] });
+    await nextTick();
+    expect(document.body.textContent).not.toContain("stale.example.test:22");
+  });
+
+  it("recovers a pending host-key prompt via the polling fallback when the SSE event is missed", async () => {
+    // Simulate a prompt that fired before the EventSource was open: the backend
+    // has it pending, but the SSE `Prompt` event never reached the dialog. The
+    // polling fallback must surface it so the user can still confirm.
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => [
+        {
+          id: "prompt-3",
+          kind: "HostKeyVerify",
+          host: "first.example.test",
+          port: 22,
+          key_type: "ssh-ed25519",
+          fingerprint: "SHA256:first",
+        },
+      ],
+    } as Response);
+
+    await mountDialog();
+    await nextTick();
+
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("first.example.test:22");
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/ssh/prompts/pending", { credentials: "include" });
+  });
+
+  it("stops polling once the SSE stream opens and resumes it after an error", async () => {
+    const setSpy = vi.spyOn(globalThis, "setInterval");
+    const clearSpy = vi.spyOn(globalThis, "clearInterval");
+
+    await mountDialog();
+    const eventSource = MockEventSource.instances[0];
+
+    // Polling is armed on mount (first-connect fallback).
+    expect(setSpy).toHaveBeenCalled();
+
+    // Opening the stream stops the poller (SSE replay now covers lost prompts).
+    eventSource?.open();
+    expect(clearSpy).toHaveBeenCalled();
+
+    // A disconnect re-arms polling so prompts are not lost during the outage.
+    eventSource?.error();
+    expect(setSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows worker-upload consent buttons and wraps the digest and path", async () => {
+    await mountDialog();
+
+    const eventSource = MockEventSource.instances[0];
+    eventSource?.emit({
+      type: "prompt",
+      request: {
+        id: "worker-1",
+        kind: "WorkerUploadConsent",
+        host: "203.0.113.10",
+        port: 22,
+        fingerprint: "08ca4746e8fbf97038a93105d3ef023112e3f66bc097869401628c00acea7709",
+        prompt: "/home/testuser/.cache/dbx/sqlite-worker/session-ebd207de-8f26cd6e-08ca4746e8fbf97038a93105d3ef023112e3f66bc097869401628c00acea7709",
+      },
+    });
+    await nextTick();
+
+    expect(document.body.textContent).toContain("203.0.113.10:22");
+    expect(document.body.textContent).toContain("08ca4746e8fbf97038a93105d3ef023112e3f66bc097869401628c00acea7709");
+    expect(document.body.textContent).toContain("/home/testuser/.cache/dbx/sqlite-worker/");
+    expect(dialogSource).toContain("break-all");
+    expect(dialogSource).toContain("shrink-0");
+
+    const buttons = [...document.body.querySelectorAll("button")].map((button) => button.textContent?.trim());
+    expect(buttons).toContain("Cancel");
+    expect(buttons).toContain("Upload");
+  });
+
+  it("submits a keyboard-interactive TOTP challenge as a secret response", async () => {
+    await mountDialog();
+
+    const eventSource = MockEventSource.instances[0];
+    eventSource?.emit({
+      type: "prompt",
+      request: {
+        id: "totp-1",
+        kind: "SecretInput",
+        host: "jump.example.test",
+        port: 2222,
+        prompt: "JumpServer\n\nOTP Code:",
+        echo: false,
+      },
+    });
+    await nextTick();
+
+    expect(document.body.textContent).toContain("SSH Verification Required");
+    expect(document.body.textContent).toContain("OTP Code:");
+
+    const input = document.body.querySelector<HTMLInputElement>("input");
+    expect(input?.type).toBe("password");
+    if (!input) throw new Error("TOTP input was not rendered");
+    input.value = "123456";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await nextTick();
+
+    const buttons = document.body.querySelectorAll<HTMLButtonElement>("button");
+    buttons.item(buttons.length - 1).click();
+
+    await vi.waitFor(() => {
+      expect(resolveSshPromptMock).toHaveBeenCalledWith({
+        id: "totp-1",
+        action: "secret",
+        remember: undefined,
+        secret: "123456",
+      });
+    });
+  });
+
+  it("relays a plugin question and submits the typed answer", async () => {
+    // Host API `host/requestUserInput`: a plugin backend (e.g. the SSH plugin
+    // answering a bastion's keyboard-interactive MFA) asks through the same
+    // dialog, and the host only carries the question and the typed value.
+    await mountDialog();
+
+    const eventSource = MockEventSource.instances[0];
+    eventSource?.emit({
+      type: "prompt",
+      request: {
+        id: "plugin-input-1",
+        kind: "UserInput",
+        host: "",
+        port: 0,
+        prompt: "Verification code (6 digits)",
+        title: "JumpServer login",
+        source: "SSH Terminal",
+        echo: false,
+        default_value: "12",
+      },
+    });
+    await nextTick();
+
+    expect(document.body.textContent).toContain("JumpServer login");
+    expect(document.body.textContent).toContain("SSH Terminal needs input before it can continue.");
+    expect(document.body.textContent).toContain("Verification code (6 digits)");
+
+    const input = document.body.querySelector<HTMLInputElement>("input");
+    expect(input?.type).toBe("password");
+    // A caller-provided default is offered but still has to be submitted.
+    expect(input?.value).toBe("12");
+    if (!input) throw new Error("plugin prompt input was not rendered");
+    input.value = "654321";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await nextTick();
+
+    const buttons = [...document.body.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(["Cancel", "Submit"]);
+    buttons[buttons.length - 1].click();
+
+    await vi.waitFor(() => {
+      expect(resolveSshPromptMock).toHaveBeenCalledWith({
+        id: "plugin-input-1",
+        action: "secret",
+        remember: undefined,
+        secret: "654321",
+      });
+    });
+  });
+
+  it("answers a fixed-choice plugin question by picking an option", async () => {
+    await mountDialog();
+
+    const eventSource = MockEventSource.instances[0];
+    eventSource?.emit({
+      type: "prompt",
+      request: {
+        id: "plugin-choice-1",
+        kind: "UserInput",
+        host: "",
+        port: 0,
+        title: "Select account",
+        prompt: "Which bastion account should be used?",
+        source: "LDAP Directory",
+        options: [
+          { value: "jinpy", label: "jinpy (admin)" },
+          { value: "deploy", label: "deploy (read-only)" },
+        ],
+      },
+    });
+    await nextTick();
+
+    expect(document.body.textContent).toContain("Which bastion account should be used?");
+    const buttons = [...document.body.querySelectorAll<HTMLButtonElement>("button")];
+    // Options replace the free-form input, so only the choices plus Cancel show.
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(["jinpy (admin)", "deploy (read-only)", "Cancel"]);
+    expect(document.body.querySelector("input")).toBeNull();
+
+    buttons.find((button) => button.textContent?.trim() === "deploy (read-only)")?.click();
+    await vi.waitFor(() => {
+      expect(resolveSshPromptMock).toHaveBeenCalledWith({
+        id: "plugin-choice-1",
+        action: "secret",
+        remember: undefined,
+        secret: "deploy",
+      });
+    });
+  });
+
+  it("cancels a plugin question without answering it", async () => {
+    await mountDialog();
+
+    const eventSource = MockEventSource.instances[0];
+    eventSource?.emit({
+      type: "prompt",
+      request: {
+        id: "plugin-input-cancel",
+        kind: "UserInput",
+        host: "",
+        port: 0,
+        prompt: "Verification code",
+        source: "SSH Terminal",
+      },
+    });
+    await nextTick();
+
+    const cancel = [...document.body.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.trim() === "Cancel");
+    cancel?.click();
+    await vi.waitFor(() => {
+      expect(resolveSshPromptMock).toHaveBeenCalledWith({
+        id: "plugin-input-cancel",
+        action: "reject",
+        remember: undefined,
+        secret: undefined,
+      });
+    });
+  });
+});

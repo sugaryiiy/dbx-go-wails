@@ -1,0 +1,47 @@
+{
+  "name": "dbx",
+  "compatibility_date": "2026-05-07",
+  "main": "./worker.ts",
+  "assets": {
+    "directory": "./out",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    "run_worker_first": [
+      "/install-mcp",
+      "/install-mcp.ps1",
+      "/api/*",
+      "/cn/plugins/*",
+      "/en/plugins/*",
+      "/tr",
+      "/tr/*",
+      "/issue",
+      "/issue/",
+      "/issues",
+      "/issues/",
+      "/cn/issues",
+      "/cn/issues/",
+      "/en/issues",
+      "/en/issues/"
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "ISSUE_IMAGES",
+      "bucket_name": "dbx"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ISSUE_LIMITER",
+        "class_name": "IssueSubmissionLimiter"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["IssueSubmissionLimiter"]
+    }
+  ]
+}

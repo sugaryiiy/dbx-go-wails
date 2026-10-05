@@ -1,0 +1,982 @@
+/**
+ * Static MongoDB operator metadata for editor completion, distilled from the
+ * MongoDB manual (Query and Projection Operators, Update Operators, Aggregation
+ * Pipeline Stages / Operators). Kept offline and lightweight: each entry carries
+ * only what the completion list renders — a label, a one-line `detail`, and the
+ * text to insert.
+ *
+ * `apply` is the text inserted when the item is accepted. Entries containing a
+ * `${…}` placeholder are inserted as CodeMirror snippets (see
+ * `mongoOperatorItemType`); the rest are inserted verbatim. Every `apply` here
+ * writes the operator *and* its `:` separator, because these items are only ever
+ * offered in key position inside an object literal.
+ *
+ * The tables are deliberately grouped by where they may legally appear, so the
+ * completion engine never has to filter one flat list by context:
+ *   QUERY_OPERATORS      → filter documents (`find`, `$match`, …)
+ *   UPDATE_OPERATORS     → update documents (`updateOne`, `findOneAndUpdate`, …)
+ *   PUSH_MODIFIERS       → the object value of `$push` / `$addToSet`
+ *   PROJECTION_OPERATORS → projection documents (`find`, `findOne`, `findOneAndUpdate`, …)
+ *   PIPELINE_STAGES      → elements of an aggregation pipeline array
+ *   ACCUMULATORS         → the output fields of `$group`
+ *   EXPRESSION_OPERATORS → aggregation expression position (`$project`, `$expr`, …)
+ */
+
+export interface MongoOperatorSpec {
+  label: string;
+  detail: string;
+  apply: string;
+}
+
+type Spec = [label: string, detail: string, apply: string];
+
+function specs(entries: readonly Spec[]): MongoOperatorSpec[] {
+  return entries.map(([label, detail, apply]) => ({ label, detail, apply }));
+}
+
+/** Snippet placeholders only work for `snippet`/`function` completions; plain text is inserted as-is. */
+export function mongoOperatorItemType(apply: string): "snippet" | "keyword" {
+  return apply.includes("${") ? "snippet" : "keyword";
+}
+
+/**
+ * Operators that constrain one field, valid inside `{ field: { ... } }`.
+ * `$and` / `$or` and friends are not: those go at the top level of a filter.
+ */
+export const FIELD_QUERY_OPERATORS: MongoOperatorSpec[] = specs([
+  ["$eq", "Matches values equal to a value", "$eq: ${}"],
+  ["$ne", "Matches values not equal to a value", "$ne: ${}"],
+  ["$gt", "Matches values greater than a value", "$gt: ${}"],
+  ["$gte", "Matches values greater than or equal to a value", "$gte: ${}"],
+  ["$lt", "Matches values less than a value", "$lt: ${}"],
+  ["$lte", "Matches values less than or equal to a value", "$lte: ${}"],
+  ["$in", "Matches any value in an array", "$in: [${}]"],
+  ["$nin", "Matches no value in an array", "$nin: [${}]"],
+  ["$not", "Inverts the effect of a query expression", "$not: { ${} }"],
+  ["$exists", "Matches documents that have the field", "$exists: true"],
+  ["$type", "Matches documents by BSON type", '$type: "${string}"'],
+  ["$regex", "Matches a regular expression", '$regex: "${pattern}"'],
+  ["$mod", "Matches values by modulo division", "$mod: [${divisor}, ${remainder}]"],
+  ["$all", "Matches arrays containing all the values", "$all: [${}]"],
+  ["$elemMatch", "Matches arrays with an element matching all criteria", "$elemMatch: { ${} }"],
+  ["$size", "Matches arrays of a given length", "$size: ${}"],
+  ["$bitsAllSet", "Matches numbers with all the given bits set", "$bitsAllSet: [${}]"],
+  ["$bitsAnySet", "Matches numbers with any of the given bits set", "$bitsAnySet: [${}]"],
+  ["$bitsAllClear", "Matches numbers with all the given bits clear", "$bitsAllClear: [${}]"],
+  ["$bitsAnyClear", "Matches numbers with any of the given bits clear", "$bitsAnyClear: [${}]"],
+  ["$geoWithin", "Matches geometry contained within a shape", "$geoWithin: { ${} }"],
+  ["$geoIntersects", "Matches geometry intersecting a shape", "$geoIntersects: { ${} }"],
+  ["$near", "Matches points near a point, nearest first", "$near: { ${} }"],
+  ["$nearSphere", "Matches points near a point on a sphere", "$nearSphere: { ${} }"],
+]);
+
+/**
+ * Operators that apply to the whole filter, valid at its top level and inside
+ * the sub-filters of `$and` / `$or` / `$nor` — never under a field.
+ */
+export const TOP_LEVEL_QUERY_OPERATORS: MongoOperatorSpec[] = specs([
+  ["$and", "Joins clauses with a logical AND", "$and: [${}]"],
+  ["$or", "Joins clauses with a logical OR", "$or: [${}]"],
+  ["$nor", "Joins clauses with a logical NOR", "$nor: [${}]"],
+  ["$expr", "Uses aggregation expressions in a query", "$expr: { ${} }"],
+  ["$text", "Performs a text search", '$text: { $search: "${text}" }'],
+  ["$where", "Matches with a JavaScript predicate", '$where: "${expression}"'],
+  ["$jsonSchema", "Matches documents against a JSON schema", "$jsonSchema: { ${} }"],
+]);
+
+/** Every query operator, for callers that do not care about position. */
+export const QUERY_OPERATORS: MongoOperatorSpec[] = [...FIELD_QUERY_OPERATORS, ...TOP_LEVEL_QUERY_OPERATORS];
+
+export const UPDATE_OPERATORS: MongoOperatorSpec[] = specs([
+  ["$set", "Sets field values", "$set: { ${} }"],
+  ["$unset", "Removes fields", '$unset: { ${field}: "" }'],
+  ["$setOnInsert", "Sets field values only when an upsert inserts", "$setOnInsert: { ${} }"],
+  ["$inc", "Increments field values", "$inc: { ${field}: 1 }"],
+  ["$mul", "Multiplies field values", "$mul: { ${field}: 2 }"],
+  ["$min", "Updates only when the new value is lower", "$min: { ${field}: ${} }"],
+  ["$max", "Updates only when the new value is higher", "$max: { ${field}: ${} }"],
+  ["$rename", "Renames fields", '$rename: { ${field}: "${newName}" }'],
+  ["$currentDate", "Sets fields to the current date", "$currentDate: { ${field}: true }"],
+  ["$push", "Appends values to an array", "$push: { ${field}: ${} }"],
+  ["$addToSet", "Appends values to an array without duplicates", "$addToSet: { ${field}: ${} }"],
+  ["$pop", "Removes the first or last element of an array", "$pop: { ${field}: 1 }"],
+  ["$pull", "Removes array elements matching a condition", "$pull: { ${field}: ${} }"],
+  ["$pullAll", "Removes all the listed values from an array", "$pullAll: { ${field}: [${}] }"],
+  ["$bit", "Performs a bitwise update", "$bit: { ${field}: { and: ${} } }"],
+]);
+
+/** Valid inside the object value of `$push` / `$addToSet`, and nowhere else. */
+export const PUSH_MODIFIERS: MongoOperatorSpec[] = specs([
+  ["$each", "Appends multiple values", "$each: [${}]"],
+  ["$slice", "Limits the array length after the push", "$slice: ${}"],
+  ["$sort", "Sorts the array elements after the push", "$sort: { ${field}: 1 }"],
+  ["$position", "Insert position for $each", "$position: 0"],
+]);
+
+/** Projection operators, valid inside a projected field's object value in find-style projections. */
+export const PROJECTION_OPERATORS: MongoOperatorSpec[] = specs([
+  ["$slice", "Limits the number of elements projected from an array", "$slice: ${}"],
+  ["$elemMatch", "Projects the first array element matching a condition", "$elemMatch: { ${} }"],
+  ["$meta", "Projects metadata associated with the document", '$meta: "textScore"'],
+]);
+
+export const PIPELINE_STAGES: MongoOperatorSpec[] = specs([
+  ["$match", "Filters documents", "$match: { ${} }"],
+  ["$project", "Reshapes documents", "$project: { ${} }"],
+  ["$group", "Groups documents by a key", '$group: { _id: "$${field}", count: { $sum: 1 } }'],
+  ["$sort", "Sorts documents", "$sort: { ${field}: -1 }"],
+  ["$limit", "Limits the number of documents", "$limit: 10"],
+  ["$skip", "Skips documents", "$skip: 0"],
+  ["$count", "Counts documents into a single field", '$count: "${total}"'],
+  ["$unwind", "Deconstructs an array field into one document per element", '$unwind: "$${field}"'],
+  ["$lookup", "Joins another collection", '$lookup: { from: "${collection}", localField: "${field}", foreignField: "_id", as: "${as}" }'],
+  ["$addFields", "Adds new fields to documents", "$addFields: { ${} }"],
+  ["$set", "Adds new fields to documents (alias of $addFields)", "$set: { ${} }"],
+  ["$unset", "Removes fields from documents", '$unset: "${field}"'],
+  ["$replaceRoot", "Promotes a subdocument to the top level", '$replaceRoot: { newRoot: "$${field}" }'],
+  ["$replaceWith", "Promotes a subdocument to the top level", '$replaceWith: "$${field}"'],
+  ["$facet", "Runs multiple pipelines over the same input", "$facet: { ${name}: [${}] }"],
+  ["$sortByCount", "Groups by a value and counts, highest first", '$sortByCount: "$${field}"'],
+  ["$bucket", "Groups documents into user-defined buckets", '$bucket: { groupBy: "$${field}", boundaries: [${}], default: "other" }'],
+  ["$bucketAuto", "Groups documents into evenly distributed buckets", '$bucketAuto: { groupBy: "$${field}", buckets: 5 }'],
+  ["$sample", "Randomly selects documents", "$sample: { size: 10 }"],
+  ["$unionWith", "Combines results with another collection", '$unionWith: { coll: "${collection}", pipeline: [${}] }'],
+  ["$graphLookup", "Performs a recursive search on a collection", '$graphLookup: { from: "${collection}", startWith: "$${field}", connectFromField: "${field}", connectToField: "_id", as: "${as}" }'],
+  ["$geoNear", "Orders documents by proximity to a point", '$geoNear: { near: { type: "Point", coordinates: [0, 0] }, distanceField: "${distance}" }'],
+  ["$setWindowFields", "Adds fields computed over a window of documents", '$setWindowFields: { partitionBy: "$${field}", sortBy: { ${field}: 1 }, output: {} }'],
+  ["$densify", "Fills gaps in a sequence of field values", '$densify: { field: "${field}", range: { step: 1, bounds: "${full}" } }'],
+  ["$fill", "Fills null or missing field values", "$fill: { output: { ${field}: { value: ${} } } }"],
+  ["$documents", "Returns literal documents", "$documents: [${}]"],
+  ["$redact", "Restricts document content based on a condition", "$redact: { ${} }"],
+  ["$out", "Writes the results to a collection", '$out: "${collection}"'],
+  ["$merge", "Merges the results into a collection", '$merge: { into: "${collection}" }'],
+  ["$collStats", "Returns statistics about the collection", "$collStats: { ${} }"],
+  ["$indexStats", "Returns index usage statistics", "$indexStats: {}"],
+  ["$planCacheStats", "Returns plan cache information", "$planCacheStats: {}"],
+]);
+
+export const ACCUMULATORS: MongoOperatorSpec[] = specs([
+  ["$sum", "Sums values", "$sum: 1"],
+  ["$avg", "Averages values", '$avg: "$${field}"'],
+  ["$min", "Returns the lowest value", '$min: "$${field}"'],
+  ["$max", "Returns the highest value", '$max: "$${field}"'],
+  ["$count", "Counts the documents in the group", "$count: {}"],
+  ["$first", "Returns the first value in the group", '$first: "$${field}"'],
+  ["$last", "Returns the last value in the group", '$last: "$${field}"'],
+  ["$push", "Collects values into an array", '$push: "$${field}"'],
+  ["$addToSet", "Collects unique values into an array", '$addToSet: "$${field}"'],
+  ["$mergeObjects", "Merges documents into one", '$mergeObjects: "$${field}"'],
+  ["$stdDevPop", "Population standard deviation", '$stdDevPop: "$${field}"'],
+  ["$stdDevSamp", "Sample standard deviation", '$stdDevSamp: "$${field}"'],
+  ["$top", "Returns the top element by a sort order", '$top: { sortBy: { ${field}: -1 }, output: "$${field}" }'],
+  ["$topN", "Returns the top N elements by a sort order", '$topN: { n: 3, sortBy: { ${field}: -1 }, output: "$${field}" }'],
+  ["$bottom", "Returns the bottom element by a sort order", '$bottom: { sortBy: { ${field}: -1 }, output: "$${field}" }'],
+  ["$bottomN", "Returns the bottom N elements by a sort order", '$bottomN: { n: 3, sortBy: { ${field}: -1 }, output: "$${field}" }'],
+  ["$firstN", "Returns the first N values in the group", '$firstN: { input: "$${field}", n: 3 }'],
+  ["$lastN", "Returns the last N values in the group", '$lastN: { input: "$${field}", n: 3 }'],
+  ["$maxN", "Returns the N highest values", '$maxN: { input: "$${field}", n: 3 }'],
+  ["$minN", "Returns the N lowest values", '$minN: { input: "$${field}", n: 3 }'],
+  ["$median", "Approximates the median", '$median: { input: "$${field}", method: "approximate" }'],
+  ["$percentile", "Approximates the requested percentiles", '$percentile: { input: "$${field}", p: [0.95], method: "approximate" }'],
+]);
+
+export const WINDOW_OPERATORS: MongoOperatorSpec[] = specs([
+  ["$rank", "Returns the document's rank relative to other documents", "$rank: {}"],
+  ["$denseRank", "Returns the document's dense rank relative to other documents", "$denseRank: {}"],
+  ["$documentNumber", "Returns the document's position within the window", "$documentNumber: {}"],
+  ["$shift", "Returns a value from a document at a given offset", '$shift: { output: "$${field}", by: 1, default: null }'],
+  ["$expMovingAvg", "Exponential moving average", '$expMovingAvg: { input: "$${field}", N: 3 }'],
+  ["$derivative", "Average rate of change over an interval", '$derivative: { input: "$${field}", unit: "${unit}" }'],
+  ["$integral", "Approximation of the area under the curve", '$integral: { input: "$${field}", unit: "${unit}" }'],
+  ["$covariancePop", "Population covariance between two numeric expressions", '$covariancePop: ["$${field1}", "$${field2}"]'],
+  ["$covarianceSamp", "Sample covariance between two numeric expressions", '$covarianceSamp: ["$${field1}", "$${field2}"]'],
+  ["$locf", "Last observation carried forward", '$locf: "$${field}"'],
+  ["$linearFill", "Fills null and missing values by linear interpolation", '$linearFill: "$${field}"'],
+]);
+
+const WINDOW_SPEC: Spec = ["window", "Window boundary specification", 'window: { documents: ["unbounded", "current"] }'];
+
+function dedupeSpecsByLabel(...lists: readonly MongoOperatorSpec[][]): MongoOperatorSpec[] {
+  const seen = new Set<string>();
+  const deduped: MongoOperatorSpec[] = [];
+  for (const list of lists) {
+    for (const spec of list) {
+      if (seen.has(spec.label)) continue;
+      seen.add(spec.label);
+      deduped.push(spec);
+    }
+  }
+  return deduped;
+}
+
+export const WINDOW_FUNCTION_OPERATORS: MongoOperatorSpec[] = [...dedupeSpecsByLabel(WINDOW_OPERATORS, ACCUMULATORS), ...specs([WINDOW_SPEC])];
+
+export const EXPRESSION_OPERATORS: MongoOperatorSpec[] = specs([
+  // Conditional
+  ["$cond", "Returns one of two values from a condition", "$cond: { if: ${}, then: ${}, else: ${} }"],
+  ["$ifNull", "Returns the first non-null value", "$ifNull: [${}, ${}]"],
+  ["$switch", "Evaluates branches in order", "$switch: { branches: [{ case: ${}, then: ${} }], default: ${} }"],
+  // Comparison / boolean
+  ["$eq", "Returns true when the values are equal", "$eq: [${}, ${}]"],
+  ["$ne", "Returns true when the values differ", "$ne: [${}, ${}]"],
+  ["$gt", "Returns true when the first value is greater", "$gt: [${}, ${}]"],
+  ["$gte", "Returns true when the first value is greater or equal", "$gte: [${}, ${}]"],
+  ["$lt", "Returns true when the first value is less", "$lt: [${}, ${}]"],
+  ["$lte", "Returns true when the first value is less or equal", "$lte: [${}, ${}]"],
+  ["$cmp", "Compares two values and returns -1, 0 or 1", "$cmp: [${}, ${}]"],
+  ["$and", "Logical AND", "$and: [${}]"],
+  ["$or", "Logical OR", "$or: [${}]"],
+  ["$not", "Logical NOT", "$not: [${}]"],
+  // Arithmetic
+  ["$add", "Adds numbers or a number to a date", "$add: [${}, ${}]"],
+  ["$subtract", "Subtracts two numbers or dates", "$subtract: [${}, ${}]"],
+  ["$multiply", "Multiplies numbers", "$multiply: [${}, ${}]"],
+  ["$divide", "Divides two numbers", "$divide: [${}, ${}]"],
+  ["$mod", "Returns the remainder of a division", "$mod: [${}, ${}]"],
+  ["$sum", "Sums values", "$sum: [${}, ${}]"],
+  ["$avg", "Averages values", "$avg: [${}, ${}]"],
+  ["$min", "Returns the lowest value", "$min: [${}, ${}]"],
+  ["$max", "Returns the highest value", "$max: [${}, ${}]"],
+  ["$stdDevPop", "Population standard deviation", "$stdDevPop: [${}, ${}]"],
+  ["$stdDevSamp", "Sample standard deviation", "$stdDevSamp: [${}, ${}]"],
+  ["$abs", "Absolute value", "$abs: ${}"],
+  ["$ceil", "Rounds up to the next integer", "$ceil: ${}"],
+  ["$floor", "Rounds down to the previous integer", "$floor: ${}"],
+  ["$round", "Rounds to a number of decimal places", "$round: [${}, 0]"],
+  ["$trunc", "Truncates to a number of decimal places", "$trunc: [${}, 0]"],
+  ["$pow", "Raises a number to an exponent", "$pow: [${}, 2]"],
+  ["$sqrt", "Square root", "$sqrt: ${}"],
+  ["$ln", "Natural logarithm", "$ln: ${}"],
+  ["$log", "Logarithm in the given base", "$log: [${}, 10]"],
+  ["$log10", "Base 10 logarithm", "$log10: ${}"],
+  ["$exp", "Raises e to an exponent", "$exp: ${}"],
+  // Strings
+  ["$concat", "Concatenates strings", "$concat: [${}, ${}]"],
+  ["$split", "Splits a string on a delimiter", '$split: [${}, "${,}"]'],
+  ["$substr", "Returns a substring", "$substr: [${}, 0, 1]"],
+  ["$substrBytes", "Returns a substring by byte index", "$substrBytes: [${}, 0, 1]"],
+  ["$substrCP", "Returns a substring by code point index", "$substrCP: [${}, 0, 1]"],
+  ["$strLenCP", "Number of code points in a string", "$strLenCP: ${}"],
+  ["$strLenBytes", "Number of bytes in a string", "$strLenBytes: ${}"],
+  ["$strcasecmp", "Case-insensitive string comparison", "$strcasecmp: [${}, ${}]"],
+  ["$toLower", "Converts a string to lower case", "$toLower: ${}"],
+  ["$toUpper", "Converts a string to upper case", "$toUpper: ${}"],
+  ["$trim", "Removes whitespace from both ends", "$trim: { input: ${} }"],
+  ["$ltrim", "Removes whitespace from the start", "$ltrim: { input: ${} }"],
+  ["$rtrim", "Removes whitespace from the end", "$rtrim: { input: ${} }"],
+  ["$replaceOne", "Replaces the first match in a string", "$replaceOne: { input: ${}, find: ${}, replacement: ${} }"],
+  ["$replaceAll", "Replaces every match in a string", "$replaceAll: { input: ${}, find: ${}, replacement: ${} }"],
+  ["$regexMatch", "Returns true when a regex matches", '$regexMatch: { input: ${}, regex: "${pattern}" }'],
+  ["$regexFind", "Returns the first regex match", '$regexFind: { input: ${}, regex: "${pattern}" }'],
+  ["$regexFindAll", "Returns every regex match", '$regexFindAll: { input: ${}, regex: "${pattern}" }'],
+  ["$indexOfCP", "Position of a substring by code point", "$indexOfCP: [${}, ${}]"],
+  ["$indexOfBytes", "Position of a substring by byte", "$indexOfBytes: [${}, ${}]"],
+  // Arrays
+  ["$size", "Number of elements in an array", "$size: ${}"],
+  ["$arrayElemAt", "Element at an array index", "$arrayElemAt: [${}, 0]"],
+  ["$first", "First element of an array", "$first: ${}"],
+  ["$last", "Last element of an array", "$last: ${}"],
+  ["$slice", "Returns a subset of an array", "$slice: [${}, 3]"],
+  ["$in", "Returns true when a value is in an array", "$in: [${}, ${}]"],
+  ["$indexOfArray", "Position of a value in an array", "$indexOfArray: [${}, ${}]"],
+  ["$concatArrays", "Concatenates arrays", "$concatArrays: [${}, ${}]"],
+  ["$filter", "Selects array elements matching a condition", '$filter: { input: ${}, as: "${item}", cond: ${} }'],
+  ["$map", "Applies an expression to each array element", '$map: { input: ${}, as: "${item}", in: ${} }'],
+  ["$reduce", "Folds an array into a single value", "$reduce: { input: ${}, initialValue: ${}, in: ${} }"],
+  ["$reverseArray", "Reverses an array", "$reverseArray: ${}"],
+  ["$sortArray", "Sorts an array", "$sortArray: { input: ${}, sortBy: 1 }"],
+  ["$range", "Generates a sequence of numbers", "$range: [0, 10]"],
+  ["$zip", "Merges arrays element by element", "$zip: { inputs: [${}] }"],
+  ["$isArray", "Returns true when the value is an array", "$isArray: ${}"],
+  ["$arrayToObject", "Converts an array of pairs to a document", "$arrayToObject: ${}"],
+  ["$objectToArray", "Converts a document to an array of pairs", "$objectToArray: ${}"],
+  ["$setUnion", "Union of arrays as sets", "$setUnion: [${}, ${}]"],
+  ["$setIntersection", "Intersection of arrays as sets", "$setIntersection: [${}, ${}]"],
+  ["$setDifference", "Difference of arrays as sets", "$setDifference: [${}, ${}]"],
+  ["$setEquals", "Returns true when the sets are equal", "$setEquals: [${}, ${}]"],
+  ["$setIsSubset", "Returns true when the first set is a subset", "$setIsSubset: [${}, ${}]"],
+  ["$allElementsTrue", "Returns true when every element is true", "$allElementsTrue: [${}]"],
+  ["$anyElementTrue", "Returns true when any element is true", "$anyElementTrue: [${}]"],
+  // Dates
+  ["$dateToString", "Formats a date as a string", '$dateToString: { format: "%Y-%m-%d", date: "$${field}" }'],
+  ["$dateFromString", "Parses a string into a date", "$dateFromString: { dateString: ${} }"],
+  ["$dateToParts", "Splits a date into its parts", '$dateToParts: { date: "$${field}" }'],
+  ["$dateFromParts", "Builds a date from its parts", "$dateFromParts: { year: ${}, month: ${}, day: ${} }"],
+  ["$dateAdd", "Adds a time unit to a date", '$dateAdd: { startDate: "$${field}", unit: "day", amount: 1 }'],
+  ["$dateSubtract", "Subtracts a time unit from a date", '$dateSubtract: { startDate: "$${field}", unit: "day", amount: 1 }'],
+  ["$dateDiff", "Difference between two dates", '$dateDiff: { startDate: ${}, endDate: ${}, unit: "day" }'],
+  ["$dateTrunc", "Truncates a date to a time unit", '$dateTrunc: { date: "$${field}", unit: "day" }'],
+  ["$year", "Year of a date", '$year: "$${field}"'],
+  ["$month", "Month of a date", '$month: "$${field}"'],
+  ["$dayOfMonth", "Day of the month of a date", '$dayOfMonth: "$${field}"'],
+  ["$dayOfWeek", "Day of the week of a date", '$dayOfWeek: "$${field}"'],
+  ["$dayOfYear", "Day of the year of a date", '$dayOfYear: "$${field}"'],
+  ["$week", "Week of the year of a date", '$week: "$${field}"'],
+  ["$hour", "Hour of a date", '$hour: "$${field}"'],
+  ["$minute", "Minute of a date", '$minute: "$${field}"'],
+  ["$second", "Second of a date", '$second: "$${field}"'],
+  ["$millisecond", "Millisecond of a date", '$millisecond: "$${field}"'],
+  ["$isoWeek", "ISO week number of a date", '$isoWeek: "$${field}"'],
+  ["$isoWeekYear", "ISO week-numbering year of a date", '$isoWeekYear: "$${field}"'],
+  ["$isoDayOfWeek", "ISO day of the week of a date", '$isoDayOfWeek: "$${field}"'],
+  // Types and misc
+  ["$type", "Returns the BSON type of a value", "$type: ${}"],
+  ["$convert", "Converts a value to a given type", '$convert: { input: ${}, to: "${string}" }'],
+  ["$toString", "Converts a value to a string", "$toString: ${}"],
+  ["$toInt", "Converts a value to an integer", "$toInt: ${}"],
+  ["$toLong", "Converts a value to a 64-bit integer", "$toLong: ${}"],
+  ["$toDouble", "Converts a value to a double", "$toDouble: ${}"],
+  ["$toDecimal", "Converts a value to a decimal", "$toDecimal: ${}"],
+  ["$toBool", "Converts a value to a boolean", "$toBool: ${}"],
+  ["$toDate", "Converts a value to a date", "$toDate: ${}"],
+  ["$toObjectId", "Converts a value to an ObjectId", "$toObjectId: ${}"],
+  ["$isNumber", "Returns true when the value is a number", "$isNumber: ${}"],
+  ["$literal", "Returns a value without parsing it", "$literal: ${}"],
+  ["$mergeObjects", "Merges documents into one", "$mergeObjects: [${}, ${}]"],
+  ["$getField", "Reads a field, including names starting with $", '$getField: "${field}"'],
+  ["$setField", "Writes a field, including names starting with $", '$setField: { field: "${field}", input: "$$ROOT", value: ${} }'],
+  ["$let", "Binds variables for use in an expression", "$let: { vars: { ${name}: ${} }, in: ${} }"],
+  ["$rand", "Returns a random float between 0 and 1", "$rand: {}"],
+]);
+
+/**
+ * Values a field-to-value map accepts, by the kind of map it is.
+ *
+ * `1`/`-1` and the index types are what the server understands in these positions; the driver
+ * passes the document straight through, so the server has the final say on anything exotic.
+ */
+export const KEY_MAP_VALUES: Record<string, MongoOperatorSpec[]> = {
+  sort: specs([
+    ["1", "Ascending", "1"],
+    ["-1", "Descending", "-1"],
+  ]),
+  projection: specs([
+    ["1", "Include the field", "1"],
+    ["0", "Exclude the field", "0"],
+  ]),
+  index: specs([
+    ["1", "Ascending index", "1"],
+    ["-1", "Descending index", "-1"],
+    ['"text"', "Text index for $text search", '"text"'],
+    ['"hashed"', "Hashed index for hashed sharding", '"hashed"'],
+    ['"2dsphere"', "Geospatial index for GeoJSON data", '"2dsphere"'],
+    ['"2d"', "Geospatial index for legacy coordinate pairs", '"2d"'],
+  ]),
+};
+
+/**
+ * The operations a `bulkWrite()` array accepts, and the fields each one allows.
+ *
+ * Both lists are exactly what the shell parser accepts: it rejects an unknown operation key and
+ * an unknown field inside one, so anything extra here would complete into a command that fails.
+ */
+const GEO_NEAR_KEYS: Spec[] = [
+  ["$geometry", "GeoJSON point to measure distance from", '$geometry: { type: "Point", coordinates: [${}, ${}] }'],
+  ["$maxDistance", "Farthest match, in meters", "$maxDistance: ${}"],
+  ["$minDistance", "Nearest match, in meters", "$minDistance: ${}"],
+];
+
+const JSON_SCHEMA_KEYWORDS: Spec[] = [
+  ["bsonType", "BSON type the value must have", 'bsonType: "${string}"'],
+  ["type", "JSON Schema type the value must have", 'type: "${string}"'],
+  ["enum", "Values the field may take", "enum: [${}]"],
+  ["required", "Fields that must be present", 'required: ["${field}"]'],
+  ["properties", "Schema for each named field", "properties: { ${field}: {} }"],
+  ["additionalProperties", "Allow, forbid or constrain fields not listed in properties", "additionalProperties: false"],
+  ["patternProperties", "Schema for fields whose name matches a pattern", 'patternProperties: { "${pattern}": {} }'],
+  ["minProperties", "Minimum number of fields", "minProperties: ${}"],
+  ["maxProperties", "Maximum number of fields", "maxProperties: ${}"],
+  ["items", "Schema for array elements", "items: {}"],
+  ["additionalItems", "Allow or constrain elements beyond the listed item schemas", "additionalItems: false"],
+  ["minItems", "Minimum array length", "minItems: ${}"],
+  ["maxItems", "Maximum array length", "maxItems: ${}"],
+  ["uniqueItems", "Reject duplicate array elements", "uniqueItems: true"],
+  ["minimum", "Smallest allowed number", "minimum: ${}"],
+  ["maximum", "Largest allowed number", "maximum: ${}"],
+  ["exclusiveMinimum", "Treat minimum as exclusive", "exclusiveMinimum: true"],
+  ["exclusiveMaximum", "Treat maximum as exclusive", "exclusiveMaximum: true"],
+  ["multipleOf", "Number must be a multiple of this", "multipleOf: ${}"],
+  ["minLength", "Minimum string length", "minLength: ${}"],
+  ["maxLength", "Maximum string length", "maxLength: ${}"],
+  ["pattern", "Regular expression the string must match", 'pattern: "${}"'],
+  ["allOf", "Must match every listed schema", "allOf: [{}]"],
+  ["anyOf", "Must match at least one listed schema", "anyOf: [{}]"],
+  ["oneOf", "Must match exactly one listed schema", "oneOf: [{}]"],
+  ["not", "Must not match this schema", "not: {}"],
+  ["dependencies", "Fields or schemas required when a field is present", 'dependencies: { ${field}: ["${other}"] }'],
+  ["title", "Schema title", 'title: "${}"'],
+  ["description", "Schema description", 'description: "${}"'],
+];
+
+/**
+ * Keys of an operator's own sub-document, where the field operators `{ field: { $… } }`
+ * takes would be wrong: `$text: { $search }`, `$near: { $geometry }`. `$jsonSchema`
+ * and every schema nested in it take the JSON Schema keywords; `collation` covers
+ * the cursor method and the option key alike; `$currentDate` is the per-field
+ * object of the update operator.
+ */
+export const OPERATOR_SUB_KEYS: Record<string, MongoOperatorSpec[]> = {
+  $text: specs([
+    ["$search", "Words or phrases to search for", '$search: "${text}"'],
+    ["$language", "Language for stemming and stop words", '$language: "${en}"'],
+    ["$caseSensitive", "Match case exactly", "$caseSensitive: true"],
+    ["$diacriticSensitive", "Match diacritics exactly", "$diacriticSensitive: true"],
+  ]),
+  $geoWithin: specs([
+    ["$geometry", "GeoJSON polygon or multipolygon to fall within", '$geometry: { type: "Polygon", coordinates: [${}] }'],
+    ["$box", "Rectangle from its bottom-left and top-right corners", "$box: [[${}, ${}], [${}, ${}]]"],
+    ["$polygon", "Polygon from a list of points", "$polygon: [[${}, ${}]]"],
+    ["$center", "Circle from a center point and a radius", "$center: [[${}, ${}], ${}]"],
+    ["$centerSphere", "Spherical circle from a center point and a radius in radians", "$centerSphere: [[${}, ${}], ${}]"],
+  ]),
+  $geoIntersects: specs([["$geometry", "GeoJSON geometry to intersect", '$geometry: { type: "${Polygon}", coordinates: [${}] }']]),
+  $near: specs(GEO_NEAR_KEYS),
+  $nearSphere: specs(GEO_NEAR_KEYS),
+  $geometry: specs([
+    ["type", "GeoJSON geometry type", 'type: "${Point}"'],
+    ["coordinates", "Coordinates, longitude first", "coordinates: [${}, ${}]"],
+  ]),
+  $jsonSchema: specs(JSON_SCHEMA_KEYWORDS),
+  $currentDate: specs([["$type", "Store a Date or a Timestamp", '$type: "${date}"']]),
+  timeseries: specs([
+    ["timeField", "Field holding each measurement's time", 'timeField: "${timestamp}"'],
+    ["metaField", "Field holding the series metadata", 'metaField: "${meta}"'],
+    ["granularity", "Expected spacing between measurements", 'granularity: "${seconds}"'],
+    ["bucketMaxSpanSeconds", "Maximum time span of one bucket", "bucketMaxSpanSeconds: ${}"],
+    ["bucketRoundingSeconds", "Rounding of bucket boundaries", "bucketRoundingSeconds: ${}"],
+  ]),
+  clusteredIndex: specs([
+    ["key", "Clustered key, which must be _id", "key: { _id: 1 }"],
+    ["unique", "Required, and must be true", "unique: true"],
+    ["name", "Index name", 'name: "${name}"'],
+  ]),
+  collation: specs([
+    ["locale", 'ICU locale, such as "en" or "zh"', 'locale: "${en}"'],
+    ["strength", "Comparison level, 1 (base letters) to 5 (identical)", "strength: 2"],
+    ["caseLevel", "Compare case as its own level", "caseLevel: false"],
+    ["caseFirst", "Order uppercase before or after lowercase", 'caseFirst: "${off}"'],
+    ["numericOrdering", "Compare digit sequences as numbers", "numericOrdering: true"],
+    ["alternate", "Whether spaces and punctuation are base characters", 'alternate: "${non-ignorable}"'],
+    ["maxVariable", 'Which characters "shifted" ignores', 'maxVariable: "${punct}"'],
+    ["backwards", "Compare secondary differences from the end", "backwards: false"],
+    ["normalization", "Normalize text to Unicode NFD first", "normalization: false"],
+  ]),
+  range: specs([
+    ["step", "Step size to densify by", "step: 1"],
+    ["unit", "Time unit for date densification", 'unit: "${unit}"'],
+    ["bounds", "Boundary condition for the range", 'bounds: "${full}"'],
+  ]),
+  fillOutput: specs([
+    ["value", "Value or expression to fill with", "value: ${}"],
+    ["method", "Fill method", 'method: "${linear}"'],
+  ]),
+};
+
+const BSON_TYPE_ALIASES: Spec[] = [
+  ["string", "UTF-8 string", '"string"'],
+  ["objectId", "ObjectId", '"objectId"'],
+  ["date", "Date", '"date"'],
+  ["bool", "Boolean", '"bool"'],
+  ["int", "32-bit integer", '"int"'],
+  ["long", "64-bit integer", '"long"'],
+  ["double", "64-bit floating point", '"double"'],
+  ["decimal", "128-bit decimal", '"decimal"'],
+  ["number", "Any numeric type", '"number"'],
+  ["object", "Embedded document", '"object"'],
+  ["array", "Array", '"array"'],
+  ["null", "Null", '"null"'],
+  ["binData", "Binary data", '"binData"'],
+  ["regex", "Regular expression", '"regex"'],
+  ["timestamp", "Timestamp", '"timestamp"'],
+  ["javascript", "JavaScript code", '"javascript"'],
+  ["minKey", "MinKey", '"minKey"'],
+  ["maxKey", "MaxKey", '"maxKey"'],
+];
+
+/**
+ * The fixed set a value position accepts, by the name the classifier gives that
+ * position. String values carry their quotes in `apply`, so an unquoted cursor
+ * gets a well-formed literal; numbers do not.
+ */
+export const ENUM_VALUES: Record<string, MongoOperatorSpec[]> = {
+  $type: specs(BSON_TYPE_ALIASES),
+  bsonType: specs(BSON_TYPE_ALIASES),
+  $options: specs([
+    ["i", "Case-insensitive", '"i"'],
+    ["m", "^ and $ match at line breaks", '"m"'],
+    ["x", "Ignore whitespace and # comments in the pattern", '"x"'],
+    ["s", "Dot matches newlines", '"s"'],
+    ["u", "Unicode character classes", '"u"'],
+  ]),
+  $meta: specs([
+    ["textScore", "Access the text search score", '"textScore"'],
+    ["indexKey", "Access the index key for the document", '"indexKey"'],
+  ]),
+  geometryType: specs([
+    ["Point", "Single position", '"Point"'],
+    ["LineString", "Sequence of positions", '"LineString"'],
+    ["Polygon", "Closed ring of positions", '"Polygon"'],
+    ["MultiPoint", "Several points", '"MultiPoint"'],
+    ["MultiLineString", "Several line strings", '"MultiLineString"'],
+    ["MultiPolygon", "Several polygons", '"MultiPolygon"'],
+    ["GeometryCollection", "Mixed geometries", '"GeometryCollection"'],
+  ]),
+  returnDocument: specs([
+    ["after", "Return the document as modified", '"after"'],
+    ["before", "Return the document as it was", '"before"'],
+  ]),
+  explain: specs([
+    ["queryPlanner", "The chosen plan, without running it", '"queryPlanner"'],
+    ["executionStats", "The chosen plan and its execution statistics", '"executionStats"'],
+    ["allPlansExecution", "Every candidate plan and its statistics", '"allPlansExecution"'],
+  ]),
+  currentDateType: specs([
+    ["date", "Store a Date", '"date"'],
+    ["timestamp", "Store a Timestamp", '"timestamp"'],
+  ]),
+  caseFirst: specs([
+    ["off", "Lowercase and uppercase in code point order", '"off"'],
+    ["upper", "Uppercase first", '"upper"'],
+    ["lower", "Lowercase first", '"lower"'],
+  ]),
+  alternate: specs([
+    ["non-ignorable", "Spaces and punctuation count as base characters", '"non-ignorable"'],
+    ["shifted", "Spaces and punctuation are ignored up to maxVariable", '"shifted"'],
+  ]),
+  maxVariable: specs([
+    ["punct", "Shift both spaces and punctuation", '"punct"'],
+    ["space", "Shift spaces only", '"space"'],
+  ]),
+  validationLevel: specs([
+    ["strict", "Validate every insert and update", '"strict"'],
+    ["moderate", "Validate inserts, and updates to documents that already validate", '"moderate"'],
+    ["off", "Do not validate", '"off"'],
+  ]),
+  validationAction: specs([
+    ["error", "Reject documents that fail validation", '"error"'],
+    ["warn", "Accept them and log a warning", '"warn"'],
+  ]),
+  granularity: specs([
+    ["seconds", "Measurements seconds apart", '"seconds"'],
+    ["minutes", "Measurements minutes apart", '"minutes"'],
+    ["hours", "Measurements hours apart", '"hours"'],
+  ]),
+  strength: specs([
+    ["1", "Base letters only", "1"],
+    ["2", "Base letters and accents", "2"],
+    ["3", "Base letters, accents and case", "3"],
+    ["4", "Also punctuation, with alternate: shifted", "4"],
+    ["5", "Identical, including code points", "5"],
+  ]),
+  unit: specs([
+    ["millisecond", "Densify by milliseconds", '"millisecond"'],
+    ["second", "Densify by seconds", '"second"'],
+    ["minute", "Densify by minutes", '"minute"'],
+    ["hour", "Densify by hours", '"hour"'],
+    ["day", "Densify by days", '"day"'],
+    ["week", "Densify by weeks", '"week"'],
+    ["month", "Densify by months", '"month"'],
+    ["quarter", "Densify by quarters", '"quarter"'],
+    ["year", "Densify by years", '"year"'],
+  ]),
+  bounds: specs([
+    ["full", "Densify across entire range", '"full"'],
+    ["partition", "Densify within each partition", '"partition"'],
+  ]),
+  fillMethod: specs([
+    ["linear", "Linear interpolation between surrounding values", '"linear"'],
+    ["locf", "Last observation carried forward", '"locf"'],
+  ]),
+  boolean: specs([
+    ["true", "Boolean true", "true"],
+    ["false", "Boolean false", "false"],
+  ]),
+  $regex: specs([["/pattern/", "Regular expression literal", "/${pattern}/"]]),
+  $language: specs([
+    ["none", "No language-specific rules", '"none"'],
+    ["da", "Danish", '"da"'],
+    ["de", "German", '"de"'],
+    ["en", "English", '"en"'],
+    ["es", "Spanish", '"es"'],
+    ["fi", "Finnish", '"fi"'],
+    ["fr", "French", '"fr"'],
+    ["hu", "Hungarian", '"hu"'],
+    ["it", "Italian", '"it"'],
+    ["nb", "Norwegian", '"nb"'],
+    ["nl", "Dutch", '"nl"'],
+    ["pt", "Portuguese", '"pt"'],
+    ["ro", "Romanian", '"ro"'],
+    ["ru", "Russian", '"ru"'],
+    ["sv", "Swedish", '"sv"'],
+    ["tr", "Turkish", '"tr"'],
+    ["danish", "Danish", '"danish"'],
+    ["dutch", "Dutch", '"dutch"'],
+    ["english", "English", '"english"'],
+    ["finnish", "Finnish", '"finnish"'],
+    ["french", "French", '"french"'],
+    ["german", "German", '"german"'],
+    ["hungarian", "Hungarian", '"hungarian"'],
+    ["italian", "Italian", '"italian"'],
+    ["norwegian", "Norwegian", '"norwegian"'],
+    ["portuguese", "Portuguese", '"portuguese"'],
+    ["romanian", "Romanian", '"romanian"'],
+    ["russian", "Russian", '"russian"'],
+    ["spanish", "Spanish", '"spanish"'],
+    ["swedish", "Swedish", '"swedish"'],
+    ["turkish", "Turkish", '"turkish"'],
+  ]),
+  locale: specs([
+    ["simple", "Simple binary comparison", '"simple"'],
+    ["en", "English", '"en"'],
+    ["fr", "French", '"fr"'],
+    ["de", "German", '"de"'],
+    ["es", "Spanish", '"es"'],
+    ["pt", "Portuguese", '"pt"'],
+    ["it", "Italian", '"it"'],
+    ["ru", "Russian", '"ru"'],
+    ["zh", "Chinese", '"zh"'],
+    ["ja", "Japanese", '"ja"'],
+    ["ko", "Korean", '"ko"'],
+    ["ar", "Arabic", '"ar"'],
+  ]),
+  whenMatched: specs([
+    ["replace", "Replace the existing document", '"replace"'],
+    ["keepExisting", "Keep the existing document", '"keepExisting"'],
+    ["merge", "Merge the matching documents", '"merge"'],
+    ["fail", "Fail the aggregation operation", '"fail"'],
+  ]),
+  whenNotMatched: specs([
+    ["insert", "Insert the document", '"insert"'],
+    ["discard", "Discard the document", '"discard"'],
+    ["fail", "Fail the aggregation operation", '"fail"'],
+  ]),
+};
+
+export const BULK_WRITE_OPERATIONS: MongoOperatorSpec[] = specs([
+  ["insertOne", "Insert one document", "insertOne: { document: { ${} } }"],
+  ["updateOne", "Update the first matching document", "updateOne: { filter: { ${} }, update: { $set: { ${} } } }"],
+  ["updateMany", "Update every matching document", "updateMany: { filter: { ${} }, update: { $set: { ${} } } }"],
+  ["replaceOne", "Replace the first matching document", "replaceOne: { filter: { ${} }, replacement: { ${} } }"],
+  ["deleteOne", "Delete the first matching document", "deleteOne: { filter: { ${} } }"],
+  ["deleteMany", "Delete every matching document", "deleteMany: { filter: { ${} } }"],
+]);
+
+const BULK_WRITE_FILTER: Spec = ["filter", "Documents the operation applies to", "filter: { ${} }"];
+const BULK_WRITE_UPSERT: Spec = ["upsert", "Insert the document when the filter matches nothing", "upsert: true"];
+
+export const BULK_WRITE_OPERATION_FIELDS: Record<string, MongoOperatorSpec[]> = {
+  insertOne: specs([["document", "Document to insert", "document: { ${} }"]]),
+  updateOne: specs([BULK_WRITE_FILTER, ["update", "Update operators or an aggregation pipeline", "update: { $set: { ${} } }"], BULK_WRITE_UPSERT, ["arrayFilters", "Conditions for the $[<identifier>] positional operator", 'arrayFilters: [{ "${elem}.${field}": ${} }]']]),
+  updateMany: specs([BULK_WRITE_FILTER, ["update", "Update operators or an aggregation pipeline", "update: { $set: { ${} } }"], BULK_WRITE_UPSERT, ["arrayFilters", "Conditions for the $[<identifier>] positional operator", 'arrayFilters: [{ "${elem}.${field}": ${} }]']]),
+  replaceOne: specs([BULK_WRITE_FILTER, ["replacement", "Whole document that replaces the match", "replacement: { ${} }"], BULK_WRITE_UPSERT]),
+  deleteOne: specs([BULK_WRITE_FILTER]),
+  deleteMany: specs([BULK_WRITE_FILTER]),
+};
+
+/**
+ * Option keys accepted by a collection method's trailing options argument.
+ *
+ * Only methods whose options DBX actually applies appear here, and only with the keys they
+ * accept: several of these are deserialized with `deny_unknown_fields`, so suggesting a key the
+ * driver does not know would produce a completion that fails at Run. Methods with no options
+ * support (`find`, `insertOne`, `deleteOne`, `countDocuments`, …) are absent by design.
+ *
+ * `createIndex` and `aggregate` pass their options through to the server command, so those lists
+ * are the common documented ones rather than an exhaustive set.
+ */
+export const METHOD_OPTION_KEYS: Record<string, MongoOperatorSpec[]> = {
+  findOne: specs([["sort", "Sort order used to pick the single document", "sort: { ${field}: -1 }"]]),
+  updateOne: specs([
+    ["upsert", "Insert the document when the filter matches nothing", "upsert: true"],
+    ["arrayFilters", "Conditions for the $[<identifier>] positional operator", 'arrayFilters: [{ "${elem}.${field}": ${} }]'],
+  ]),
+  updateMany: specs([
+    ["upsert", "Insert the document when the filter matches nothing", "upsert: true"],
+    ["arrayFilters", "Conditions for the $[<identifier>] positional operator", 'arrayFilters: [{ "${elem}.${field}": ${} }]'],
+  ]),
+  replaceOne: specs([["upsert", "Insert the replacement when the filter matches nothing", "upsert: true"]]),
+  findOneAndUpdate: specs([
+    ["returnDocument", "Return the document 'before' or 'after' the update", 'returnDocument: "after"'],
+    ["returnNewDocument", "Return the updated document instead of the original", "returnNewDocument: true"],
+    ["new", "Legacy alias for returnNewDocument", "new: true"],
+    ["upsert", "Insert the document when the filter matches nothing", "upsert: true"],
+    ["projection", "Fields to return", "projection: { ${field}: 1 }"],
+    ["sort", "Sort order used to pick the single document", "sort: { ${field}: -1 }"],
+    ["arrayFilters", "Conditions for the $[<identifier>] positional operator", 'arrayFilters: [{ "${elem}.${field}": ${} }]'],
+  ]),
+  findOneAndReplace: specs([
+    ["returnDocument", "Return the document 'before' or 'after' the replacement", 'returnDocument: "after"'],
+    ["returnNewDocument", "Return the replacement instead of the original", "returnNewDocument: true"],
+    ["new", "Legacy alias for returnNewDocument", "new: true"],
+    ["upsert", "Insert the replacement when the filter matches nothing", "upsert: true"],
+    ["projection", "Fields to return", "projection: { ${field}: 1 }"],
+    ["sort", "Sort order used to pick the single document", "sort: { ${field}: -1 }"],
+  ]),
+  findOneAndDelete: specs([
+    ["projection", "Fields to return", "projection: { ${field}: 1 }"],
+    ["sort", "Sort order used to pick the single document", "sort: { ${field}: -1 }"],
+  ]),
+  bulkWrite: specs([["ordered", "Stop at the first failed operation", "ordered: false"]]),
+  createIndex: specs([
+    ["name", "Index name", 'name: "${name}"'],
+    ["unique", "Reject duplicate values", "unique: true"],
+    ["sparse", "Index only documents that have the field", "sparse: true"],
+    ["expireAfterSeconds", "TTL index lifetime in seconds", "expireAfterSeconds: 3600"],
+    ["partialFilterExpression", "Index only documents matching this filter", "partialFilterExpression: { ${} }"],
+    ["collation", "Locale-aware comparison rules", 'collation: { locale: "${en}" }'],
+    ["hidden", "Keep the index but hide it from the planner", "hidden: true"],
+  ]),
+  aggregate: specs([
+    ["allowDiskUse", "Let stages write temporary files", "allowDiskUse: true"],
+    ["maxTimeMS", "Server-side time limit in milliseconds", "maxTimeMS: 5000"],
+    ["collation", "Locale-aware comparison rules", 'collation: { locale: "${en}" }'],
+    ["hint", "Index to use", 'hint: "${index}"'],
+    ["comment", "Comment recorded in the server logs and profiler", 'comment: "${comment}"'],
+    ["let", "Variables available to the pipeline as $$name", "let: { ${name}: ${} }"],
+    ["explain", "Return the query plan instead of the results", "explain: true"],
+  ]),
+  createCollection: specs([
+    ["validator", "Rules every document must satisfy", 'validator: { $jsonSchema: { bsonType: "object", required: ["${field}"], properties: {} } }'],
+    ["validationLevel", "How strictly to validate existing documents", 'validationLevel: "${strict}"'],
+    ["validationAction", "Reject or only warn on invalid documents", 'validationAction: "${error}"'],
+    ["capped", "Fixed-size collection that overwrites its oldest documents", "capped: true"],
+    ["size", "Maximum size of a capped collection, in bytes", "size: ${}"],
+    ["max", "Maximum number of documents in a capped collection", "max: ${}"],
+    ["timeseries", "Store measurements as a time series", 'timeseries: { timeField: "${timestamp}", metaField: "${meta}", granularity: "${seconds}" }'],
+    ["expireAfterSeconds", "Delete time-series documents after this age", "expireAfterSeconds: ${}"],
+    ["clusteredIndex", "Cluster the documents by _id", "clusteredIndex: { key: { _id: 1 }, unique: true }"],
+    ["collation", "Default locale-aware comparison rules", 'collation: { locale: "${en}" }'],
+    ["viewOn", "Make this a view over another collection", 'viewOn: "${collection}"'],
+    ["pipeline", "Aggregation pipeline the view applies", "pipeline: [${}]"],
+    ["changeStreamPreAndPostImages", "Record document images for change streams", "changeStreamPreAndPostImages: { enabled: true }"],
+  ]),
+  createUser: specs([
+    ["user", "User name", 'user: "${name}"'],
+    ["pwd", "User password", 'pwd: "${password}"'],
+    ["roles", "Roles granted to the user", "roles: []"],
+    ["customData", "Arbitrary information stored with the user", "customData: {}"],
+    ["mechanisms", "Authentication mechanisms", "mechanisms: [${}]"],
+  ]),
+  // Command documents run as written, so this lists the commands worth typing by hand.
+  runCommand: specs([
+    ["ping", "Check that the server responds", "ping: 1"],
+    ["hello", "Server role and replica set state", "hello: 1"],
+    ["buildInfo", "Server version and build details", "buildInfo: 1"],
+    ["serverStatus", "Server metrics", "serverStatus: 1"],
+    ["hostInfo", "Host system details", "hostInfo: 1"],
+    ["connectionStatus", "Authenticated user and roles", "connectionStatus: 1"],
+    ["dbStats", "Database storage statistics", "dbStats: 1"],
+    ["collStats", "Collection storage statistics", 'collStats: "${collection}"'],
+    ["listCollections", "Collections in this database", "listCollections: 1"],
+    ["listIndexes", "Indexes of a collection", 'listIndexes: "${collection}"'],
+    ["find", "Query a collection", 'find: "${collection}", filter: {}'],
+    ["count", "Count matching documents", 'count: "${collection}", query: {}'],
+    ["distinct", "Distinct values of a field", 'distinct: "${collection}", key: "${field}"'],
+    ["aggregate", "Run an aggregation pipeline", 'aggregate: "${collection}", pipeline: [], cursor: {}'],
+    ["explain", "Query plan for a command", 'explain: { find: "${collection}", filter: {} }'],
+    ["insert", "Insert documents", 'insert: "${collection}", documents: [{}]'],
+    ["update", "Update documents", 'update: "${collection}", updates: [{ q: {}, u: { $set: {} } }]'],
+    ["delete", "Delete documents", 'delete: "${collection}", deletes: [{ q: {}, limit: 1 }]'],
+    ["findAndModify", "Atomically modify and return one document", 'findAndModify: "${collection}", query: {}, update: { $set: {} }'],
+    ["create", "Create a collection", 'create: "${collection}"'],
+    ["drop", "Drop a collection", 'drop: "${collection}"'],
+    ["collMod", "Change a collection's options", 'collMod: "${collection}", validator: {}'],
+    ["convertToCapped", "Convert a collection to a capped one", 'convertToCapped: "${collection}", size: ${}'],
+    ["createIndexes", "Create indexes", 'createIndexes: "${collection}", indexes: [{ key: { ${field}: 1 }, name: "${name}" }]'],
+    ["dropIndexes", "Drop an index", 'dropIndexes: "${collection}", index: "${name}"'],
+    ["validate", "Check a collection's data and indexes", 'validate: "${collection}"'],
+    ["currentOp", "Operations in progress", "currentOp: 1"],
+    ["usersInfo", "Users of this database", "usersInfo: 1"],
+    ["profile", "Read the profiling level", "profile: -1"],
+    ["getLog", "Recent server log lines", 'getLog: "global"'],
+  ]),
+};
+
+/** Option keys accepted by the stages whose shape is a fixed set of names. */
+export const STAGE_OPTION_KEYS: Record<string, MongoOperatorSpec[]> = {
+  $lookup: specs([
+    ["from", "Collection to join", 'from: "${collection}"'],
+    ["localField", "Field on the input documents", 'localField: "${field}"'],
+    ["foreignField", "Field on the joined collection", 'foreignField: "_id"'],
+    ["as", "Output array field", 'as: "${as}"'],
+    ["let", "Variables for the joined pipeline", "let: { ${name}: ${} }"],
+    ["pipeline", "Pipeline to run on the joined collection", "pipeline: [${}]"],
+  ]),
+  $graphLookup: specs([
+    ["from", "Collection to search", 'from: "${collection}"'],
+    ["startWith", "Expression to start the search from", 'startWith: "$${field}"'],
+    ["connectFromField", "Field to recurse from", 'connectFromField: "${field}"'],
+    ["connectToField", "Field to match against", 'connectToField: "_id"'],
+    ["as", "Output array field", 'as: "${as}"'],
+    ["maxDepth", "Maximum recursion depth", "maxDepth: 3"],
+    ["depthField", "Field holding the recursion depth", 'depthField: "${depth}"'],
+    ["restrictSearchWithMatch", "Extra filter on the searched documents", "restrictSearchWithMatch: { ${} }"],
+  ]),
+  $unwind: specs([
+    ["path", "Array field to unwind", 'path: "$${field}"'],
+    ["includeArrayIndex", "Field holding the array index", 'includeArrayIndex: "${index}"'],
+    ["preserveNullAndEmptyArrays", "Keep documents with a missing or empty array", "preserveNullAndEmptyArrays: true"],
+  ]),
+  $merge: specs([
+    ["into", "Target collection", 'into: "${collection}"'],
+    ["on", "Fields identifying a document", 'on: "_id"'],
+    ["let", "Variables for whenMatched", "let: { ${name}: ${} }"],
+    ["whenMatched", "Action when a document matches", 'whenMatched: "${merge}"'],
+    ["whenNotMatched", "Action when no document matches", 'whenNotMatched: "${insert}"'],
+  ]),
+  $bucket: specs([
+    ["groupBy", "Expression to group by", 'groupBy: "$${field}"'],
+    ["boundaries", "Bucket boundaries", "boundaries: [${}]"],
+    ["default", "Bucket for values outside the boundaries", 'default: "${other}"'],
+    ["output", "Accumulators for each bucket", "output: { ${} }"],
+  ]),
+  $bucketAuto: specs([
+    ["groupBy", "Expression to group by", 'groupBy: "$${field}"'],
+    ["buckets", "Number of buckets", "buckets: 5"],
+    ["output", "Accumulators for each bucket", "output: { ${} }"],
+    ["granularity", "Preferred number series", 'granularity: "${R20}"'],
+  ]),
+  $sample: specs([["size", "Number of documents to return", "size: 10"]]),
+  $unionWith: specs([
+    ["coll", "Collection to union with", 'coll: "${collection}"'],
+    ["pipeline", "Pipeline to run on that collection", "pipeline: [${}]"],
+  ]),
+  $setWindowFields: specs([
+    ["partitionBy", "Expression to partition by", 'partitionBy: "$${field}"'],
+    ["sortBy", "Sort order within a partition", "sortBy: { ${field}: 1 }"],
+    ["output", "Window accumulators", "output: { ${} }"],
+  ]),
+  $geoNear: specs([
+    ["near", "Point to measure from", 'near: { type: "Point", coordinates: [0, 0] }'],
+    ["distanceField", "Field holding the computed distance", 'distanceField: "${distance}"'],
+    ["maxDistance", "Maximum distance in meters", "maxDistance: 1000"],
+    ["minDistance", "Minimum distance in meters", "minDistance: 0"],
+    ["query", "Extra filter on the documents", "query: { ${} }"],
+    ["spherical", "Use spherical geometry", "spherical: true"],
+    ["key", "Geospatial index to use", 'key: "${field}"'],
+    ["includeLocs", "Field holding the matched location", 'includeLocs: "${location}"'],
+  ]),
+  $replaceRoot: specs([["newRoot", "Expression producing the new root document", 'newRoot: "$${field}"']]),
+  $densify: specs([
+    ["field", "Field whose values will be densified", 'field: "${field}"'],
+    ["partitionByFields", "Fields that partition the documents", 'partitionByFields: ["${field}"]'],
+    ["range", "Range specification to densify", 'range: { step: 1, bounds: "${full}" }'],
+  ]),
+  $fill: specs([
+    ["partitionBy", "Expression to partition by", 'partitionBy: "$${field}"'],
+    ["partitionByFields", "Fields that partition the documents", 'partitionByFields: ["${field}"]'],
+    ["sortBy", "Sort order for evaluating values", "sortBy: { ${field}: 1 }"],
+    ["output", "Fields to fill", "output: { ${field}: { value: ${} } }"],
+  ]),
+};
+
+/** Literal values that are worth completing in value position. */
+export const VALUE_SNIPPETS: MongoOperatorSpec[] = specs([
+  ["ObjectId", "MongoDB ObjectId value", 'ObjectId("${id}")'],
+  ["ISODate", "MongoDB ISODate value", 'ISODate("${date}")'],
+  ["new Date", "JavaScript date value", 'new Date("${date}")'],
+  ["NumberLong", "64-bit integer value", 'NumberLong("${value}")'],
+  ["NumberInt", "32-bit integer value", "NumberInt(${value})"],
+  ["NumberDecimal", "128-bit decimal value", 'NumberDecimal("${value}")'],
+  ["UUID", "UUID value", 'UUID("${uuid}")'],
+  ["BinData", "Binary value", 'BinData(0, "${base64}")'],
+  ["Timestamp", "Internal timestamp value", "Timestamp(${seconds}, ${ordinal})"],
+  ["MinKey", "Sorts before every other value", "MinKey"],
+  ["MaxKey", "Sorts after every other value", "MaxKey"],
+  ["null", "Null value", "null"],
+  ["true", "Boolean true", "true"],
+  ["false", "Boolean false", "false"],
+]);
+
+/**
+ * Extended JSON spellings of the same values, as the driver returns them and
+ * as they may be typed directly. Each entry is the wrapper's body; in a bare
+ * value position the completion adds the surrounding braces.
+ */
+export const EXTENDED_JSON_VALUES: MongoOperatorSpec[] = specs([
+  ["$oid", "ObjectId as extended JSON", '$oid: "${id}"'],
+  ["$date", "Date as extended JSON", '$date: "${date}"'],
+  ["$numberLong", "64-bit integer as extended JSON", '$numberLong: "${value}"'],
+  ["$numberInt", "32-bit integer as extended JSON", '$numberInt: "${value}"'],
+  ["$numberDouble", "Double as extended JSON", '$numberDouble: "${value}"'],
+  ["$numberDecimal", "128-bit decimal as extended JSON", '$numberDecimal: "${value}"'],
+  ["$uuid", "UUID as extended JSON", '$uuid: "${uuid}"'],
+  ["$binary", "Binary as extended JSON", '$binary: { base64: "${base64}", subType: "00" }'],
+  ["$timestamp", "Internal timestamp as extended JSON", "$timestamp: { t: ${seconds}, i: ${ordinal} }"],
+  ["$regularExpression", "Regular expression as extended JSON", '$regularExpression: { pattern: "${pattern}", options: "" }'],
+  ["$minKey", "MinKey as extended JSON", "$minKey: 1"],
+  ["$maxKey", "MaxKey as extended JSON", "$maxKey: 1"],
+]);
+
+/**
+ * Everyday operators, floated above the long tail. Without this the lists sort
+ * alphabetically once the user has typed only `$`, which buries `$eq` and
+ * `$match` under `$bitsAllClear` and `$bucketAuto`. Matched per table, so a
+ * label common in one position (`$set` as an update operator) does not have to
+ * be common in another.
+ */
+export const COMMON_OPERATORS: ReadonlySet<string> = new Set([
+  // query
+  "$eq",
+  "$ne",
+  "$gt",
+  "$gte",
+  "$lt",
+  "$lte",
+  "$in",
+  "$nin",
+  "$and",
+  "$or",
+  "$not",
+  "$exists",
+  "$regex",
+  "$elemMatch",
+  "$expr",
+  // extended JSON values
+  "$oid",
+  "$date",
+  // update
+  "$set",
+  "$unset",
+  "$inc",
+  "$push",
+  "$pull",
+  "$addToSet",
+  "$each",
+  // stages
+  "$match",
+  "$group",
+  "$project",
+  "$sort",
+  "$limit",
+  "$skip",
+  "$lookup",
+  "$unwind",
+  "$count",
+  "$addFields",
+  // accumulators
+  "$sum",
+  "$avg",
+  "$first",
+  "$last",
+  "$max",
+  "$min",
+  // expressions
+  "$cond",
+  "$ifNull",
+  "$concat",
+  "$toString",
+  "$dateToString",
+  "$size",
+  "$arrayElemAt",
+  "$add",
+  "$subtract",
+  "$multiply",
+  "$filter",
+  "$map",
+  // values
+  "ObjectId",
+  "ISODate",
+]);
+
+export const UPDATE_OPERATOR_LABELS: ReadonlySet<string> = new Set(UPDATE_OPERATORS.map((operator) => operator.label));

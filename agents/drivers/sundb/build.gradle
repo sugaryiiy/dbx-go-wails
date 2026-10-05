@@ -1,0 +1,17 @@
+dependencies {
+    // The vendor ships no Maven-published artifact, so the driver JAR is
+    // vendored under libs/ (git-whitelisted like cache/gbase8a/oscar/uxdb) and
+    // bundled into the Agent so SunDB connections work without user setup.
+    // A newer vendor JAR can still be supplied per connection via
+    // `jdbc_driver_paths`, which the Agent loads in an isolated URLClassLoader.
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+}
+
+tasks.named('shadowJar') {
+    manifest {
+        attributes(
+            'Agent-Label': 'SunDB',
+            'Main-Class': 'com.dbx.agent.sundb.SundbAgent'
+        )
+    }
+}
