@@ -77,7 +77,7 @@ const { t } = useI18n();
 const { toast } = useToast();
 const settingsStore = useSettingsStore();
 const toolbarItems = computed(() => settingsStore.editorSettings.toolbarItems);
-const { isMac, isDesktop, showControls, isMaximized, isFullscreen, isAlwaysOnTop, minimize, toggleMaximize, toggleAlwaysOnTop, close } = useWindowControls();
+const { isMac, isDesktop, hasNativeTitleBar, showControls, isMaximized, isFullscreen, isAlwaysOnTop, minimize, toggleMaximize, toggleAlwaysOnTop, close } = useWindowControls();
 const showAlwaysOnTopButton = computed(() => isDesktop && (toolbarItems.value.alwaysOnTop || isAlwaysOnTop.value));
 const workspaceLabel = computed(() => props.workspaceName?.trim() || t("workbenchLayout.workspace"));
 const actionSearchShortcut = computed(() => (settingsStore.editorSettings.shortcuts.findAction ? formatShortcutDisplay(settingsStore.editorSettings.shortcuts.findAction) : ""));
@@ -137,7 +137,7 @@ watch(
 const toolbarEl = ref<HTMLElement>();
 const compact = ref(false);
 const measuredTrafficLightInset = ref<number | null>(null);
-const shouldReserveTrafficLightInset = computed(() => shouldReserveMacTrafficLightInset(isMac, isFullscreen.value, isDesktop));
+const shouldReserveTrafficLightInset = computed(() => shouldReserveMacTrafficLightInset(isMac, isFullscreen.value, isDesktop && !hasNativeTitleBar));
 const toolbarStyle = computed(() => (shouldReserveTrafficLightInset.value ? { paddingLeft: `${measuredTrafficLightInset.value ?? parseInt(macTrafficLightInsetPaddingForScale(settingsStore.editorSettings.uiScale), 10)}px` } : undefined));
 let layoutFrame = 0;
 let scaleSyncTimer = 0;

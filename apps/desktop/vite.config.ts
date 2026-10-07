@@ -62,9 +62,12 @@ const publicBasePath = viteBase.startsWith("/") ? viteBase.replace(/\/+$/, "") :
 const apiProxyPath = publicBasePath ? `${publicBasePath}/api` : "/api";
 const backendUrl = process.env.DBX_BACKEND_URL || "http://localhost:4224";
 
-export default defineConfig(async () => ({
+export default defineConfig(async ({ mode }) => ({
   root: import.meta.dirname,
-  base: viteBase,
+  // Native desktop assets and /api share Wails' root origin regardless of a
+  // developer's web deployment prefix in the surrounding shell environment.
+  base: mode === "wails" ? "/" : viteBase,
+  define: { "import.meta.env.VITE_DBX_BACKEND": JSON.stringify("go") },
   plugins: [connectionTypesPlugin(), publicBasePathRedirectPlugin(publicBasePath), vue(), tailwindcss()],
   resolve: {
     alias: {
@@ -103,7 +106,9 @@ export default defineConfig(async () => ({
     proxy: {
       [apiProxyPath]: {
         target: backendUrl,
-        changeOrigin: true,
+        // Keep the browser-facing Host so Go's same-origin validation can
+        // compare it with Origin on development POST requests.
+        changeOrigin: false,
         ws: true,
         rewrite: publicBasePath ? (requestPath) => requestPath.slice(publicBasePath.length) || "/" : undefined,
       },

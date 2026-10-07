@@ -69,7 +69,7 @@ async function request(path, { method = 'GET', body, raw = false, allowError = f
     throw new Error(`${method} ${path}: HTTP ${response.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`);
   }
   if (allowError) return { status: response.status, data };
-  assert.ok(data !== null || text === 'null' || !text, `${path}: expected JSON response`);
+  assert.ok(data !== null || text.trim() === 'null' || !text, `${path}: expected JSON response`);
   return data;
 }
 

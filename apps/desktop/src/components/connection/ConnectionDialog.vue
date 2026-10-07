@@ -71,6 +71,8 @@ import {
 } from "@/lib/plugins/frontendPlugin";
 import type { PluginCenterFocus } from "@/lib/plugins/pluginCenterNavigation";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isWailsRuntime, openWailsFile, saveWailsFile } from "@/lib/backend/wailsRuntime";
+import { GO_CONNECTION_PROFILES, isGoBackend } from "@/lib/backend/goCapabilities";
 import { isWindows } from "@/lib/backend/platform";
 import { applyMeilisearchBasePathToExternalConfig, applyParsedConnectionUrl, normalizeMongoConnectionString, parseConnectionUrl } from "@/lib/connection/connectionUrl";
 import { hasXuguConnectionDatabase } from "@/lib/connection/xuguDatabase";
@@ -294,6 +296,7 @@ const editGlobalConnectTimeoutSecs = ref(settingsStore.editorSettings.globalConn
 const editGlobalQueryTimeoutSecs = ref(settingsStore.editorSettings.globalQueryTimeoutSecs);
 const open = defineModel<boolean>("open", { default: false });
 const isDesktop = isTauriRuntime();
+const hasNativeFileDialogs = isDesktop || isWailsRuntime();
 
 const props = defineProps<{
   editConfig?: ConnectionConfig;
@@ -3679,7 +3682,7 @@ function jdbcProductCategory(profileId: string): ConnectionProfileCategory {
 
 // `influxdb3` is presented as a version option inside the InfluxDB card
 // (see the version <Select> below), not as a standalone picker entry.
-const dbOptions: DbOption[] = [...CONNECTION_PICKER_OPTIONS.filter((option) => option.value !== "influxdb3"), ...jdbcProductPickerOptions().map((option) => ({ ...option, category: jdbcProductCategory(option.value) }))];
+const dbOptions: DbOption[] = [...CONNECTION_PICKER_OPTIONS.filter((option) => option.value !== "influxdb3"), ...jdbcProductPickerOptions().map((option) => ({ ...option, category: jdbcProductCategory(option.value) }))].filter((option) => !isGoBackend() || GO_CONNECTION_PROFILES.has(option.value));
 
 const dbCategoryDefinitions = dbCategoryMetadata.map((category) => ({
   ...category,
@@ -3710,7 +3713,7 @@ const dbCategories = computed<DbCategory[]>(() => {
   if (pluginOptions.length) {
     categories.push({ key: "plugins", title: t("connection.databaseCategoryPlugins"), options: pluginOptions });
   }
-  return categories;
+  return isGoBackend() ? categories.filter((category) => category.options.length > 0 && category.key !== "plugins") : categories;
 });
 
 function matchesDbOption(option: DbOption, keyword: string, categoryTitle = "") {
@@ -6871,6 +6874,11 @@ async function browseKafkaKerberosFile(target: "keytab" | "krb5") {
 }
 
 async function browseDbFilePath() {
+  if (isWailsRuntime()) {
+    const selected = await openWailsFile({ title: "Select Database File", multiple: false });
+    if (typeof selected === "string") form.value.host = selected;
+    return;
+  }
   if (isTauriRuntime()) {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const filters = form.value.db_type === "duckdb" ? [{ name: "DuckDB", extensions: ["duckdb", "db"] }] : form.value.db_type === "access" ? [{ name: "Microsoft Access", extensions: ["accdb", "mdb"] }] : form.value.db_type === "h2" ? [{ name: "H2", extensions: ["db"] }] : undefined;
@@ -6938,6 +6946,13 @@ function ensureSqliteFileExtension(path: string): string {
 }
 
 async function createSqliteFilePath() {
+  if (isWailsRuntime()) {
+    const selected = await saveWailsFile({ title: t("connection.createSqliteFile"), defaultPath: "database.db", filters: [{ name: "SQLite", extensions: SQLITE_DATABASE_FILE_EXTENSIONS }] });
+    // SQLite creates the database when the connection opens. Avoid truncating
+    // an existing database selected by the native save dialog.
+    if (selected) form.value.host = ensureSqliteFileExtension(selected);
+    return;
+  }
   if (!isTauriRuntime()) return;
   const { save } = await import("@tauri-apps/plugin-dialog");
   const selected = await save({
@@ -7129,7 +7144,7 @@ function openExternalUrl(url: string) {
                 <Input data-connection-db-search v-model="dbSearchQuery" v-connection-dialog-auto-focus class="h-9 pl-8" :placeholder="t('connection.searchDatabasePlaceholder')" />
               </div>
             </div>
-            <Button data-jdbc-connection-entry type="button" variant="outline" class="h-9 shrink-0 gap-2" @click="goToConnectionStep('jdbc')">
+            <Button v-if="!isGoBackend()" data-jdbc-connection-entry type="button" variant="outline" class="h-9 shrink-0 gap-2" @click="goToConnectionStep('jdbc')">
               <DatabaseIcon db-type="jdbc" class="h-4 w-4" />
               {{ t("connection.jdbcConnection") }}
             </Button>
@@ -7572,7 +7587,7 @@ function openExternalUrl(url: string) {
                       <div class="col-span-3 space-y-1">
                         <div class="flex items-center gap-1">
                           <Input v-model="form.host" class="flex-1" :placeholder="sqliteUsesSsh ? t('connection.sqliteRemotePathPlaceholder') : filePathPlaceholder" />
-                          <Tooltip v-if="isDesktop">
+                          <Tooltip v-if="hasNativeFileDialogs">
                             <TooltipTrigger as-child>
                               <Button variant="outline" size="icon" class="h-9 w-9 shrink-0" :disabled="sqliteUsesSsh" @click="browseDbFilePath">
                                 <FolderOpen class="h-4 w-4" />
@@ -7588,7 +7603,7 @@ function openExternalUrl(url: string) {
                             </TooltipTrigger>
                             <TooltipContent>{{ t("connection.createDuckDbFile") }}</TooltipContent>
                           </Tooltip>
-                          <Tooltip v-if="isDesktop && form.db_type === 'sqlite'">
+                          <Tooltip v-if="hasNativeFileDialogs && form.db_type === 'sqlite'">
                             <TooltipTrigger as-child>
                               <Button variant="outline" size="icon" class="h-9 w-9 shrink-0" :disabled="sqliteUsesSsh" @click="createSqliteFilePath">
                                 <FilePlus2 class="h-4 w-4" />

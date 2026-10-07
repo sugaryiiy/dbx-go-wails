@@ -1,4 +1,5 @@
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isWailsRuntime, wailsApp } from "@/lib/backend/wailsRuntime";
 import { getPlatform, type Platform } from "@/lib/backend/platform";
 
 interface ClipboardApi {
@@ -144,6 +145,7 @@ export function eventTargetAllowsAppClipboardShortcut(event: ClipboardShortcutEv
 }
 
 export async function readTextFromClipboard(env: ClipboardEnvironment = globalThis as unknown as ClipboardEnvironment): Promise<string> {
+  if (isWailsRuntime(env)) return wailsApp(env).ClipboardReadText();
   if (isTauriRuntime(env as unknown as Record<string, unknown>)) {
     try {
       const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
@@ -202,6 +204,11 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 export async function copyToClipboard(text: string, env: ClipboardEnvironment = globalThis as unknown as ClipboardEnvironment): Promise<void> {
   text = clipboardLineEndings(text);
+  if (isWailsRuntime(env)) {
+    await wailsApp(env).ClipboardWriteText(text);
+    recordClipboardWrite();
+    return;
+  }
 
   if (isTauriRuntime(env as unknown as Record<string, unknown>)) {
     try {

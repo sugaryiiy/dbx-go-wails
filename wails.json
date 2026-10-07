@@ -1,0 +1,17 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "DBX Go",
+  "outputfilename": "dbx-go-wails",
+  "frontend:dir": ".",
+  "frontend:install": "",
+  "frontend:build": "node node_modules/vite/bin/vite.js build --config apps/desktop/vite.config.ts --mode wails",
+  "frontend:dev:build": "node node_modules/vite/bin/vite.js build --config apps/desktop/vite.config.ts --mode wails",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "assetdir": "dist",
+  "wailsjsdir": "apps/desktop/src/generated/wails",
+  "build:dir": "build/wails",
+  "build:tags": "desktop",
+  "author": { "name": "DBX Contributors" },
+  "info": { "productName": "DBX Go", "productVersion": "0.1.0", "copyright": "DBX Contributors", "comments": "Database Workbench — Go and Wails migration" }
+}

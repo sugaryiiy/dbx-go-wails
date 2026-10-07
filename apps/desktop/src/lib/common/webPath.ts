@@ -8,6 +8,9 @@ function normalizeBasePath(value: string | undefined): string {
 
 function inferredRuntimeBasePath(pathname: string): string {
   const normalized = pathname.replace(/\/+$/, "");
+  // Wails loads /index.html in its native WebView. It is the entry document,
+  // never an API mount prefix (including deployments under a subdirectory).
+  if (normalized.endsWith("/index.html")) return normalized.slice(0, -"/index.html".length);
   if (!normalized || normalized === "/login") return "";
   if (normalized.endsWith("/login")) return normalized.slice(0, -"/login".length);
   return normalized;

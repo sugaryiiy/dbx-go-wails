@@ -108,3 +108,15 @@ dbx-devtest-connections.json
 # Real database integration credentials (see docs/TEST_ENVIRONMENTS.md)
 /docs/TEST_ENVIRONMENTS.md
 .wrangler/
+
+# Go / Wails generated output
+/build/bin/
+/build/darwin/
+/build/windows/
+/wailsjs/
+
+/build/wails/bin/
+/apps/desktop/src/generated/wails/
+
+# Keep upstream workflow references disabled outside workflows/.
+!.github/legacy-workflows/

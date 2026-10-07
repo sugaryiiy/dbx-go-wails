@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { apiUrl, apiWebSocketUrl, dbxWebBasePath, webPath } from "@/lib/common/webPath";
 
 describe("webPath", () => {
+  it("does not treat the Wails entry document as an API mount", () => {
+    expect(dbxWebBasePath("/index.html", "./")).toBe("");
+    expect(apiUrl("/auth/check", dbxWebBasePath("/index.html", "./"))).toBe("/api/auth/check");
+    expect(dbxWebBasePath("/tools/dbx/index.html", "./")).toBe("/tools/dbx");
+  });
   it("keeps root deployments on root-relative API paths", () => {
     expect(dbxWebBasePath("/", "/")).toBe("");
     expect(apiUrl("/api/auth/check", "")).toBe("/api/auth/check");

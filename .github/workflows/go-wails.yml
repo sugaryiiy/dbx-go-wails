@@ -1,0 +1,55 @@
+name: Go and Wails
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-wails-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOFLAGS: -mod=mod
+
+jobs:
+  backend:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -race ./internal/... ./cmd/...
+      - run: go build -o build/bin/dbx-web ./cmd/dbx-web
+
+  desktop:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+      - run: pnpm --filter dbx... install --frozen-lockfile
+      - name: Test desktop adapters
+        run: pnpm exec vitest run apps/desktop/src/lib/backend/wailsRuntime.spec.ts apps/desktop/src/lib/backend/wailsProgress.spec.ts apps/desktop/src/lib/backend/__tests__/wailsExport.spec.ts apps/desktop/src/lib/__tests__/common/webPath.spec.ts
+      - run: pnpm build:wails
+      - run: go test -tags desktop .
+      - name: Test disposable HTTP workbench
+        run: pnpm test:go-smoke

@@ -1,4 +1,5 @@
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isWailsRuntime, saveWailsBytes } from "@/lib/backend/wailsRuntime";
 import { appendDebugLog, getBrowserMemorySnapshot, isDebugLoggingEnabled } from "@/lib/backend/debugLog";
 
 export async function saveTextFile(content: string, defaultFileName: string, filterName: string, filterExt: string, diagnostics: { exportId?: string; operation?: string } = {}): Promise<boolean> {
@@ -15,6 +16,11 @@ export async function saveTextFile(content: string, defaultFileName: string, fil
   };
 
   logSaveStage("start");
+  if (isWailsRuntime()) {
+    await saveWailsBytes(defaultFileName, new TextEncoder().encode(content));
+    logSaveStage("write-done");
+    return true;
+  }
   if (isTauriRuntime()) {
     const { save } = await import("@tauri-apps/plugin-dialog");
     const { writeTextFile } = await import("@tauri-apps/plugin-fs");

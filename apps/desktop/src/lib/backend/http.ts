@@ -248,6 +248,9 @@ import type { BuildDatabaseSqlExportOptions, BuildExportInsertStatementsOptions,
 import { loadBrowserAppState, saveBrowserAppState } from "@/lib/backend/browserAppStateStorage";
 import type { DataCompareFromTablesOptions, DataCompareFromTablesPreparation, DataCompareSyncPlan, DataCompareSyncPlanOptions, DataComparePreparation, DataComparePreparationOptions } from "@/lib/dataGrid/dataCompare";
 import { apiUrl, apiWebSocketUrl } from "@/lib/common/webPath";
+import { isWailsRuntime, saveWailsBytes, wailsApp } from "./wailsRuntime";
+import { pollWailsProgress } from "./wailsProgress";
+import { isGoBackend } from "./goCapabilities";
 import type {
   ActivePluginSession,
   ConnectionLivenessMessage,
@@ -1904,6 +1907,10 @@ export async function buildSingleColumnAlterSql(options: BuildSingleColumnAlterS
 }
 
 export async function analyzeEditableQueryEditability(sql: string): Promise<QueryEditability> {
+  if (isGoBackend()) {
+    const analysis = await import("@/lib/sql/sqlAnalysis");
+    return analysis.analyzeEditableQueryEditability(sql);
+  }
   return post("/api/query/analyze-editability", { sql });
 }
 
@@ -2966,6 +2973,12 @@ export async function importTableFile(request: TableImportRequest, onProgress: (
   });
   if (!res.ok) throw await backendResponseError(res);
 
+  if (isWailsRuntime()) {
+    const progress = await pollWailsProgress<TableImportProgress>(apiUrl(`/api/import/progress/${encodeURIComponent(request.importId)}`), onProgress, (value) => ["done", "error", "cancelled"].includes(value.status));
+    if (progress.status !== "done") throw new Error(progress.error || (progress.status === "cancelled" ? "Import cancelled" : "Import failed"));
+    return { importId: progress.importId, rowsImported: progress.rowsImported, totalRows: progress.totalRows, elapsedMs: progress.elapsedMs };
+  }
+
   // 2. SSE to listen for progress
   return new Promise((resolve, reject) => {
     const es = new EventSource(apiUrl(`/api/import/progress/${request.importId}`));
@@ -3378,6 +3391,28 @@ export async function cancelTableExport(exportId: string): Promise<void> {
 export async function startQueryResultExport(request: QueryResultExportRequest, onProgress: (progress: TableExportProgress) => void): Promise<TableExportProgress> {
   const { exportId } = request;
 
+  if (isWailsRuntime()) {
+    await post("/api/export/query-result", { request });
+    const progress = await pollWailsProgress<TableExportProgress>(
+      apiUrl(`/api/export/query-result/progress/${encodeURIComponent(exportId)}`),
+      (value) => onProgress(value.status === "Done" ? { ...value, status: "Writing" } : value),
+      (value) => ["Done", "Error", "Cancelled"].includes(value.status),
+    );
+    if (progress.status === "Error") throw new Error(progress.errorMessage || "Export failed");
+    if (progress.status === "Done") {
+      try {
+        const saved = await wailsApp().SaveQueryResultExport(exportId, `query-result.${request.format}`);
+        const finalProgress: TableExportProgress = { ...progress, status: saved ? "Done" : "Cancelled" };
+        onProgress(finalProgress);
+        return finalProgress;
+      } catch (error) {
+        onProgress({ ...progress, status: "Error", errorMessage: error instanceof Error ? error.message : String(error) });
+        throw error;
+      }
+    }
+    return progress;
+  }
+
   return new Promise((resolve, reject) => {
     let started = false;
     let settled = false;
@@ -3440,6 +3475,7 @@ export async function exportQueryResultCsv(filePath: string, columns: string[], 
   const { formatCsv } = await import("@/lib/export/exportFormats");
   const content = formatCsv(columns, rows as (string | number | boolean | null)[][], csvQuoteMode, nullLiteral);
   const fileName = filePath.split(/[\\/]/).pop() || "export.csv";
+  if (isWailsRuntime()) return saveWailsBytes(fileName, new TextEncoder().encode("\uFEFF" + content));
   const blob = new Blob(["\uFEFF", content], {
     type: "text/csv;charset=utf-8",
   });
@@ -3455,8 +3491,9 @@ export async function exportTableDataCsv(_options: TableCsvExportOptions): Promi
   throw new Error("Streaming table CSV export is only available in the desktop runtime");
 }
 
-function downloadTextFile(filePath: string, fallbackFileName: string, content: string, mimeType: string): void {
+async function downloadTextFile(filePath: string, fallbackFileName: string, content: string, mimeType: string): Promise<void> {
   const fileName = filePath.split(/[\\/]/).pop() || fallbackFileName;
+  if (isWailsRuntime()) return saveWailsBytes(fileName, new TextEncoder().encode("\uFEFF" + content));
   const blob = new Blob(["\uFEFF", content], { type: mimeType });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -3492,6 +3529,7 @@ export async function exportQueryResultXlsx(
     autoFilter,
   });
   const fileName = filePath.split(/[\\/]/).pop() || "export.xlsx";
+  if (isWailsRuntime()) return saveWailsBytes(fileName, new Uint8Array(workbook));
   const blob = new Blob([new Uint8Array(workbook)], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
@@ -3520,6 +3558,7 @@ export async function exportQueryResultsXlsx(
   const { buildXlsxWorkbookMulti } = await import("@/lib/export/xlsxExport");
   const workbook = buildXlsxWorkbookMulti(autoFilter === undefined ? worksheets : worksheets.map((worksheet) => ({ ...worksheet, autoFilter: worksheet.autoFilter ?? autoFilter })));
   const fileName = filePath.split(/[\\/]/).pop() || "export.xlsx";
+  if (isWailsRuntime()) return saveWailsBytes(fileName, new Uint8Array(workbook));
   const blob = new Blob([new Uint8Array(workbook)], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
@@ -3533,17 +3572,17 @@ export async function exportQueryResultsXlsx(
 
 export async function exportQueryResultJson(filePath: string, columns: string[], rows: readonly (readonly XlsxCellValue[])[]): Promise<void> {
   const result = await post<{ content: string }>("/api/export/query-result-json", { columns, rows });
-  downloadTextFile(filePath, "export.json", result.content, "application/json;charset=utf-8");
+  await downloadTextFile(filePath, "export.json", result.content, "application/json;charset=utf-8");
 }
 
 export async function exportQueryResultMarkdown(filePath: string, columns: string[], rows: readonly (readonly XlsxCellValue[])[]): Promise<void> {
   const result = await post<{ content: string }>("/api/export/query-result-markdown", { columns, rows });
-  downloadTextFile(filePath, "export.md", result.content, "text/markdown;charset=utf-8");
+  await downloadTextFile(filePath, "export.md", result.content, "text/markdown;charset=utf-8");
 }
 
 export async function exportQueryResultHtml(filePath: string, title: string | undefined, columns: string[], rows: readonly (readonly XlsxCellValue[])[]): Promise<void> {
   const result = await post<{ content: string }>("/api/export/query-result-html", { title, columns, rows });
-  downloadTextFile(filePath, "export.html", result.content, "text/html;charset=utf-8");
+  await downloadTextFile(filePath, "export.html", result.content, "text/html;charset=utf-8");
 }
 
 // ---------------------------------------------------------------------------

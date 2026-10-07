@@ -1,0 +1,427 @@
+package database
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+type record = map[string]any
+
+func records(ctx context.Context, q queryRunner, statement string, args ...any) ([]record, error) {
+	rows, e := q.QueryContext(ctx, statement, args...)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	columns, e := rows.Columns()
+	if e != nil {
+		return nil, e
+	}
+	out := []record{}
+	for rows.Next() {
+		v := make([]any, len(columns))
+		ptr := make([]any, len(v))
+		for i := range v {
+			ptr[i] = &v[i]
+		}
+		if e = rows.Scan(ptr...); e != nil {
+			return nil, e
+		}
+		r := record{}
+		for i, k := range columns {
+			if bytes, ok := v[i].([]byte); ok {
+				r[k] = string(bytes)
+			} else {
+				r[k] = v[i]
+			}
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+func valueString(v any) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
+}
+func valueInt(v any) int64 { n, _ := strconv.ParseInt(valueString(v), 10, 64); return n }
+func valueBool(v any) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	s := strings.ToLower(valueString(v))
+	return s == "1" || s == "true" || s == "yes"
+}
+func (m *Manager) schema(ctx context.Context, path string, p map[string]any) (any, error) {
+	db, c, _, e := m.pool(ctx, str(p, "connection_id", "connectionId"), str(p, "database"))
+	if e != nil {
+		return nil, e
+	}
+	schema := str(p, "schema")
+	database := str(p, "database")
+	table := str(p, "table")
+	if database == "" {
+		database = c.Database
+	}
+	if schema == "" {
+		if c.Type == "sqlite" {
+			schema = "main"
+		} else if c.Type == "mysql" {
+			schema = database
+		} else if c.DefaultSchema != "" {
+			schema = c.DefaultSchema
+		} else {
+			schema = "public"
+		}
+	}
+	if c.Type == "sqlite" && schema != "main" && schema != "temp" {
+		return nil, unsupported("SQLite attached schemas")
+	}
+	var result any
+	switch strings.TrimPrefix(path, "/api/schema/") {
+	case "databases", "database-metadata":
+		switch c.Type {
+		case "sqlite":
+			result, e = records(ctx, db, "SELECT name FROM pragma_database_list ORDER BY seq")
+		case "mysql":
+			result, e = records(ctx, db, "SELECT schema_name AS name, default_character_set_name AS default_charset, default_collation_name AS default_collation FROM information_schema.schemata ORDER BY schema_name")
+		case "postgres":
+			result, e = records(ctx, db, "SELECT datname AS name FROM pg_database WHERE NOT datistemplate ORDER BY datname")
+		}
+	case "schemas":
+		switch c.Type {
+		case "sqlite":
+			result = []record{{"name": "main"}}
+		case "mysql":
+			result = []record{{"name": database}}
+		case "postgres":
+			result, e = records(ctx, db, "SELECT schema_name AS name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%' AND schema_name <> 'information_schema' ORDER BY schema_name")
+		}
+	case "tables", "objects", "completion-objects":
+		var list []record
+		switch c.Type {
+		case "sqlite":
+			list, e = records(ctx, db, "SELECT name, upper(type) AS table_type FROM "+quoteIdentifier(schema, c.Type)+".sqlite_schema WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type,name")
+		case "mysql":
+			list, e = records(ctx, db, "SELECT table_name AS name, CASE table_type WHEN 'BASE TABLE' THEN 'TABLE' ELSE table_type END AS table_type, table_comment AS comment FROM information_schema.tables WHERE table_schema=? ORDER BY table_type,table_name", database)
+		case "postgres":
+			list, e = records(ctx, db, "SELECT c.relname AS name, CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED_VIEW' ELSE 'TABLE' END AS table_type, obj_description(c.oid) AS comment FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind IN ('r','p','v','m','f') ORDER BY c.relkind,c.relname", schema)
+		}
+		if e != nil {
+			break
+		}
+		list, e = filterTables(list, p)
+		if e != nil {
+			break
+		}
+		if strings.HasSuffix(path, "objects") {
+			for _, r := range list {
+				r["object_type"] = r["table_type"]
+				r["schema"] = schema
+			}
+		}
+		result = list
+	case "columns":
+		result, e = columns(ctx, db, c.Type, database, schema, table)
+	case "all-columns":
+		var tableRecords any
+		tableRecords, e = m.schema(ctx, "/api/schema/tables", p)
+		if e != nil {
+			break
+		}
+		all := []record{}
+		for _, t := range tableRecords.([]record) {
+			var cols []record
+			cols, e = columns(ctx, db, c.Type, database, schema, valueString(t["name"]))
+			if e != nil {
+				break
+			}
+			all = append(all, record{"table_name": t["name"], "columns": cols})
+		}
+		result = all
+	case "indexes":
+		result, e = indexes(ctx, db, c.Type, database, schema, table)
+	case "foreign-keys":
+		result, e = foreignKeys(ctx, db, c.Type, database, schema, table)
+	case "reference-key-columns", "reference-keys":
+		var idx []record
+		idx, e = indexes(ctx, db, c.Type, database, schema, table)
+		keys := []record{}
+		first := []string{}
+		for _, r := range idx {
+			if valueBool(r["is_unique"]) {
+				cols := r["columns"].([]string)
+				keys = append(keys, record{"columns": cols})
+				if len(first) == 0 || valueBool(r["is_primary"]) {
+					first = cols
+				}
+			}
+		}
+		if strings.HasSuffix(path, "/reference-keys") {
+			result = keys
+		} else {
+			result = first
+		}
+	case "ddl", "object-source":
+		var ddl string
+		ddl, e = objectDDL(ctx, db, c.Type, database, schema, table, str(p, "object_type"))
+		if strings.HasSuffix(path, "object-source") {
+			result = record{"name": table, "schema": schema, "object_type": str(p, "object_type"), "source": ddl, "editable": true}
+		} else {
+			result = ddl
+		}
+	case "triggers":
+		if c.Type == "sqlite" {
+			var list []record
+			list, e = records(ctx, db, "SELECT name, sql AS statement FROM "+quoteIdentifier(schema, c.Type)+".sqlite_schema WHERE type='trigger' AND tbl_name=? ORDER BY name", table)
+			for _, r := range list {
+				r["event"] = ""
+				r["timing"] = ""
+				r["enabled"] = true
+			}
+			result = list
+		} else if c.Type == "mysql" {
+			result, e = records(ctx, db, "SELECT trigger_name AS name, event_manipulation AS event, action_timing AS timing, action_statement AS statement FROM information_schema.triggers WHERE trigger_schema=? AND event_object_table=? ORDER BY trigger_name", database, table)
+		} else {
+			result, e = records(ctx, db, "SELECT t.tgname AS name, pg_get_triggerdef(t.oid) AS statement, '' AS event, '' AS timing, t.tgenabled <> 'D' AS enabled FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND NOT t.tgisinternal ORDER BY t.tgname", schema, table)
+		}
+	case "data-types":
+		switch c.Type {
+		case "sqlite":
+			result = []string{"INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC"}
+		case "mysql":
+			result = []string{"BIGINT", "INT", "SMALLINT", "TINYINT", "DECIMAL", "DOUBLE", "FLOAT", "VARCHAR", "TEXT", "LONGTEXT", "BLOB", "DATETIME", "TIMESTAMP", "DATE", "TIME", "JSON", "BOOLEAN"}
+		case "postgres":
+			result = []string{"bigint", "integer", "smallint", "numeric", "real", "double precision", "text", "varchar", "boolean", "date", "timestamp", "timestamptz", "bytea", "uuid", "json", "jsonb"}
+		}
+	case "partitions", "subpartitions", "functions", "sequences", "rules", "owners", "extensions", "available-extensions", "event-triggers", "invalid-indexes":
+		if c.Type == "sqlite" {
+			result = []record{}
+		} else {
+			return nil, unsupported(path)
+		}
+	case "constraints":
+		return nil, unsupported("constraint introspection")
+	case "table-partition-status":
+		if c.Type == "sqlite" {
+			result = record{"isPartitionedParent": false, "isPartition": false}
+		} else {
+			return nil, unsupported(path)
+		}
+	default:
+		return nil, unsupported(path)
+	}
+	return result, redact(e, c)
+}
+func filterTables(list []record, p map[string]any) ([]record, error) {
+	if str(p, "table_name_filter") != "" {
+		return nil, unsupported("structured table name filters")
+	}
+	filter := strings.ToLower(str(p, "filter"))
+	types := strings.ToUpper(str(p, "object_types"))
+	if types == "" {
+		types = strings.ToUpper(str(p, "object_type"))
+	}
+	allowed := map[string]bool{}
+	for _, v := range strings.Split(types, ",") {
+		if v != "" {
+			allowed[v] = true
+		}
+	}
+	filtered := []record{}
+	for _, r := range list {
+		if filter != "" && !strings.Contains(strings.ToLower(valueString(r["name"])), filter) {
+			continue
+		}
+		if len(allowed) > 0 && !allowed[valueString(r["table_type"])] {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	offset := integer(p, 0, "offset")
+	limit := integer(p, 0, "limit")
+	if offset < 0 || limit < 0 {
+		return nil, errors.New("limit and offset cannot be negative")
+	}
+	if offset >= len(filtered) {
+		return []record{}, nil
+	}
+	filtered = filtered[offset:]
+	if limit > 0 && limit < len(filtered) {
+		filtered = filtered[:limit]
+	}
+	return filtered, nil
+}
+func columns(ctx context.Context, db *sql.DB, kind, database, schema, table string) ([]record, error) {
+	if table == "" {
+		return nil, errors.New("table is required")
+	}
+	var out []record
+	var e error
+	switch kind {
+	case "sqlite":
+		raw, err := records(ctx, db, "SELECT * FROM pragma_table_xinfo(?, ?) ORDER BY cid", table, schema)
+		if err != nil {
+			return nil, err
+		}
+		out = []record{}
+		for _, r := range raw {
+			pk := valueInt(r["pk"]) > 0
+			extra := any(nil)
+			if valueInt(r["hidden"]) >= 2 {
+				extra = "GENERATED"
+			}
+			out = append(out, record{"name": r["name"], "data_type": r["type"], "is_nullable": valueInt(r["notnull"]) == 0 && !pk, "column_default": r["dflt_value"], "is_primary_key": pk, "extra": extra})
+		}
+	case "mysql":
+		out, e = records(ctx, db, "SELECT column_name AS name, column_type AS data_type, is_nullable='YES' AS is_nullable, column_default, column_key='PRI' AS is_primary_key, column_key='UNI' AS is_unique, extra, column_comment AS comment, numeric_precision, numeric_scale, character_maximum_length, character_set_name AS character_set, collation_name AS collation FROM information_schema.columns WHERE table_schema=? AND table_name=? ORDER BY ordinal_position", database, table)
+	case "postgres":
+		out, e = records(ctx, db, "SELECT a.attname AS name, format_type(a.atttypid,a.atttypmod) AS data_type, NOT a.attnotnull AS is_nullable, pg_get_expr(d.adbin,d.adrelid) AS column_default, EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=a.attrelid AND i.indisprimary AND a.attnum=ANY(i.indkey)) AS is_primary_key, CASE WHEN a.attidentity <> '' THEN 'IDENTITY' WHEN a.attgenerated <> '' THEN 'GENERATED' ELSE NULL END AS extra, col_description(a.attrelid,a.attnum) AS comment FROM pg_attribute a JOIN pg_class t ON t.oid=a.attrelid JOIN pg_namespace n ON n.oid=t.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE n.nspname=$1 AND t.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum", schema, table)
+	}
+	for _, r := range out {
+		r["is_nullable"] = valueBool(r["is_nullable"])
+		r["is_primary_key"] = valueBool(r["is_primary_key"])
+		if _, ok := r["is_unique"]; ok {
+			r["is_unique"] = valueBool(r["is_unique"])
+		}
+	}
+	return out, e
+}
+func indexes(ctx context.Context, db *sql.DB, kind, database, schema, table string) ([]record, error) {
+	out := []record{}
+	switch kind {
+	case "sqlite":
+		raw, e := records(ctx, db, "SELECT * FROM pragma_index_list(?, ?) ORDER BY seq", table, schema)
+		if e != nil {
+			return nil, e
+		}
+		for _, r := range raw {
+			info, e := records(ctx, db, "SELECT name FROM pragma_index_info(?, ?) ORDER BY seqno", r["name"], schema)
+			if e != nil {
+				return nil, e
+			}
+			names := []string{}
+			for _, v := range info {
+				names = append(names, valueString(v["name"]))
+			}
+			out = append(out, record{"name": r["name"], "columns": names, "is_unique": valueInt(r["unique"]) == 1, "is_primary": r["origin"] == "pk", "constraint_backed": r["origin"] != "c"})
+		}
+		// INTEGER PRIMARY KEY aliases rowid and has no entry in index_list.
+		raw, e = records(ctx, db, "SELECT name FROM pragma_table_info(?, ?) WHERE pk > 0 ORDER BY pk", table, schema)
+		if e != nil {
+			return nil, e
+		}
+		hasPrimary := false
+		for _, r := range out {
+			hasPrimary = hasPrimary || valueBool(r["is_primary"])
+		}
+		if len(raw) > 0 && !hasPrimary {
+			names := []string{}
+			for _, r := range raw {
+				names = append(names, valueString(r["name"]))
+			}
+			out = append(out, record{"name": "PRIMARY", "columns": names, "is_unique": true, "is_primary": true, "constraint_backed": true})
+		}
+	case "mysql":
+		raw, e := records(ctx, db, "SELECT index_name AS name, column_name, non_unique, index_type FROM information_schema.statistics WHERE table_schema=? AND table_name=? ORDER BY index_name,seq_in_index", database, table)
+		if e != nil {
+			return nil, e
+		}
+		byName := map[string]record{}
+		for _, r := range raw {
+			name := valueString(r["name"])
+			item := byName[name]
+			if item == nil {
+				item = record{"name": name, "columns": []string{}, "is_unique": valueInt(r["non_unique"]) == 0, "is_primary": name == "PRIMARY", "index_type": r["index_type"]}
+				byName[name] = item
+				out = append(out, item)
+			}
+			item["columns"] = append(item["columns"].([]string), valueString(r["column_name"]))
+		}
+	case "postgres":
+		raw, e := records(ctx, db, "SELECT ci.relname AS name, i.indisunique AS is_unique, i.indisprimary AS is_primary, a.amname AS index_type, pg_get_expr(i.indpred,i.indrelid) AS filter, ord.n, pg_get_indexdef(i.indexrelid,ord.n,false) AS column_name FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace ns ON ns.oid=t.relnamespace JOIN pg_class ci ON ci.oid=i.indexrelid JOIN pg_am a ON a.oid=ci.relam CROSS JOIN LATERAL generate_series(1,i.indnkeyatts) AS ord(n) WHERE ns.nspname=$1 AND t.relname=$2 ORDER BY ci.relname,ord.n", schema, table)
+		if e != nil {
+			return nil, e
+		}
+		byName := map[string]record{}
+		for _, r := range raw {
+			name := valueString(r["name"])
+			item := byName[name]
+			if item == nil {
+				item = record{"name": name, "columns": []string{}, "is_unique": valueBool(r["is_unique"]), "is_primary": valueBool(r["is_primary"]), "index_type": r["index_type"], "filter": r["filter"]}
+				byName[name] = item
+				out = append(out, item)
+			}
+			item["columns"] = append(item["columns"].([]string), valueString(r["column_name"]))
+		}
+	}
+	return out, nil
+}
+func foreignKeys(ctx context.Context, db *sql.DB, kind, database, schema, table string) ([]record, error) {
+	switch kind {
+	case "sqlite":
+		raw, e := records(ctx, db, "SELECT * FROM pragma_foreign_key_list(?, ?) ORDER BY id, seq", table, schema)
+		if e != nil {
+			return nil, e
+		}
+		out := []record{}
+		for _, r := range raw {
+			out = append(out, record{"name": fmt.Sprintf("fk_%s_%v", table, r["id"]), "column": r["from"], "ref_schema": schema, "ref_table": r["table"], "ref_column": valueString(r["to"]), "on_update": r["on_update"], "on_delete": r["on_delete"]})
+		}
+		return out, nil
+	case "mysql":
+		return records(ctx, db, "SELECT k.constraint_name AS name, k.column_name AS `column`, k.referenced_table_schema AS ref_schema, k.referenced_table_name AS ref_table, k.referenced_column_name AS ref_column, r.update_rule AS on_update, r.delete_rule AS on_delete FROM information_schema.key_column_usage k JOIN information_schema.referential_constraints r ON r.constraint_schema=k.constraint_schema AND r.constraint_name=k.constraint_name AND r.table_name=k.table_name WHERE k.table_schema=? AND k.table_name=? AND k.referenced_table_name IS NOT NULL ORDER BY k.constraint_name,k.ordinal_position", database, table)
+	case "postgres":
+		return records(ctx, db, `SELECT c.conname AS name, a.attname AS "column", rn.nspname AS ref_schema, rt.relname AS ref_table, ra.attname AS ref_column, CASE c.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS on_update, CASE c.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS on_delete FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace JOIN pg_class rt ON rt.oid=c.confrelid JOIN pg_namespace rn ON rn.oid=rt.relnamespace CROSS JOIN LATERAL unnest(c.conkey,c.confkey) WITH ORDINALITY keys(local_col,remote_col,ord) JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=keys.local_col JOIN pg_attribute ra ON ra.attrelid=rt.oid AND ra.attnum=keys.remote_col WHERE c.contype='f' AND n.nspname=$1 AND t.relname=$2 ORDER BY c.conname,keys.ord`, schema, table)
+	}
+	return nil, unsupported("foreign key introspection")
+}
+func objectDDL(ctx context.Context, db *sql.DB, kind, database, schema, table, objectType string) (string, error) {
+	switch kind {
+	case "sqlite":
+		var ddl sql.NullString
+		e := db.QueryRowContext(ctx, "SELECT sql FROM "+quoteIdentifier(schema, kind)+".sqlite_schema WHERE name=? AND type IN ('table','view','trigger','index')", table).Scan(&ddl)
+		return ddl.String, e
+	case "mysql":
+		rows, e := db.QueryContext(ctx, "SHOW CREATE TABLE "+quoteIdentifier(database, kind)+"."+quoteIdentifier(table, kind))
+		if e != nil {
+			return "", e
+		}
+		defer rows.Close()
+		if !rows.Next() {
+			return "", sql.ErrNoRows
+		}
+		cols, e := rows.Columns()
+		if e != nil {
+			return "", e
+		}
+		v := make([]any, len(cols))
+		ptr := make([]any, len(cols))
+		for i := range ptr {
+			ptr[i] = &v[i]
+		}
+		if e = rows.Scan(ptr...); e != nil {
+			return "", e
+		}
+		if len(v) < 2 {
+			return "", errors.New("SHOW CREATE returned no definition")
+		}
+		if b, ok := v[1].([]byte); ok {
+			return string(b), nil
+		}
+		return valueString(v[1]), nil
+	case "postgres":
+		if objectType == "VIEW" || objectType == "MATERIALIZED_VIEW" {
+			var ddl string
+			e := db.QueryRowContext(ctx, "SELECT pg_get_viewdef(c.oid,true) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2", schema, table).Scan(&ddl)
+			return "CREATE " + strings.ReplaceAll(objectType, "_", " ") + " " + quoteIdentifier(schema, kind) + "." + quoteIdentifier(table, kind) + " AS\n" + ddl, e
+		}
+		return "", unsupported("PostgreSQL complete table DDL extraction")
+	}
+	return "", unsupported("DDL extraction")
+}

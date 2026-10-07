@@ -1,5 +1,6 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isWailsRuntime, wailsApp } from "@/lib/backend/wailsRuntime";
 import { isMacOS } from "@/lib/backend/platform";
 import * as api from "@/lib/backend/api";
 import { raiseDetachedWindowsAboveMain, WINDOW_ALWAYS_ON_TOP_CHANGED_EVENT, type WindowAlwaysOnTopChangedPayload } from "@/lib/app/windowAlwaysOnTop";
@@ -47,8 +48,10 @@ export function useWindowControls() {
   const isFullscreen = ref(false);
   const isAlwaysOnTop = ref(false);
   const isMac = isMacOS();
-  const isDesktop = isTauriRuntime();
-  const showControls = shouldShowWindowControls(isMac, isDesktop);
+  const isWails = isWailsRuntime();
+  const isDesktop = isTauriRuntime() || isWails;
+  // Wails currently uses the native OS title bar, including its controls.
+  const showControls = shouldShowWindowControls(isMac, isDesktop && !isWails);
 
   let unlistenResize: (() => void) | null = null;
   let unlistenFocus: (() => void) | null = null;
@@ -56,6 +59,13 @@ export function useWindowControls() {
 
   async function updateWindowState() {
     if (!isDesktop) return;
+    if (isWails) {
+      const state = await wailsApp().GetWindowState();
+      isMaximized.value = state.maximized;
+      isFullscreen.value = state.fullscreen;
+      isAlwaysOnTop.value = state.alwaysOnTop;
+      return;
+    }
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const currentWindow = getCurrentWindow();
     const [maximized, fullscreen, alwaysOnTop] = await Promise.all([currentWindow.isMaximized(), currentWindow.isFullscreen(), currentWindow.isAlwaysOnTop()]);
@@ -66,16 +76,29 @@ export function useWindowControls() {
 
   async function refreshAlwaysOnTopState() {
     if (!isDesktop) return;
+    if (isWails) {
+      await updateWindowState();
+      return;
+    }
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     isAlwaysOnTop.value = await getCurrentWindow().isAlwaysOnTop();
   }
 
   async function minimize() {
+    if (isWails) {
+      await wailsApp().Minimize();
+      return;
+    }
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().minimize();
   }
 
   async function toggleMaximize() {
+    if (isWails) {
+      await wailsApp().ToggleMaximize();
+      setTimeout(updateWindowState, 50);
+      return;
+    }
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     await getCurrentWindow().toggleMaximize();
     setTimeout(updateWindowState, 50);
@@ -83,6 +106,11 @@ export function useWindowControls() {
 
   async function toggleAlwaysOnTop() {
     if (!isDesktop) return;
+    if (isWails) {
+      await wailsApp().SetAlwaysOnTop(!isAlwaysOnTop.value);
+      await updateWindowState();
+      return;
+    }
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const currentWindow = getCurrentWindow();
     const next = !isAlwaysOnTop.value;
@@ -95,12 +123,26 @@ export function useWindowControls() {
 
   async function close() {
     if (!isDesktop) return;
+    if (isWails) {
+      await wailsApp().Close();
+      return;
+    }
     await api.requestAppClose();
   }
 
   onMounted(async () => {
     if (!isDesktop) return;
     await updateWindowState();
+    if (isWails) {
+      const update = () => {
+        void updateWindowState();
+      };
+      window.addEventListener("resize", update);
+      window.addEventListener("focus", update);
+      unlistenResize = () => window.removeEventListener("resize", update);
+      unlistenFocus = () => window.removeEventListener("focus", update);
+      return;
+    }
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const currentWindow = getCurrentWindow();
     const windowLabel = currentWindow.label;
@@ -127,6 +169,7 @@ export function useWindowControls() {
   return {
     isMac,
     isDesktop,
+    hasNativeTitleBar: isWails,
     showControls,
     isMaximized,
     isFullscreen,
