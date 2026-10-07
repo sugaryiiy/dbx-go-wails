@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -180,6 +181,11 @@ func (s *Server) mcpResolve(p MCPPolicy, args map[string]any, requireDB bool) (m
 	}
 	if selected == nil {
 		return mcpScope{}, errors.New("Connection does not exist or is not allowed by MCP policy")
+	}
+	var transportErr error
+	selected, transportErr = s.resolveConnectionTransports(selected)
+	if transportErr != nil {
+		return mcpScope{}, transportErr
 	}
 	id = str(selected, "id")
 	kind := str(selected, "db_type")
@@ -513,19 +519,86 @@ func mcpWindowResult(value any, offset, limit int) any {
 	return result
 }
 func (s *Server) mcpRedact(message string, c map[string]any) string {
+	var secrets []string
 	walkSecrets(c, func(_ map[string]any, _ string, value string) {
-		if value != "" {
-			message = strings.ReplaceAll(message, value, "[REDACTED]")
-			message = strings.ReplaceAll(message, url.QueryEscape(value), "[REDACTED]")
-			message = strings.ReplaceAll(message, url.PathEscape(value), "[REDACTED]")
-		}
+		secrets = append(secrets, value)
 	})
-	for _, key := range []string{"host", "username", "connection_string", "url_params"} {
-		if v := str(c, key); v != "" {
-			message = strings.ReplaceAll(message, v, "[REDACTED]")
+	secretReplacer := mcpRedactionReplacer(secrets)
+	message = secretReplacer.Replace(message)
+	var metadata []string
+	add := func(value string, path bool) {
+		metadata = append(metadata, value, strings.TrimSpace(value))
+		if path {
+			value = strings.TrimSpace(value)
+			if strings.HasPrefix(value, "~/") || strings.HasPrefix(value, "~\\") {
+				if home, err := os.UserHomeDir(); err == nil {
+					metadata = append(metadata, filepath.Join(home, value[2:]))
+				}
+			}
 		}
 	}
-	return message
+	var visit func(any)
+	visit = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			for key, value := range node {
+				canonical := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", ""), "-", ""))
+				if text, ok := value.(string); ok {
+					switch canonical {
+					case "host", "user", "username", "connectionstring", "urlparams":
+						add(text, false)
+						if canonical == "host" {
+							add(strings.Trim(strings.TrimSpace(text), "[]"), false)
+						}
+					case "keypath", "knownhostspath", "sshagentsockpath", "cacertpath", "clientcertpath", "clientkeypath":
+						add(text, true)
+					}
+				} else {
+					visit(value)
+				}
+			}
+			if str(node, "type") == "ssh" {
+				if strings.TrimSpace(str(node, "known_hosts_path")) == "" {
+					add("~/.ssh/known_hosts", true)
+				}
+				if strings.TrimSpace(str(node, "ssh_agent_sock_path")) == "" && (str(node, "auth_method") == "agent" || boolValue(node, "use_ssh_agent")) {
+					add(os.Getenv("SSH_AUTH_SOCK"), true)
+				}
+			}
+		case []any:
+			for _, child := range node {
+				visit(child)
+			}
+		}
+	}
+	visit(c)
+	// A connection string may itself include a secret already replaced above.
+	// Match that sanitized form too without exposing any secret during the pass.
+	for i, value := range metadata {
+		metadata[i] = secretReplacer.Replace(value)
+		metadata = append(metadata, secretReplacer.Replace(url.QueryEscape(value)), secretReplacer.Replace(url.PathEscape(value)))
+	}
+	return mcpRedactionReplacer(metadata).Replace(message)
+}
+
+func mcpRedactionReplacer(values []string) *strings.Replacer {
+	unique := map[string]bool{}
+	for _, value := range values {
+		if value != "" {
+			unique[value], unique[url.QueryEscape(value)], unique[url.PathEscape(value)] = true, true, true
+		}
+	}
+	ordered := make([]string, 0, len(unique))
+	for value := range unique {
+		ordered = append(ordered, value)
+	}
+	// Replace a complete secret/path before any value that is its prefix.
+	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
+	pairs := make([]string, 0, len(ordered)*2)
+	for _, value := range ordered {
+		pairs = append(pairs, value, "[REDACTED]")
+	}
+	return strings.NewReplacer(pairs...)
 }
 func (s *Server) mcpAudit(name string, args map[string]any, scope mcpScope, started time.Time, result any, callErr error) error {
 	entry := map[string]any{"id": transferID(), "connection_id": scope.id, "connection_name": str(scope.config, "name"), "database": scope.db, "source": "mcp", "activity_kind": "query", "mcp_tool_name": name, "sql": s.mcpRedact(str(args, "sql"), scope.config), "executed_at": started.UTC().Format(time.RFC3339Nano), "execution_time_ms": time.Since(started).Milliseconds(), "success": callErr == nil}

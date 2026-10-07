@@ -9,9 +9,11 @@ import i18n from "@/i18n";
 const { resolveSshPromptMock } = vi.hoisted(() => ({
   resolveSshPromptMock: vi.fn(),
 }));
+const backendMode = vi.hoisted(() => ({ go: false }));
 
 vi.mock("@/lib/backend/api", () => ({ resolveSshPrompt: resolveSshPromptMock }));
 vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => false }));
+vi.mock("@/lib/backend/goCapabilities", () => ({ isGoBackend: () => backendMode.go }));
 vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 
 vi.mock("@/components/ui/dialog", async () => {
@@ -98,6 +100,7 @@ class MockEventSource {
 const mountedApps: App[] = [];
 
 beforeEach(() => {
+  backendMode.go = false;
   resolveSshPromptMock.mockReset().mockResolvedValue(undefined);
   MockEventSource.instances = [];
   vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
@@ -128,6 +131,21 @@ async function mountDialog() {
 }
 
 describe("SshHostKeyPromptDialog web bridge", () => {
+  it("does not open a legacy SSH event stream or start polling for the Go backend", async () => {
+    backendMode.go = true;
+    const timer = vi.spyOn(globalThis, "setInterval");
+    try {
+      await mountDialog();
+      expect(MockEventSource.instances).toHaveLength(0);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(timer).not.toHaveBeenCalled();
+      expect(resolveSshPromptMock).not.toHaveBeenCalled();
+      expect(document.body.querySelector(".dialog-content")).toBeNull();
+    } finally {
+      timer.mockRestore();
+    }
+  });
+
   it("requires an explicit answer for blocking SSH prompts", () => {
     expect(dialogSource).toContain(':show-close-button="false"');
     expect(dialogSource).toContain("@interact-outside.prevent");

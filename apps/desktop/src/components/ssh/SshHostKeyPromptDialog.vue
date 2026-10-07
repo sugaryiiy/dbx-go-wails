@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/composables/useToast";
 import { resolveSshPrompt } from "@/lib/backend/api";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isGoBackend } from "@/lib/backend/goCapabilities";
 import { apiUrl } from "@/lib/common/webPath";
 
 interface SshPromptRequest {
@@ -211,6 +212,9 @@ function setupWebPromptBridge() {
 }
 
 onMounted(() => {
+  // Go verifies a known_hosts entry or explicit pin and has no interactive
+  // trust endpoint. Do not leave its UI retrying the legacy Rust SSE route.
+  if (isGoBackend()) return;
   if (isTauriRuntime()) void setupTauriPromptBridge();
   else setupWebPromptBridge();
 });
@@ -224,7 +228,7 @@ onBeforeUnmount(() => {
     clearInterval(pendingTimer);
     pendingTimer = null;
   }
-  if (isTauriRuntime()) void import("@tauri-apps/api/core").then(({ invoke }) => invoke("ssh_prompt_not_ready")).catch(() => undefined);
+  if (!isGoBackend() && isTauriRuntime()) void import("@tauri-apps/api/core").then(({ invoke }) => invoke("ssh_prompt_not_ready")).catch(() => undefined);
 });
 
 async function resolve(action: "accept" | "reject" | "secret") {

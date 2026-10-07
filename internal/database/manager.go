@@ -16,7 +16,8 @@ import (
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	_ "modernc.org/sqlite"
 )
 
@@ -138,13 +139,14 @@ func (c Config) validate() error {
 	default:
 		return unsupported("database type " + c.Type)
 	}
-	for _, t := range c.Transports {
-		if t["enabled"] != false {
-			return unsupported("SSH, proxy, and HTTP transport layers")
-		}
+	if c.Type == "sqlite" && hasEnabledTransports(c) {
+		return unsupported("SSH transport on local SQLite")
 	}
-	if c.SSL || c.CACert != "" || c.ClientCert != "" || c.ClientKey != "" {
-		return unsupported("TLS connection settings")
+	if err := ValidateNetworkTransports(c); err != nil {
+		return err
+	}
+	if c.Type == "sqlite" && (c.SSL || c.CACert != "" || c.ClientCert != "" || c.ClientKey != "") {
+		return unsupported("TLS settings on SQLite")
 	}
 	if c.ConnectionString != "" || c.URLParams != "" {
 		return unsupported("custom connection strings and URL parameters")
@@ -187,6 +189,15 @@ func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 	var driver, dsn string
+	var db *sql.DB
+	var e error
+	var dial func(context.Context, string, string) (net.Conn, error)
+	if c.Type != "sqlite" {
+		dial, e = networkDialer(c)
+		if e != nil {
+			return nil, redact(e, c)
+		}
+	}
 	switch c.Type {
 	case "sqlite":
 		driver = "sqlite"
@@ -222,7 +233,16 @@ func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
 		cfg.ParseTime = false
 		cfg.InterpolateParams = false
 		cfg.MultiStatements = false
-		dsn = cfg.FormatDSN()
+		cfg.TLS, e = databaseTLSConfig(c)
+		if e != nil {
+			return nil, redact(e, c)
+		}
+		cfg.DialFunc = dial
+		connector, err := mysql.NewConnector(cfg)
+		if err != nil {
+			return nil, redact(err, c)
+		}
+		db = sql.OpenDB(connector)
 	case "postgres":
 		driver = "pgx"
 		port := c.Port
@@ -236,8 +256,25 @@ func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
 		q.Set("connect_timeout", strconv.Itoa(timeout))
 		u.RawQuery = q.Encode()
 		dsn = u.String()
+		pgConfig, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			return nil, redact(err, c)
+		}
+		pgConfig.TLSConfig, e = databaseTLSConfig(c)
+		if e != nil {
+			return nil, redact(e, c)
+		}
+		pgConfig.Fallbacks = nil
+		pgConfig.DialFunc = dial
+		// The last SSH host resolves the database hostname, not the desktop DNS.
+		if hasEnabledTransports(c) {
+			pgConfig.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
+		}
+		db = stdlib.OpenDB(*pgConfig)
 	}
-	db, e := sql.Open(driver, dsn)
+	if db == nil {
+		db, e = sql.Open(driver, dsn)
+	}
 	if e != nil {
 		return nil, redact(e, c)
 	}
@@ -267,13 +304,24 @@ func redact(err error, c Config) error {
 	if err == nil {
 		return nil
 	}
-	if c.Password == "" {
+	message := err.Error()
+	secrets := []string{c.Password}
+	for _, layer := range c.Transports {
+		for _, name := range []string{"password", "key_passphrase", "token", "private_key"} {
+			if value, ok := layer[name].(string); ok {
+				secrets = append(secrets, value)
+			}
+		}
+	}
+	for _, secret := range secrets {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		}
+	}
+	if message == err.Error() {
 		return err
 	}
-	if !strings.Contains(err.Error(), c.Password) {
-		return err
-	}
-	return sanitizedError{message: strings.ReplaceAll(err.Error(), c.Password, "[REDACTED]"), cause: err}
+	return sanitizedError{message: message, cause: err}
 }
 func (m *Manager) Connect(ctx context.Context, c Config) error {
 	c = c.normalized()
@@ -488,4 +536,13 @@ func databaseInfo(ctx context.Context, db *sql.DB, c Config) (map[string]any, er
 	}
 	info["productVersion"] = version
 	return info, nil
+}
+
+func hasEnabledTransports(c Config) bool {
+	for _, layer := range c.Transports {
+		if layer["enabled"] != false {
+			return true
+		}
+	}
+	return false
 }

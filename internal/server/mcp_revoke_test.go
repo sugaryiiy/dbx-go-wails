@@ -25,7 +25,7 @@ func (transport revocationBearerTransport) RoundTrip(r *http.Request) (*http.Res
 // and metadata, including clients whose old HTTP protocol detaches cancellation.
 func TestMCPHTTPRevocationCancelsDatabaseQuery(t *testing.T) {
 	for _, protocol := range []string{"2025-03-26", "2026-07-28"} {
-		for _, action := range []string{"rotate", "disable", "policy"} {
+		for _, action := range []string{"rotate", "disable", "policy", "tunnel-profile"} {
 			t.Run(protocol+"/"+action, func(t *testing.T) {
 				s, _ := mcpFixture(t)
 				mcpAllow(t, s)
@@ -69,6 +69,9 @@ func TestMCPHTTPRevocationCancelsDatabaseQuery(t *testing.T) {
 					_, err = s.saveMCPWeb(MCPWebSettings{})
 				case "policy":
 					err = s.SaveMCPPolicy(defaultMCPPolicy())
+				case "tunnel-profile":
+					cookie := loginTest(t, s)
+					value(t, call(s, "POST", "/api/tunnel-profiles/save", map[string]any{"profiles": []any{tunnelDraft()}}, cookie, ""))
 				}
 				if err != nil {
 					t.Fatal(err)

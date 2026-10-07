@@ -176,7 +176,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.handleApplication(w, r, payload) {
 		return
 	}
+	if s.handleTunnels(w, r, payload) {
+		return
+	}
 	if s.handleExtension(w, r, payload) {
+		return
+	}
+	if err := s.prepareTransportPayload(route, payload); err != nil {
+		writeError(w, 400, err.Error())
 		return
 	}
 	result, err := s.database.Handle(r.Context(), route, payload)

@@ -96,11 +96,17 @@ func (m *Manager) schema(ctx context.Context, path string, p map[string]any) (an
 	case "schemas":
 		switch c.Type {
 		case "sqlite":
-			result = []record{{"name": "main"}}
+			result = []string{"main"}
 		case "mysql":
-			result = []record{{"name": database}}
+			result = []string{database}
 		case "postgres":
-			result, e = records(ctx, db, "SELECT schema_name AS name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%' AND schema_name <> 'information_schema' ORDER BY schema_name")
+			var schemas []record
+			schemas, e = records(ctx, db, "SELECT schema_name AS name FROM information_schema.schemata WHERE schema_name NOT LIKE 'pg_%' AND schema_name <> 'information_schema' ORDER BY schema_name")
+			names := make([]string, 0, len(schemas))
+			for _, item := range schemas {
+				names = append(names, valueString(item["name"]))
+			}
+			result = names
 		}
 	case "tables", "objects", "completion-objects":
 		var list []record
@@ -154,7 +160,7 @@ func (m *Manager) schema(ctx context.Context, path string, p map[string]any) (an
 		keys := []record{}
 		first := []string{}
 		for _, r := range idx {
-			if valueBool(r["is_unique"]) {
+			if referenceableIndex(r) {
 				cols := r["columns"].([]string)
 				keys = append(keys, record{"columns": cols})
 				if len(first) == 0 || valueBool(r["is_primary"]) {
@@ -281,7 +287,7 @@ func columns(ctx context.Context, db *sql.DB, kind, database, schema, table stri
 	case "mysql":
 		out, e = records(ctx, db, "SELECT column_name AS name, column_type AS data_type, is_nullable='YES' AS is_nullable, column_default, column_key='PRI' AS is_primary_key, column_key='UNI' AS is_unique, extra, column_comment AS comment, numeric_precision, numeric_scale, character_maximum_length, character_set_name AS character_set, collation_name AS collation FROM information_schema.columns WHERE table_schema=? AND table_name=? ORDER BY ordinal_position", database, table)
 	case "postgres":
-		out, e = records(ctx, db, "SELECT a.attname AS name, format_type(a.atttypid,a.atttypmod) AS data_type, NOT a.attnotnull AS is_nullable, pg_get_expr(d.adbin,d.adrelid) AS column_default, EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=a.attrelid AND i.indisprimary AND a.attnum=ANY(i.indkey)) AS is_primary_key, CASE WHEN a.attidentity <> '' THEN 'IDENTITY' WHEN a.attgenerated <> '' THEN 'GENERATED' ELSE NULL END AS extra, col_description(a.attrelid,a.attnum) AS comment FROM pg_attribute a JOIN pg_class t ON t.oid=a.attrelid JOIN pg_namespace n ON n.oid=t.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE n.nspname=$1 AND t.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum", schema, table)
+		out, e = records(ctx, db, "SELECT a.attname AS name, format_type(a.atttypid,a.atttypmod) AS data_type, NOT a.attnotnull AS is_nullable, pg_get_expr(d.adbin,d.adrelid) AS column_default, EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=a.attrelid AND i.indisprimary AND a.attnum=ANY(i.indkey[0:i.indnkeyatts-1])) AS is_primary_key, CASE WHEN a.attidentity <> '' THEN 'IDENTITY' WHEN a.attgenerated <> '' THEN 'GENERATED' ELSE NULL END AS extra, col_description(a.attrelid,a.attnum) AS comment FROM pg_attribute a JOIN pg_class t ON t.oid=a.attrelid JOIN pg_namespace n ON n.oid=t.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE n.nspname=$1 AND t.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum", schema, table)
 	}
 	for _, r := range out {
 		r["is_nullable"] = valueBool(r["is_nullable"])
@@ -344,21 +350,7 @@ func indexes(ctx context.Context, db *sql.DB, kind, database, schema, table stri
 			item["columns"] = append(item["columns"].([]string), valueString(r["column_name"]))
 		}
 	case "postgres":
-		raw, e := records(ctx, db, "SELECT ci.relname AS name, i.indisunique AS is_unique, i.indisprimary AS is_primary, a.amname AS index_type, pg_get_expr(i.indpred,i.indrelid) AS filter, ord.n, pg_get_indexdef(i.indexrelid,ord.n,false) AS column_name FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace ns ON ns.oid=t.relnamespace JOIN pg_class ci ON ci.oid=i.indexrelid JOIN pg_am a ON a.oid=ci.relam CROSS JOIN LATERAL generate_series(1,i.indnkeyatts) AS ord(n) WHERE ns.nspname=$1 AND t.relname=$2 ORDER BY ci.relname,ord.n", schema, table)
-		if e != nil {
-			return nil, e
-		}
-		byName := map[string]record{}
-		for _, r := range raw {
-			name := valueString(r["name"])
-			item := byName[name]
-			if item == nil {
-				item = record{"name": name, "columns": []string{}, "is_unique": valueBool(r["is_unique"]), "is_primary": valueBool(r["is_primary"]), "index_type": r["index_type"], "filter": r["filter"]}
-				byName[name] = item
-				out = append(out, item)
-			}
-			item["columns"] = append(item["columns"].([]string), valueString(r["column_name"]))
-		}
+		return postgresIndexes(ctx, db, schema, table)
 	}
 	return out, nil
 }
@@ -416,12 +408,7 @@ func objectDDL(ctx context.Context, db *sql.DB, kind, database, schema, table, o
 		}
 		return valueString(v[1]), nil
 	case "postgres":
-		if objectType == "VIEW" || objectType == "MATERIALIZED_VIEW" {
-			var ddl string
-			e := db.QueryRowContext(ctx, "SELECT pg_get_viewdef(c.oid,true) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2", schema, table).Scan(&ddl)
-			return "CREATE " + strings.ReplaceAll(objectType, "_", " ") + " " + quoteIdentifier(schema, kind) + "." + quoteIdentifier(table, kind) + " AS\n" + ddl, e
-		}
-		return "", unsupported("PostgreSQL complete table DDL extraction")
+		return postgresObjectDDL(ctx, db, schema, table, objectType)
 	}
 	return "", unsupported("DDL extraction")
 }

@@ -15,6 +15,10 @@ function sshProfile(overrides: Partial<TunnelProfile> = {}): TunnelProfile {
 }
 
 describe("tunnelProfileSummary", () => {
+  it("creates SSH profiles without LAN listening, exec fallback, or ProxyCommand", () => {
+    expect(createTunnelProfile("ssh")).toMatchObject({ expose_lan: false, allow_exec_channel_proxy: false, proxy_command: "" });
+  });
+
   it("formats ssh profiles as user@host:port", () => {
     expect(tunnelProfileSummary(sshProfile())).toBe("deploy@bastion.example.com:22");
   });

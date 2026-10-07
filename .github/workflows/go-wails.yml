@@ -53,6 +53,8 @@ jobs:
         run: pnpm exec vitest run apps/desktop/src/lib/backend/wailsRuntime.spec.ts apps/desktop/src/lib/backend/wailsProgress.spec.ts apps/desktop/src/lib/backend/__tests__/wailsExport.spec.ts apps/desktop/src/lib/__tests__/common/webPath.spec.ts
       - name: Test Go MCP settings and client configuration
         run: pnpm exec vitest run apps/desktop/src/components/settings/__tests__/GoMcpServerPanel.spec.ts apps/desktop/src/lib/backend/__tests__/goMcpHttp.spec.ts apps/desktop/src/lib/__tests__/mcp apps/desktop/src/stores/__tests__/settingsStore.spec.ts apps/desktop/src/components/editor/__tests__/EditorSettingsDialog.mcpQueryTimeout.spec.ts apps/desktop/src/components/editor/__tests__/EditorSettingsDialog.mcpQueryTimeout.integration.spec.ts
+      - name: Test Go secure connection editors
+        run: pnpm exec vitest run apps/desktop/src/components/connection/__tests__/ConnectionDialog.goSecure.spec.ts apps/desktop/src/lib/connection/goSecureConnections.spec.ts apps/desktop/src/components/ssh/__tests__/SshHostKeyPromptDialog.spec.ts apps/desktop/src/lib/__tests__/connection/tunnelProfiles.spec.ts
       - run: pnpm build:wails
       - run: go test -tags desktop .
       - name: Test disposable HTTP workbench
