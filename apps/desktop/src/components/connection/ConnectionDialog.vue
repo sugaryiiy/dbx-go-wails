@@ -3864,7 +3864,7 @@ const tlsCapableDatabaseTypes = new Set<DatabaseType>([
 ]);
 const supportsGoTLSOptions = computed(() => goBackend && isGoTLSDatabase(form.value.db_type));
 const supportsTlsToggle = computed(() => supportsGoTLSOptions.value || tlsCapableDatabaseTypes.has(form.value.db_type) || supportsMysqlTlsTab(form.value.db_type, selectedType.value));
-const supportsCaCertificatePath = computed(() => form.value.db_type === "clickhouse" || form.value.db_type === "victoriametrics");
+const supportsCaCertificatePath = computed(() => !goBackend && (form.value.db_type === "clickhouse" || form.value.db_type === "victoriametrics"));
 const supportsGenericUrlParams = computed(() => form.value.db_type !== "manticoresearch" && form.value.db_type !== "hbase" && form.value.db_type !== "nebula");
 const showGenericUrlParamsHint = computed(() => form.value.db_type === "mysql" || form.value.db_type === "doris" || form.value.db_type === "starrocks");
 const bareMysqlProfiles = new Set(["doris", "selectdb", "oceanbase"]);
@@ -5148,7 +5148,7 @@ function connectionConfigForSubmit(id: string, generatedName = "", validatePlugi
       config.driver_label = "MongoDB";
     }
   }
-  if (config.db_type === "mongodb") {
+  if (!goBackend && config.db_type === "mongodb") {
     const mongoTls = normalizeMongoTlsFormState(!!config.ssl, config.url_params, config.ca_cert_path);
     config.url_params = mongoTls.urlParams;
     config.ca_cert_path = mongoTls.caCertPath;
@@ -7287,6 +7287,21 @@ function openExternalUrl(url: string) {
 
             <TabsContent value="connection" class="m-0 flex min-h-0 flex-1 flex-col overflow-hidden">
               <div class="connection-form-body grid min-h-0 flex-1 scroll-pb-6 gap-4 overflow-y-auto pt-4 pr-2 pb-6" :class="{ 'connection-form-body--nacos': form.db_type === 'nacos' }">
+                <p v-if="goBackend && form.db_type === 'redis'" class="text-xs leading-5 text-muted-foreground">
+                  {{ appLocale.startsWith("zh") ? "Redis 当前支持单机模式、键浏览与基础类型编辑；集群、哨兵和订阅功能尚未迁移。" : "Redis currently supports standalone servers, key browsing and basic value editing. Cluster, Sentinel and subscriptions are pending." }}
+                </p>
+                <p v-if="goBackend && form.db_type === 'mongodb'" class="text-xs leading-5 text-muted-foreground">
+                  {{
+                    appLocale.startsWith("zh")
+                      ? "MongoDB 当前连接单个节点，支持 SCRAM 认证、文档与索引操作；暂不支持 SRV、OIDC、集群发现或备份恢复。TLS 请在 TLS/SSL 页配置。"
+                      : "MongoDB connects directly to one node with SCRAM, document and index operations. SRV, OIDC, topology discovery and backup/restore are pending. Configure TLS on the TLS/SSL tab."
+                  }}
+                </p>
+                <p v-if="goBackend && form.db_type === 'clickhouse'" class="text-xs leading-5 text-muted-foreground">
+                  {{
+                    appLocale.startsWith("zh") ? "ClickHouse 使用 HTTP 接口（默认 8123，HTTPS 通常为 8443），支持 SQL 查询与结构查看；不提供事务或表格直接编辑。" : "ClickHouse uses HTTP (normally 8123, or 8443 for HTTPS) for SQL and metadata. Transactions and direct grid editing are unavailable."
+                  }}
+                </p>
                 <div v-if="!isPluginConnection && !isJdbcConnection && form.db_type !== 'nacos' && form.db_type !== 'consul' && form.db_type !== 'mq' && form.db_type !== 'salesforce'" class="grid grid-cols-4 items-center gap-4">
                   <Label :class="connectionLabelClass">{{ t("connection.connectionUrlOptional") }}</Label>
                   <div class="col-span-3 flex items-center gap-1">
@@ -8089,10 +8104,10 @@ function openExternalUrl(url: string) {
                         <Button size="sm" :variant="form.redis_connection_mode === 'standalone' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'standalone'">
                           {{ t("connection.redisStandaloneMode") }}
                         </Button>
-                        <Button size="sm" :variant="form.redis_connection_mode === 'sentinel' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'sentinel'">
+                        <Button v-if="!goBackend" size="sm" :variant="form.redis_connection_mode === 'sentinel' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'sentinel'">
                           {{ t("connection.redisSentinelMode") }}
                         </Button>
-                        <Button size="sm" :variant="form.redis_connection_mode === 'cluster' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'cluster'">
+                        <Button v-if="!goBackend" size="sm" :variant="form.redis_connection_mode === 'cluster' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'cluster'">
                           {{ t("connection.redisClusterMode") }}
                         </Button>
                       </div>
@@ -8367,7 +8382,7 @@ function openExternalUrl(url: string) {
                       <Label :class="connectionLabelSmallClass">{{ t("connection.driverMode") }}</Label>
                       <div class="col-span-3 flex items-center gap-2">
                         <Button size="sm" :variant="mongoDriverMode === 'legacy' ? 'outline' : 'default'" @click="mongoDriverMode = 'auto'">{{ t("connection.mongoDriverAuto") }}</Button>
-                        <Button size="sm" :variant="mongoDriverMode === 'legacy' ? 'default' : 'outline'" :disabled="mongoUsesOidc" @click="mongoDriverMode = 'legacy'">{{ t("connection.mongoDriverLegacy") }}</Button>
+                        <Button v-if="!goBackend" size="sm" :variant="mongoDriverMode === 'legacy' ? 'default' : 'outline'" :disabled="mongoUsesOidc" @click="mongoDriverMode = 'legacy'">{{ t("connection.mongoDriverLegacy") }}</Button>
                         <Tooltip>
                           <TooltipTrigger as-child>
                             <CircleHelp class="h-3.5 w-3.5 cursor-help text-muted-foreground hover:text-foreground" />
@@ -8382,7 +8397,7 @@ function openExternalUrl(url: string) {
                       <Label :class="connectionLabelSmallClass">{{ t("connection.mode") }}</Label>
                       <div class="col-span-3 flex gap-2">
                         <Button size="sm" :variant="mongoUseUrl ? 'outline' : 'default'" @click="mongoUseUrl = false">{{ t("connection.modeForm") }}</Button>
-                        <Button size="sm" :variant="mongoUseUrl ? 'default' : 'outline'" @click="mongoUseUrl = true">URL</Button>
+                        <Button v-if="!goBackend" size="sm" :variant="mongoUseUrl ? 'default' : 'outline'" @click="mongoUseUrl = true">URL</Button>
                       </div>
                     </div>
                     <template v-if="mongoUseUrl">
@@ -8411,7 +8426,7 @@ function openExternalUrl(url: string) {
                           <span>{{ t("connection.sslEnable") }}</span>
                         </label>
                       </div>
-                      <template v-if="form.ssl">
+                      <template v-if="form.ssl && !goBackend">
                         <div class="grid grid-cols-4 items-start gap-4">
                           <Label :class="connectionLabelClass">{{ t("connection.mongoTlsAllowInvalidCertificates") }}</Label>
                           <label class="col-span-3 flex items-start gap-2 cursor-pointer">
@@ -8471,7 +8486,7 @@ function openExternalUrl(url: string) {
                             <SelectItem value="default">{{ t("connection.authMechanismDefault") }}</SelectItem>
                             <SelectItem value="SCRAM-SHA-1">SCRAM-SHA-1</SelectItem>
                             <SelectItem value="SCRAM-SHA-256">SCRAM-SHA-256</SelectItem>
-                            <SelectItem value="MONGODB-OIDC">MONGODB-OIDC</SelectItem>
+                            <SelectItem v-if="!goBackend" value="MONGODB-OIDC">MONGODB-OIDC</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -8483,7 +8498,7 @@ function openExternalUrl(url: string) {
                       </div>
                       <div class="grid grid-cols-4 items-center gap-4">
                         <Label :class="connectionLabelClass">{{ t("connection.urlParams") }}</Label>
-                        <Input v-model="form.url_params" class="col-span-3" placeholder="replicaSet=rs0&authSource=admin" />
+                        <Input v-model="form.url_params" class="col-span-3" :placeholder="goBackend ? 'authSource=admin' : 'replicaSet=rs0&authSource=admin'" />
                       </div>
                     </template>
                   </template>
@@ -9721,7 +9736,7 @@ function openExternalUrl(url: string) {
                   </div>
                 </template>
 
-                <div v-if="form.db_type === 'redis'" class="grid grid-cols-4 items-start gap-4">
+                <div v-if="!goBackend && form.db_type === 'redis'" class="grid grid-cols-4 items-start gap-4">
                   <Label :class="connectionLabelSmallClass">{{ t("connection.redisTlsInsecure") }}</Label>
                   <label class="col-span-3 flex items-start gap-2 cursor-pointer">
                     <input type="checkbox" v-model="redisTlsInsecure" class="mr-0 mt-0.5" :disabled="!form.ssl" />

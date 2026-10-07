@@ -10,7 +10,7 @@ const chinese = computed(() => locale.value.startsWith("zh"));
 <template>
   <div v-if="isGoBackend()" role="note" class="border-b border-amber-500/20 bg-amber-500/5 px-4 py-1.5 text-xs text-muted-foreground">
     <strong class="mr-2 font-medium text-foreground">Go / Wails {{ chinese ? "迁移预览" : "migration preview" }}</strong>
-    <span v-if="chinese">当前支持 SQLite、MySQL / MariaDB、PostgreSQL 的基础操作、经过主机身份验证的 SSH / TLS 连接及 MCP 数据库工具；其他数据库、AI、插件、备份和数据库间传输尚未迁移。</span>
-    <span v-else>Basic SQLite, MySQL / MariaDB and PostgreSQL operations, verified SSH / TLS connections, and MCP database tools are available. Other databases, AI, plugins, backups and database transfers are pending.</span>
+    <span v-if="chinese">已接入 SQLite、MySQL / MariaDB、PostgreSQL、Redis、MongoDB 和 ClickHouse 的基础操作与安全连接。MCP 当前支持前三类关系数据库；其他引擎、AI、插件及高级管理功能仍在迁移。</span>
+    <span v-else>Basic operations and secure connections are available for SQLite, MySQL / MariaDB, PostgreSQL, Redis, MongoDB and ClickHouse. MCP supports the first three relational families; other engines, AI, plugins and advanced management remain in progress.</span>
   </div>
 </template>

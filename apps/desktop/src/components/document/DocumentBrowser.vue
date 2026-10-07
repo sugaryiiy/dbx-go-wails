@@ -19,6 +19,7 @@ import LightTooltip from "@/components/ui/LightTooltip.vue";
 import { Switch } from "@/components/ui/switch";
 import QueryLoadingState from "@/components/common/QueryLoadingState.vue";
 import * as api from "@/lib/backend/api";
+import { isGoBackend } from "@/lib/backend/goCapabilities";
 import type { DynamoDbIndexInfo, DynamoDbTableDescription } from "@/lib/backend/api";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { getDataGridConditionSuggestionPosition, type DataGridConditionSuggestionPosition } from "@/lib/dataGrid/dataGridConditionSuggestionPosition";
@@ -2203,7 +2204,7 @@ function metadataFieldsFromDocument(doc: JsonRecord | undefined): JsonRecord {
 }
 
 function currentDocumentMetadata(): JsonRecord {
-  if (selectedDoc.value) return metadataFieldsFromDocument(selectedDoc.value);
+  if (selectedIdx.value !== null) return metadataFieldsFromDocument(documentForEditing(selectedIdx.value));
   // New documents keep metadata that already exists in either editor mode.
   if (documentEditMode.value === "json") {
     const parsed = parseDocumentStoreJsonDocument(editJson.value, documentStoreProvider.value.kind);
@@ -2269,9 +2270,16 @@ function startNew() {
   error.value = "";
 }
 
+function documentForEditing(index: number): JsonRecord | undefined {
+  const copy = isGoBackend() && documentStoreProvider.value.kind === "mongodb" ? copyDocuments.value[index] : undefined;
+  return copy ?? documents.value[index];
+}
+
 function startEdit() {
   if (!documentStoreEditable.value) return;
-  const doc = selectedDoc.value;
+  // Whole-document replacement must retain BSON numeric types even when the
+  // grid displays a safe int64 or integral double as an ordinary JSON number.
+  const doc = selectedIdx.value !== null ? documentForEditing(selectedIdx.value) : selectedDoc.value;
   if (!doc) return;
   // Issue #2952: open whole-document JSON editing by default (DBeaver-style), not field tree.
   editJson.value = stringifyDocumentStoreValue(doc, documentStoreProvider.value.kind, 2);
@@ -2432,7 +2440,8 @@ function resolveDocumentStorePathId(id: unknown): string | null {
   try {
     const serialized = serializeDocumentStoreId(id, documentStoreProvider.value.kind);
     return serialized.trim() ? serialized : null;
-  } catch {
+  } catch (cause) {
+    if (documentStoreProvider.value.kind === "mongodb") throw cause;
     return null;
   }
 }
@@ -2471,7 +2480,7 @@ async function saveDoc() {
         apis,
       });
     } else if (selectedIdx.value !== null) {
-      const current = documents.value[selectedIdx.value];
+      const current = documentForEditing(selectedIdx.value);
       const currentId = current?._id;
       if (currentId === undefined || currentId === null) {
         error.value = "No _id field";

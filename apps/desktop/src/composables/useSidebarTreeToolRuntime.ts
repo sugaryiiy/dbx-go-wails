@@ -1,4 +1,5 @@
 import type { ShallowRef } from "vue";
+import { supportsMongoAdvancedOperations } from "@/lib/mongo/mongoCapabilities";
 import type { useConnectionStore } from "@/stores/connectionStore";
 import type { useQueryStore } from "@/stores/queryStore";
 import type { useSettingsStore } from "@/stores/settingsStore";
@@ -159,6 +160,7 @@ export function useSidebarTreeToolRuntime(options: SidebarTreeToolRuntimeOptions
   }
 
   function openMongoImport() {
+    if (!supportsMongoAdvancedOperations()) return;
     const node = activeNode.value;
     if (!node.connectionId || !node.database || node.type !== "mongo-collection") return;
     connectionStore.mongoImportSource = {
@@ -169,6 +171,7 @@ export function useSidebarTreeToolRuntime(options: SidebarTreeToolRuntimeOptions
   }
 
   function openMongoDatabaseDump(mode: "dump" | "restore") {
+    if (!supportsMongoAdvancedOperations()) return;
     const node = activeNode.value;
     if (node.type !== "mongo-db" || !node.connectionId || !node.database) return;
     connectionStore.mongoDatabaseDumpSource = { connectionId: node.connectionId, database: node.database, mode };

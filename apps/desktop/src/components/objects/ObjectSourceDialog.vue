@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { supportsBackendTableEditing } from "@/lib/backend/goCapabilities";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { Clipboard, Loader2, PencilLine, RefreshCw } from "@lucide/vue";
@@ -65,7 +66,7 @@ onBeforeUnmount(() => {
   ++loadSerial;
 });
 
-const canEdit = computed(() => sourceEditable.value && (props.objectType !== "SEQUENCE" || props.databaseType === "oceanbase-oracle"));
+const canEdit = computed(() => supportsBackendTableEditing(props.databaseType) && sourceEditable.value && (props.objectType !== "SEQUENCE" || props.databaseType === "oceanbase-oracle"));
 const title = computed(() => `${editing.value ? t("contextMenu.editView") : t("contextMenu.viewSource")} - ${props.name}`);
 const hasRoutineMetadata = computed(() => !!routineMetadata.value && (routineMetadata.value.parameters.length > 0 || !!routineMetadata.value.returnType));
 
@@ -101,14 +102,16 @@ async function loadSource(nextEditing = props.initialEditing && canEdit.value) {
     const schema = target.schema || target.database;
     const { source: result, objectType: resolvedType } = await loadObjectSourceWithRoutineFallback(api.getObjectSource, target.connectionId, target.database, schema, target.name, target.objectType, target.signature, target.relationName);
     if (serial !== loadSerial) return;
-    const editableAllowed = result.editable !== false;
-    const editable = await buildEditableObjectSource({
-      databaseType: target.databaseType,
-      objectType: resolvedType,
-      schema,
-      name: target.name,
-      source: result.source,
-    });
+    const editableAllowed = supportsBackendTableEditing(target.databaseType) && result.editable !== false;
+    const editable = supportsBackendTableEditing(target.databaseType)
+      ? await buildEditableObjectSource({
+          databaseType: target.databaseType,
+          objectType: resolvedType,
+          schema,
+          name: target.name,
+          source: result.source,
+        })
+      : result.source;
     if (serial !== loadSerial) return;
     resolvedObjectType.value = resolvedType;
     routineMetadata.value = props.databaseType === "xugu" && (resolvedType === "PROCEDURE" || resolvedType === "FUNCTION") ? xuguRoutineMetadataFromDefinition(result.source) : null;

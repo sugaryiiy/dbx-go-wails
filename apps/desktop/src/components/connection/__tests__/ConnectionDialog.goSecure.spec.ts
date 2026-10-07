@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import type { ConnectionConfig } from "@/types/database";
 
-
 const { store, settings, backend } = vi.hoisted(() => ({
   store: {
     connectionGroupOptions: [],
@@ -54,7 +53,7 @@ vi.mock("@/stores/settingsStore", async (original) => ({ ...(await original<type
 vi.mock("@/stores/tunnelProfileStore", () => ({ useTunnelProfileStore: () => ({ profiles: [], profileById: () => undefined, init: vi.fn() }) }));
 vi.mock("@/lib/backend/api", async (original) => ({ ...(await original<typeof import("@/lib/backend/api")>()), ...backend }));
 vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => false }));
-vi.mock("@/lib/backend/goCapabilities", () => ({ isGoBackend: () => true, GO_CONNECTION_PROFILES: new Set(["sqlite", "mysql", "mariadb", "postgres"]) }));
+vi.mock("@/lib/backend/goCapabilities", () => ({ isGoBackend: () => true, GO_CONNECTION_PROFILES: new Set(["sqlite", "mysql", "mariadb", "postgres", "redis", "mongodb", "clickhouse"]) }));
 const native = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock("@/lib/backend/wailsRuntime", () => ({ isWailsRuntime: () => true, openWailsFile: native.open, saveWailsFile: vi.fn() }));
 vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
@@ -214,7 +213,6 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-
 async function saveDraft() {
   const save = [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Save");
   expect(save).toBeTruthy();
@@ -223,10 +221,10 @@ async function saveDraft() {
 }
 
 describe("Go secure connection editor", () => {
-  for (const profile of ["sqlite", "mysql", "mariadb", "postgres"]) {
+  for (const profile of ["sqlite", "mysql", "mariadb", "postgres", "redis", "mongodb", "clickhouse"] as const) {
     it(`tests native ${profile} without legacy agent installation or progress subscriptions`, async () => {
       backend.listInstalledAgentsLocal.mockRejectedValue(new Error("unmigrated agents endpoint"));
-      await mountDialog(savedConnection({ db_type: profile === "postgres" ? "postgres" : profile === "sqlite" ? "sqlite" : "mysql", driver_profile: profile, host: profile === "sqlite" ? "/tmp/test.sqlite" : "db.internal", ssl: profile !== "sqlite", ca_cert_path: "", client_cert_path: "", client_key_path: "" }));
+      await mountDialog(savedConnection({ db_type: profile === "mariadb" ? "mysql" : profile, driver_profile: profile, host: profile === "sqlite" ? "/tmp/test.sqlite" : "db.internal", ssl: profile !== "sqlite", ca_cert_path: "", client_cert_path: "", client_key_path: "" }));
       const test = [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === i18n.global.t("connection.test"));
       expect(test).toBeTruthy();
       test!.click();
@@ -249,15 +247,21 @@ describe("Go secure connection editor", () => {
     expect(document.body.textContent).toContain("not yet been migrated to Go");
   });
 
-  for (const profile of ["mysql", "mariadb", "postgres"]) {
+  for (const profile of ["mysql", "mariadb", "postgres", "redis", "mongodb", "clickhouse"] as const) {
     it(`preserves direct TLS fields when saving ${profile}`, async () => {
-      await mountDialog(savedConnection({ db_type: profile === "postgres" ? "postgres" : "mysql", driver_profile: profile }));
+      await mountDialog(savedConnection({ db_type: profile === "mariadb" ? "mysql" : profile, driver_profile: profile }));
       expect(document.querySelector('[data-testid="go-tls-fields"]')).not.toBeNull();
       expect(document.body.textContent).toContain("verify server identity");
       await saveDraft();
-      expect(store.updateConnection).toHaveBeenCalledWith(expect.objectContaining({
-        ssl: true, ca_cert_path: "~/certs/ca.pem", client_cert_path: "~/certs/client.pem", client_key_path: "~/certs/client-key.pem", url_params: "",
-      }));
+      expect(store.updateConnection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ssl: true,
+          ca_cert_path: "~/certs/ca.pem",
+          client_cert_path: "~/certs/client.pem",
+          client_key_path: "~/certs/client-key.pem",
+          url_params: "",
+        }),
+      );
     });
   }
 

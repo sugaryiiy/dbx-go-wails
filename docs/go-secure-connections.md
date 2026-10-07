@@ -1,7 +1,7 @@
 # Go 安全连接与 PostgreSQL 结构导出
 
-Go/Wails 版已支持 MySQL/MariaDB、PostgreSQL 的 TLS、客户端证书和 SSH 跳板。
-这些能力也用于 MCP 的独立数据库连接；其他数据库和原版全部高级管理功能仍在迁移。
+Go/Wails 版已支持 MySQL/MariaDB、PostgreSQL、Redis、MongoDB、ClickHouse 的严格 TLS、客户端证书配置和 SSH 跳板。
+MCP 的独立数据库连接目前限 MySQL/MariaDB、PostgreSQL；新增引擎的具体范围见 [数据库说明](go-native-engines.md)。
 
 ## TLS 与客户端证书
 
@@ -58,7 +58,7 @@ MCP 每次从持久化配置解析共享引用；保存共享配置会取消当�
 ## 当前不支持的连接选项
 
 - SQLite 的网络 TLS/SSH；SQLite 仍使用本地文件。
-- 自定义 DSN、URL 参数、初始化脚本、非原生驱动配置和附加数据库。
+- 自定义 DSN、任意 URL 参数、初始化脚本、非原生驱动配置和附加数据库。MongoDB 仅允许 `authSource`、`authMechanism=SCRAM-SHA-1|SCRAM-SHA-256`、`directConnection=true` 参数。
 - HTTP/SOCKS 代理、HTTP 隧道、`ProxyCommand`、exec 通道回退、局域网转发监听。
 - 读取 `~/.ssh/config` 的别名、ProxyJump 等配置；请在界面逐跳填写。
 - 键盘交互认证、交互式 MFA 提示、Windows 原生 agent 命名管道；当前 agent 接口为 Unix socket。

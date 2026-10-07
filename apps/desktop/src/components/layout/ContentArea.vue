@@ -178,6 +178,7 @@ import { dataTabExecutionDatabase } from "@/lib/table/dataTabExecutionDatabase";
 import { formatShortcut } from "@/lib/editor/shortcutRegistry";
 import type { CodeMirrorSqlDialectName } from "@/lib/editor/codemirrorSqlDialect";
 import { codeMirrorSqlDialect, codeMirrorSqlDialectForConnection, effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
+import { supportsBackendTableEditing } from "@/lib/backend/goCapabilities";
 import { supportsTableImport } from "@/lib/database/databaseFeatureSupport";
 import { chartableColumnIndexes } from "@/lib/dataGrid/chartData";
 import { elasticsearchJsonResponseForResult } from "@/lib/elasticsearch/elasticsearchJsonResponse";
@@ -2505,7 +2506,7 @@ defineExpose({
                 :export-sql="activeResultExportSql"
                 :page-sql="activeTab.resultPageSql"
                 :loading="activeResultIsLoading"
-                :editable="!hasNeo4jNodes && (!!activeTab.queryAnalysis || !!mongoQueryResultSaveHandler)"
+                :editable="supportsBackendTableEditing(activeEffectiveDatabaseType) && !hasNeo4jNodes && (!!activeTab.queryAnalysis || !!mongoQueryResultSaveHandler)"
                 :source-columns="hasNeo4jNodes ? undefined : activeTab.querySourceColumns"
                 :joined-write-targets="hasNeo4jNodes ? undefined : activeTab.queryWriteTargets"
                 :readonly-column-indexes="hasNeo4jNodes ? undefined : groupedQueryReadonlyColumnIndexes(activeTab)"
@@ -2995,7 +2996,7 @@ defineExpose({
           :sql="activeTab.sql"
           :page-sql="activeTab.resultPageSql || activeTab.sql"
           :loading="activeTab.isExecuting"
-          :editable="!activeTab.tableMetaPending && (isTableDataEditable(activeEffectiveDatabaseType, activeTableMeta?.primaryKeys ?? [], activeTableMeta?.tableType) || !!influxDbV1DeleteSaveHandler)"
+          :editable="supportsBackendTableEditing(activeEffectiveDatabaseType) && !activeTab.tableMetaPending && (isTableDataEditable(activeEffectiveDatabaseType, activeTableMeta?.primaryKeys ?? [], activeTableMeta?.tableType) || !!influxDbV1DeleteSaveHandler)"
           :custom-save-handler="influxDbV1DeleteSaveHandler"
           context="table-data"
           :initial-where-input="activeTab.whereInput"

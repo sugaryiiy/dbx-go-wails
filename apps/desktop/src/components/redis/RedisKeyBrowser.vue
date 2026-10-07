@@ -25,6 +25,7 @@ import RedisGroupedKeyList from "./RedisGroupedKeyList.vue";
 import RedisKeyGroupingDialog from "./RedisKeyGroupingDialog.vue";
 import { defaultRedisKeyGrouping, type RedisKeyGrouping } from "@/lib/redis/redisKeyGrouping";
 import * as api from "@/lib/backend/api";
+import { isGoBackend } from "@/lib/backend/goCapabilities";
 import type { RedisKeyInfo, RedisScanResult, RedisValue, HistoryEntry } from "@/lib/backend/api";
 import { uuid } from "@/lib/common/utils";
 import { useConnectionStore } from "@/stores/connectionStore";
@@ -72,6 +73,7 @@ import { computeTtlCountdownValue } from "@/lib/redis/redisAutoRefresh";
 import { createRedisKeyViewYield } from "@/lib/redis/redisKeyViewScheduler";
 import { restoreRedisKeyBrowserState, saveRedisKeyBrowserState } from "@/lib/tabs/redisKeyBrowserStateCache";
 
+const goBackend = isGoBackend();
 const { t, locale } = useI18n();
 const { toast } = useToast();
 const connectionStore = useConnectionStore();
@@ -160,7 +162,7 @@ let latestRedisKeyScrollAnchor: RedisKeyViewportAnchor | null = null;
 const valueViewerRef = ref<{ focusSearch: () => boolean } | null>(null);
 const commandTerminalRef = ref<HTMLElement>();
 const searchPattern = ref(restoredRedisKeyBrowserState?.searchPattern ?? "");
-const searchMode = ref<RedisSearchMode>(restoredRedisKeyBrowserState?.searchMode ?? "key");
+const searchMode = ref<RedisSearchMode>(goBackend ? "key" : (restoredRedisKeyBrowserState?.searchMode ?? "key"));
 const fuzzyKeySearch = ref(restoredRedisKeyBrowserState?.fuzzyKeySearch ?? false);
 const keyTemplateMenuOpen = ref(false);
 const keyTemplateSelectedIndex = ref(0);
@@ -444,15 +446,18 @@ const dangerMessage = computed(() => {
   return t("dangerDialog.deleteMessage");
 });
 const commandPrompt = computed(() => `db${commandDb.value}>`);
-const createKeyTypeOptions = computed<{ value: RedisCreateKeyType; label: string }[]>(() => [
-  { value: "string", label: "String" },
-  { value: "hash", label: "Hash" },
-  { value: "list", label: "List" },
-  { value: "set", label: "Set" },
-  { value: "zset", label: "Sorted Set" },
-  { value: "stream", label: "Stream" },
-  { value: "json", label: "JSON" },
-]);
+const createKeyTypeOptions = computed<{ value: RedisCreateKeyType; label: string }[]>(() => {
+  const options: { value: RedisCreateKeyType; label: string }[] = [
+    { value: "string", label: "String" },
+    { value: "hash", label: "Hash" },
+    { value: "list", label: "List" },
+    { value: "set", label: "Set" },
+    { value: "zset", label: "Sorted Set" },
+    { value: "stream", label: "Stream" },
+    { value: "json", label: "JSON" },
+  ];
+  return goBackend ? options.filter((option) => option.value !== "stream" && option.value !== "json") : options;
+});
 function createKeyTypeTooltip(type: RedisCreateKeyType): string | undefined {
   const help = getRedisCreateKeyTypeHelp(type);
   return help ? t(`redis.createKeyTypeHelp.${help.key}`) : undefined;
@@ -1687,7 +1692,7 @@ function requestBatchDelete() {
 
 function requestGroupDelete(node: RedisKeyTreeNode, event?: Event) {
   event?.stopPropagation();
-  if (node.kind !== "group" || selectionBusy.value) return;
+  if (goBackend || node.kind !== "group" || selectionBusy.value) return;
   // 一个分组是键名前缀：树里只持有已扫描到的那部分子键，按已加载行删除会
   // 留下一部分键（#10164）。这里改为删除该前缀下的全部键。
   const pattern = redisGroupSubtreePattern(node.pathSegments, redisKeySeparator.value);
@@ -1739,7 +1744,7 @@ function redisKeyContextMenuItems(node: RedisKeyTreeNode): ContextMenuItem[] {
     ];
     // Fuzzy hierarchy represents only the loaded matching subset. Keep its
     // destructive actions hidden, matching the inline group-delete button.
-    if (!isFuzzyHierarchyView.value) {
+    if (!goBackend && !isFuzzyHierarchyView.value) {
       items.push({
         label: t("redis.deleteGroupKeys"),
         icon: Trash2,
@@ -2025,7 +2030,7 @@ async function runRedisCommand(command: string) {
   // in on the same entry once the response (or error) arrives.
   const entryId = appendCommandHistory({ prompt, command, output: "", error: false });
   try {
-    const result = await api.redisExecuteCommand(props.connectionId, commandDb.value, command, !props.blockDangerousRedisCommands);
+    const result = await api.redisExecuteCommand(props.connectionId, commandDb.value, command, !goBackend && !props.blockDangerousRedisCommands);
     updateCommandHistory(entryId, { output: formatRedisConsoleValue(result.value, command), error: false });
     // The db this command ran on — capture before nextRedisCommandDb() advances it.
     const executedDb = commandDb.value;
@@ -2671,6 +2676,7 @@ function submitSearch() {
 }
 
 function setSearchMode(mode: RedisSearchMode) {
+  if (goBackend && mode !== "key") return;
   if (searchMode.value === mode) return;
   searchMode.value = mode;
   dismissSearchHistoryMenu();
@@ -3252,10 +3258,10 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
                 <button type="button" class="redis-search-mode-button h-5 px-2 text-xs rounded-sm transition-colors" :class="searchMode === 'key' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'" @click="setSearchMode('key')">
                   {{ t("redis.searchByKey") }}
                 </button>
-                <button type="button" class="redis-search-mode-button h-5 px-2 text-xs rounded-sm transition-colors" :class="searchMode === 'value' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'" @click="setSearchMode('value')">
+                <button v-if="!goBackend" type="button" class="redis-search-mode-button h-5 px-2 text-xs rounded-sm transition-colors" :class="searchMode === 'value' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'" @click="setSearchMode('value')">
                   {{ t("redis.searchByValue") }}
                 </button>
-                <button type="button" class="redis-search-mode-button h-5 px-2 text-xs rounded-sm transition-colors" :class="searchMode === 'all' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'" @click="setSearchMode('all')">
+                <button v-if="!goBackend" type="button" class="redis-search-mode-button h-5 px-2 text-xs rounded-sm transition-colors" :class="searchMode === 'all' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'" @click="setSearchMode('all')">
                   {{ t("redis.searchByAll") }}
                 </button>
               </div>
@@ -3511,7 +3517,15 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
                       :title="redisRowTtl(row.node) === -1 ? t('redis.noExpiry') : t('redis.ttlCountdownTitle')"
                       >{{ redisTtlBadgeText(redisRowTtl(row.node), redisRowDisplayTtl(redisRowTtl(row.node), row.node.keyRaw)) }}</span
                     >
-                    <Button v-if="row.node.kind === 'group' && !isFuzzyHierarchyView" variant="ghost" size="icon" class="h-5 w-5 shrink-0 text-destructive opacity-0 group-hover:opacity-100" :title="t('redis.deleteGroup')" :disabled="selectionBusy" @click="requestGroupDelete(row.node, $event)">
+                    <Button
+                      v-if="!goBackend && row.node.kind === 'group' && !isFuzzyHierarchyView"
+                      variant="ghost"
+                      size="icon"
+                      class="h-5 w-5 shrink-0 text-destructive opacity-0 group-hover:opacity-100"
+                      :title="t('redis.deleteGroup')"
+                      :disabled="selectionBusy"
+                      @click="requestGroupDelete(row.node, $event)"
+                    >
                       <Trash2 class="h-3 w-3" />
                     </Button>
                     <Button
@@ -3568,17 +3582,18 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
                   <TerminalSquare class="size-3.5" />
                   {{ t("redis.commandLine") }}
                 </TabsTrigger>
-                <TabsTrigger value="pubsub" class="h-6 flex-none gap-1.5 rounded-md px-2 text-xs">
+                <TabsTrigger v-if="!goBackend" value="pubsub" class="h-6 flex-none gap-1.5 rounded-md px-2 text-xs">
                   <Radio class="size-3.5" />
                   {{ t("redis.pubsub") }}
                 </TabsTrigger>
-                <TabsTrigger value="slowlog" class="h-6 flex-none gap-1.5 rounded-md px-2 text-xs">
+                <TabsTrigger v-if="!goBackend" value="slowlog" class="h-6 flex-none gap-1.5 rounded-md px-2 text-xs">
                   <Clock class="size-3.5" />
                   {{ t("redis.slowlog") }}
                 </TabsTrigger>
               </TabsList>
               <div v-if="activeSidePanel === 'command'" class="flex shrink-0 items-center gap-1">
                 <Button
+                  v-if="!goBackend"
                   variant="ghost"
                   size="icon"
                   class="h-6 w-6"
@@ -3686,11 +3701,11 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
               </div>
             </TabsContent>
 
-            <TabsContent value="pubsub" class="m-0 min-h-0 flex-1 flex flex-col">
+            <TabsContent v-if="!goBackend" value="pubsub" class="m-0 min-h-0 flex-1 flex flex-col">
               <RedisPubSubPanel :connection-id="connectionId" :db="db" />
             </TabsContent>
 
-            <TabsContent value="slowlog" class="m-0 min-h-0 flex-1 flex flex-col">
+            <TabsContent v-if="!goBackend" value="slowlog" class="m-0 min-h-0 flex-1 flex flex-col">
               <RedisSlowlogPanel :connection-id="connectionId" :db="db" />
             </TabsContent>
           </Tabs>

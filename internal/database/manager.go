@@ -24,6 +24,8 @@ import (
 var ErrUnsupported = errors.New("not implemented by the Go database engine")
 
 type Config struct {
+	// Raw retains engine-specific connection options for native non-SQL clients.
+	Raw                 map[string]any   `json:"-"`
 	ID                  string           `json:"id"`
 	Name                string           `json:"name"`
 	Type                string           `json:"db_type"`
@@ -56,6 +58,9 @@ type Config struct {
 type connection struct {
 	config        Config
 	pools         map[string]*sql.DB
+	native        nativeDriver
+	life          context.Context
+	cancel        context.CancelFunc
 	unlockedUntil time.Time
 }
 type runningQuery struct {
@@ -83,6 +88,12 @@ func (m *Manager) Close() error {
 	m.mu.Unlock()
 	var errs []error
 	for _, c := range connections {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		if c.native != nil {
+			errs = append(errs, c.native.Close())
+		}
 		for _, db := range c.pools {
 			errs = append(errs, db.Close())
 		}
@@ -135,7 +146,7 @@ func (c Config) normalized() Config {
 }
 func (c Config) validate() error {
 	switch c.Type {
-	case "sqlite", "mysql", "postgres":
+	case "sqlite", "mysql", "postgres", "redis", "mongodb", "clickhouse":
 	default:
 		return unsupported("database type " + c.Type)
 	}
@@ -148,7 +159,7 @@ func (c Config) validate() error {
 	if c.Type == "sqlite" && (c.SSL || c.CACert != "" || c.ClientCert != "" || c.ClientKey != "") {
 		return unsupported("TLS settings on SQLite")
 	}
-	if c.ConnectionString != "" || c.URLParams != "" {
+	if c.ConnectionString != "" || c.URLParams != "" && c.Type != "mongodb" {
 		return unsupported("custom connection strings and URL parameters")
 	}
 	if c.InitScript != "" {
@@ -328,6 +339,9 @@ func (m *Manager) Connect(ctx context.Context, c Config) error {
 	if c.ID == "" {
 		return errors.New("connection id is required")
 	}
+	if usesNativeDriver(c.Type) {
+		return m.connectNative(ctx, c)
+	}
 	db, e := openDB(ctx, c, c.Database)
 	if e != nil {
 		return e
@@ -347,6 +361,12 @@ func (m *Manager) Connect(ctx context.Context, c Config) error {
 	m.connections[c.ID] = &connection{config: c, pools: map[string]*sql.DB{c.Database: db}}
 	m.mu.Unlock()
 	if old != nil {
+		if old.cancel != nil {
+			old.cancel()
+		}
+		if old.native != nil {
+			old.native.Close()
+		}
 		for _, pool := range old.pools {
 			pool.Close()
 		}
@@ -362,6 +382,10 @@ func (m *Manager) pool(ctx context.Context, id, database string) (*sql.DB, Confi
 		return nil, Config{}, false, errors.New("database connection is not open")
 	}
 	cfg := c.config
+	if c.native != nil {
+		m.mu.RUnlock()
+		return nil, cfg, false, unsupported("SQL pool operations for " + cfg.Type)
+	}
 	effectiveDatabase := database
 	if cfg.Type == "sqlite" {
 		if database != "" && database != "main" && database != cfg.Database {
@@ -409,11 +433,17 @@ func (m *Manager) pool(ctx context.Context, id, database string) (*sql.DB, Confi
 	return db, cfg, locked, nil
 }
 func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (any, error) {
+	if result, handled, err := m.handleNative(ctx, path, p); handled {
+		return result, err
+	}
 	switch path {
 	case "/api/connection/test", "/api/connection/test-info":
 		c, e := decodeConfig(p)
 		if e != nil {
 			return nil, e
+		}
+		if usesNativeDriver(c.Type) {
+			return testNative(ctx, c, path == "/api/connection/test-info")
 		}
 		db, e := openDB(ctx, c, c.Database)
 		if e != nil {
@@ -450,6 +480,12 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 		}
 		m.mu.Unlock()
 		if c != nil {
+			if c.cancel != nil {
+				c.cancel()
+			}
+			if c.native != nil {
+				c.native.Close()
+			}
 			for _, db := range c.pools {
 				db.Close()
 			}

@@ -5,6 +5,10 @@ import { createI18n } from "vue-i18n";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  goBackend: false,
+  wailsRuntime: false,
+  saveWailsBytes: vi.fn(),
+  redisGetRawValue: vi.fn(),
   redisGetValue: vi.fn(),
   redisGetTtl: vi.fn(),
   redisSetTtl: vi.fn(),
@@ -13,8 +17,12 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
 }));
 
+vi.mock("@/lib/backend/goCapabilities", () => ({ isGoBackend: () => mocks.goBackend }));
+vi.mock("@/lib/backend/wailsRuntime", () => ({ isWailsRuntime: () => mocks.wailsRuntime, saveWailsBytes: mocks.saveWailsBytes }));
+
 vi.mock("@/lib/backend/api", () => ({
   redisGetValue: mocks.redisGetValue,
+  redisGetRawValue: mocks.redisGetRawValue,
   redisGetTtl: mocks.redisGetTtl,
   redisSetTtl: mocks.redisSetTtl,
   redisSetExpireAt: mocks.redisSetExpireAt,
@@ -71,6 +79,8 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.goBackend = false;
+  mocks.wailsRuntime = false;
   vi.stubGlobal("localStorage", createLocalStorage());
 });
 
@@ -271,5 +281,34 @@ describe("Redis collection member search", () => {
 
     expect(document.body.textContent).toContain("1 members");
     expect(document.body.textContent).not.toContain("/ 100 members loaded");
+  });
+});
+
+describe("Go Redis collection and download controls", () => {
+  it("keeps collection pagination available while hiding unsupported member filters", async () => {
+    mocks.goBackend = true;
+    mocks.redisGetValue.mockResolvedValue({ ...listValue(), data: { ...listValue().data, total: 300, scan_cursor: 100 } });
+    mocks.redisLoadMore.mockResolvedValue({ kind: "list", items: [{ index: 100, value: blob("later") }] });
+    mountViewer();
+    await settle();
+    expect(searchInput()).toBeNull();
+    loadMoreButton().click();
+    await settle();
+    expect(mocks.redisLoadMore).toHaveBeenCalledWith("connection", 0, "key", "list", 100, 200, undefined, undefined);
+  });
+
+  it("saves exact binary Redis downloads through the Wails file dialog", async () => {
+    mocks.goBackend = true;
+    mocks.wailsRuntime = true;
+    mocks.redisGetValue.mockResolvedValue({ key_display: "key", key_raw: "key", ttl: -1, redis_type: "string", data: { kind: "string", content: blob("preview"), total_bytes: 100000, truncated: true } });
+    mocks.redisGetRawValue.mockResolvedValue({ raw_base64: btoa("\x00\xff"), encoding: "binary" });
+    mocks.saveWailsBytes.mockResolvedValue(undefined);
+    mountViewer();
+    await settle();
+    const download = document.querySelector<HTMLButtonElement>('button[aria-label="redis.downloadValue"]');
+    expect(download).not.toBeNull();
+    download!.click();
+    await settle();
+    expect(mocks.saveWailsBytes).toHaveBeenCalledWith("key.bin", new Uint8Array([0, 255]));
   });
 });

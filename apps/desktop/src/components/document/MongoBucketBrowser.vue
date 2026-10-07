@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { supportsMongoAdvancedOperations, mongoAdvancedUnavailableMessage } from "@/lib/mongo/mongoCapabilities";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Download, Filter, LoaderCircle, Plus, RefreshCcw, Trash2, Upload, X } from "@lucide/vue";
 import DangerConfirmDialog from "@/components/editor/DangerConfirmDialog.vue";
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,9 @@ type GridFsFile = Awaited<ReturnType<typeof api.documentListGridFsFiles>>[number
 // bucket and drops the user's filter/sort (#8679).
 const restoredGridFsState = props.stateKey ? restoreGridFsBrowserState<GridFsFile>(props.stateKey) : undefined;
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
+const mongoAdvancedAvailable = supportsMongoAdvancedOperations();
+const mongoAdvancedMessage = computed(() => mongoAdvancedUnavailableMessage(locale.value));
 const { toast } = useToast();
 const connectionStore = useConnectionStore();
 const settingsStore = useSettingsStore();
@@ -244,6 +247,7 @@ function persistGridFsState(options: { includeRows?: boolean } = {}) {
 watch([filterInput, sortInput, appliedStructuredFilter, filterRules, page, selectedFileId], () => persistGridFsState(), { deep: true });
 
 async function loadFiles() {
+  if (!mongoAdvancedAvailable) return;
   loading.value = true;
   error.value = "";
   try {
@@ -448,7 +452,8 @@ watch(
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 flex-col overflow-hidden">
+  <div v-if="!mongoAdvancedAvailable" role="note" class="p-4 text-sm text-muted-foreground">{{ mongoAdvancedMessage }}</div>
+  <div v-else class="flex h-full min-h-0 flex-col overflow-hidden">
     <div class="border-b border-border px-4 py-3">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="min-w-0">

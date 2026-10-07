@@ -17,6 +17,7 @@ Web 模式使用同一服务实现并要求登录。默认命令和 CI 已切换
 | 桌面运行 | Wails 2.16.0；macOS 原生应用已打包、启动并执行示例查询 |
 | 窗口/剪贴板/文件 | 原生窗口控制、置顶、文本剪贴板、打开/保存对话框、导出文件保存 |
 | 原生数据库 | SQLite、MySQL/MariaDB、PostgreSQL；SQLite、MySQL 8.4 和 PostgreSQL 17 已有实库验证，MariaDB 尚未单独实库验收 |
+| 新增数据库 | Redis 单机键浏览/基础类型编辑、MongoDB 单节点文档/聚合/索引、ClickHouse HTTP SQL/元数据；TLS/SSH 与写入保护，详见 [范围及实库测试](docs/go-native-engines.md) |
 | 安全连接 | 严格 TLS 1.2+/mTLS、最多 4 跳 SSH、known_hosts 或 SHA256 主机校验、加密共享隧道；详见 [安全连接](docs/go-secure-connections.md) |
 | 查询 | CRUD、批量语句、事务执行、超时、取消、结果限额、分页和基础排序/EXPLAIN SQL 构建 |
 | 表格编辑 | 有主键表格增删改、复制 INSERT/UPDATE、补偿 SQL；无主键更新/删除明确拒绝 |
@@ -31,8 +32,9 @@ Web 模式使用同一服务实现并要求登录。默认命令和 CI 已切换
 
 ## 当前限制
 
-- 自定义 DSN/URL 参数、初始化脚本、附加数据库和其他数据库引擎尚未迁移。
-- 安全连接仅支持 MySQL/MariaDB、PostgreSQL。SSH 不读取 OpenSSH 配置别名，不支持 ProxyCommand、exec 回退、HTTP/SOCKS 代理、HTTP 隧道、LAN 监听或交互式 MFA；agent 当前仅支持 Unix socket。
+- 自定义 DSN、任意 URL 参数、初始化脚本、附加数据库和其他数据库引擎尚未迁移；MongoDB 仅开放认证库、SCRAM 机制、directConnection=true 参数。
+- 安全连接支持 MySQL/MariaDB、PostgreSQL、Redis、MongoDB、ClickHouse。SSH 不读取 OpenSSH 配置别名，不支持 ProxyCommand、exec 回退、HTTP/SOCKS 代理、HTTP 隧道、LAN 监听或交互式 MFA；agent 当前仅支持 Unix socket。
+- Redis 暂限单机及 string/hash/list/set/zset（原子编辑需要 Redis 7+）；MongoDB 暂限单节点 SCRAM；ClickHouse 无事务、直接表格编辑或通用导入。新增三类引擎尚未接入 MCP；现有关系型表格编辑、导入等能力不自动适用于它们。
 - PostgreSQL DDL 不是完整备份：不导出数据、权限、所有权或序列当前位置，引用对象需预先存在；分区/继承/外部表、RLS、触发器/规则等高级对象明确拒绝，详见 [DDL 边界](docs/go-secure-connections.md#postgresql-结构-ddl)。
 - 持久事务会话、显式 BEGIN/COMMIT 脚本和 CREATE TRIGGER 尚未支持；事务执行接口可用。
 - 编辑保存遇到主键记录已被外部删除时，当前沿用原版 0 行受影响结果，尚无专门的并发冲突提示。
@@ -69,6 +71,10 @@ Web 模式使用同一服务实现并要求登录。默认命令和 CI 已切换
 - MySQL 8.4、PostgreSQL 17 实库矩阵：直连 TLS、单跳/双跳 SSH 均通过 CRUD、事务回滚、只读写入与 `FOR UPDATE` 拒绝、超时/显式取消、关闭及重连；检查实际会话 TLS cipher，错误 CA/主机名被拒绝。以 `DBX_TEST_DATABASE_CONFIGS` 指定测试配置文件启用。
 - MySQL 8.4、PostgreSQL 17 TLS 实库 MCP：持久化连接配置执行 `SELECT 42`、只读写入拒绝、不保存密码时拒绝复用均通过 race 测试。共享隧道加密持久化、原子校验、引用更新/删除解析和凭据脱敏测试通过。
 - PostgreSQL 17 TLS 实库：复合外键、索引表达式/opclass/排序/INCLUDE、主键 INCLUDE 列归属、自引用外键，以及表/视图/物化视图 DDL 删除重建均通过；验证 serial/identity、生成列、默认值和约束实际行为。相关测试以 `DBX_TEST_POSTGRES_DSN` 启用，race 检查通过；另验证 PostgreSQL 17 的默认统计目标 NULL 不被改写成禁用统计的 0。
+
+- Redis 7.4、MongoDB 8、ClickHouse 25.8 实库：TLS、SSH、基本读写、只读保护、取消、错误 CA 拒绝及结果限额通过 race 测试。Redis 覆盖五类基础类型、二进制、TTL、并发逻辑库隔离和 ACL；MongoDB 覆盖 Extended JSON/复杂 ID 往返与索引；ClickHouse 覆盖 UInt64/Decimal、元数据及服务端查询终止。
+- 三类新增引擎 HTTP 验证：登录、连接加密保存后重启、TLS 重连、原生接口、临时解锁/重新上锁及 MCP 隔离；ClickHouse 四种查询结果导出和文本 EXPLAIN 已实测。完整 Go race、go vet、Vue 类型检查、467 项相关前端回归及 Wails 构建通过。
+- macOS 原生应用实测：Redis 字符串编辑保存、MongoDB 文档编辑保存及 Shell 查询、ClickHouse 表格浏览/分页 SQL 查询与精确数值显示。截图存于本地 `outputs/redis-go-preview.png`、`outputs/mongo-go-preview.png`、`outputs/clickhouse-go-preview.png`。
 
 此状态按已运行检查记录；未覆盖的能力不视为已经迁移或验证。
 

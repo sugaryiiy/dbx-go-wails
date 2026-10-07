@@ -77,7 +77,7 @@ import type {
   TunnelProfile,
 } from "@/types/database";
 import type { DetachedTabHandoff } from "@/lib/app/detachedTabHandoff";
-import { normalizeRustMongoCommand, type MongoCommand } from "@/lib/mongo/mongoShellCommand";
+import { normalizeRustMongoCommand, parseMongoCommand, describeMongoCommandParseFailure, type MongoCommand } from "@/lib/mongo/mongoShellCommand";
 import type { MongoBulkWriteResult } from "@/lib/mongo/mongoShellCommand";
 import { BackendErrorException, type BackendError } from "@/lib/backend/errorUtils";
 import { decodeMeilisearchDocumentPage, decodeMeilisearchSearchResult, type MeilisearchDocumentPage, type MeilisearchDocumentPageWire, type MeilisearchSearchResult, type MeilisearchSearchWireResult } from "@/lib/backend/meilisearchTransport";
@@ -1852,6 +1852,7 @@ export async function buildExecutableObjectSourceSql(input: BuildEditableObjectS
 }
 
 export async function buildEditableObjectSource(input: BuildEditableObjectSourceSqlInput): Promise<string> {
+  if (isGoBackend() && input.databaseType === "clickhouse") return input.source;
   return post("/api/query/build-editable-object-source", { input });
 }
 
@@ -4767,6 +4768,16 @@ export async function mongoFindDocuments(connectionId: string, database: string,
 }
 
 export async function mongoParseShellCommand(source: string): Promise<MongoCommand> {
+  if (isGoBackend()) {
+    const command = parseMongoCommand(source);
+    if (!command) throw new Error(describeMongoCommandParseFailure(source));
+    let operation = command.command;
+    while (operation.kind === "inDatabase") operation = operation.command;
+    if (operation.kind === "bulkWrite" || operation.kind === "createUser") {
+      throw new Error(`MongoDB ${operation.kind} has not yet been migrated to Go`);
+    }
+    return command.command;
+  }
   const raw = await post<Record<string, unknown>>("/api/mongo/parse-shell-command", { source });
   return normalizeRustMongoCommand(raw);
 }

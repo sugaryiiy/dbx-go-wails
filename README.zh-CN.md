@@ -39,6 +39,7 @@ pnpm build:go
 ## 已实现
 
 - SQLite、MySQL/MariaDB、PostgreSQL 的原生 Go 连接、查询、事务、取消、超时及基础元数据。
+- Redis 键浏览和基础类型编辑、MongoDB 文档/聚合/索引、ClickHouse HTTP SQL 与元数据，均支持 TLS/SSH，见 [新增数据库说明](docs/go-native-engines.md)。
 - TLS/mTLS、最多 4 跳 SSH 及加密共享隧道配置，见 [安全连接说明](docs/go-secure-connections.md)。
 - PostgreSQL 普通表、视图、物化视图的结构 DDL、索引和复合外键；高级对象有明确限制。
 - 连接配置、SQL 文件、历史记录、设置及布局，加密持久化和跨进程数据目录锁。
@@ -51,6 +52,7 @@ pnpm build:go
 SQLite 已做真实数据库与 HTTP 集成测试；MySQL 8.4、PostgreSQL 17 已通过直连 TLS、
 单跳/双跳 SSH 的 CRUD、回滚、只读及取消实库验证，也通过 MCP TLS 验证。
 PostgreSQL 另已验证 DDL 重建，mTLS 有协议集成测试覆盖。
+Redis 7.4、MongoDB 8、ClickHouse 25.8 已通过真实 TLS/SSH、读写及只读保护测试。
 导入导出当前限制单任务 10 万行、32 MiB；导出使用只读查询。
 其他数据库、高级结构编辑、AI、插件及发布更新仍待迁移。
 后端未迁移能力会明确返回错误。详细状态见 [MIGRATION.md](MIGRATION.md)。

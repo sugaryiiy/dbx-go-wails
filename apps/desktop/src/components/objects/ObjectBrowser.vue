@@ -76,6 +76,7 @@ import * as api from "@/lib/backend/api";
 import type { ColumnInfo, ConnectionConfig, ConstraintInfo, ForeignKeyInfo, IndexInfo, ObjectBrowserViewMode, ObjectBrowserViewport, ObjectInfo, ObjectSourceKind, ObjectStatistics, PgTablePartitioning, TableInfoTab, TreeNode, TriggerInfo } from "@/types/database";
 import { sortTablesByFkDependency, type TableWithFk } from "@/lib/table/tableDependencySort";
 import { isSchemaAware, supportsTableVacuum, supportsTransfer } from "@/lib/database/databaseCapabilities";
+import { supportsBackendTableEditing, supportsBackendTableExport } from "@/lib/backend/goCapabilities";
 import { supportsAiAssistantContext, supportsDataDictionary, supportsSchemaDiagram, supportsTableImport, supportsTableStructureEditing, supportsTableTruncate } from "@/lib/database/databaseFeatureSupport";
 import { codeMirrorSqlDialect, connectionObjectTreeNodeSchema, connectionTableSqlSchema, connectionUsesDatabaseObjectTreeMode, effectiveDatabaseTypeForConnection, objectListSchemaForConnection, tableStructureDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { getTableMetadataCapabilities, type TableMetadataCapabilities } from "@/lib/table/tableMetadataCapabilities";
@@ -1582,7 +1583,7 @@ function openSourceTab(row: ObjectBrowserRow) {
     title: `Source - ${row.displayName || row.name}`,
     schema: row.schema || selectedSchema.value || props.database,
     catalog: props.catalog,
-    initialEditing: true,
+    initialEditing: supportsBackendTableEditing(effectiveDatabaseType.value),
     request: { name: row.name, objectType: row.type as ObjectSourceKind, signature: row.signature ?? undefined },
   });
 }
@@ -1623,7 +1624,7 @@ async function loadSourcePanel(row: ObjectBrowserRow, options?: { preserveEditin
   try {
     const result = await api.getObjectSource(connectionId, database, schema, row.name, row.type as ObjectSourceKind, row.signature ?? undefined);
     if (sidePanelGuard.isStale(epoch)) return;
-    sourceCanEdit.value = result.editable !== false && !["TRIGGER", "TYPE", "TYPE_BODY"].includes(row.type) && (row.type !== "SEQUENCE" || effectiveDatabaseType.value === "oceanbase-oracle");
+    sourceCanEdit.value = supportsBackendTableEditing(effectiveDatabaseType.value) && result.editable !== false && !["TRIGGER", "TYPE", "TYPE_BODY"].includes(row.type) && (row.type !== "SEQUENCE" || effectiveDatabaseType.value === "oceanbase-oracle");
     const editable = sourceCanEdit.value
       ? await api.buildEditableObjectSource({
           databaseType: effectiveDatabaseType.value,
@@ -3561,6 +3562,7 @@ function exportDataSubmenu(item: ObjectBrowserRow): ContextMenuItem {
   return {
     label: t("contextMenu.exportData"),
     icon: Upload,
+    disabled: !supportsBackendTableExport(effectiveDatabaseType.value),
     children: formats,
   };
 }
@@ -3674,7 +3676,7 @@ function getTableMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
     { label: t("dataCompare.title"), action: () => openDataCompare(item), icon: ArrowRightLeft },
     { label: "", separator: true },
     exportDataSubmenu(item),
-    { label: t("contextMenu.exportDatabase"), action: () => openDatabaseExport(item), icon: Upload },
+    { label: t("contextMenu.exportDatabase"), action: () => openDatabaseExport(item), icon: Upload, disabled: !supportsBackendTableExport(effectiveDatabaseType.value) },
     { label: t("contextMenu.exportStructure"), action: () => exportStructure(item), icon: FileCode },
     ...(canOpenDataDictionary.value ? [{ label: t("dataDictionary.title"), action: () => openDataDictionary(item), icon: FileText }] : []),
     { label: "", separator: true },
@@ -3698,7 +3700,7 @@ function getViewMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
   }
   return [
     { label: t("contextMenu.viewData"), action: () => openViewData(item), icon: Table2 },
-    { label: t("contextMenu.editView"), action: () => openSource(item), icon: PencilLine },
+    ...(supportsBackendTableEditing(effectiveDatabaseType.value) ? [{ label: t("contextMenu.editView"), action: () => openSource(item), icon: PencilLine }] : []),
     { label: t("contextMenu.viewSource"), action: () => openSource(item), icon: Code2 },
     ...(effectiveDatabaseType.value === "dameng" && item.type === "VIEW" && buildDamengCompileViewSql({ schema: item.schema || selectedSchema.value, name: item.name }) ? [{ label: t("contextMenu.compileObject"), action: () => compileDamengView(item), icon: Wrench }] : []),
     {
@@ -3711,7 +3713,7 @@ function getViewMenuItems(item: ObjectBrowserRow): ContextMenuItem[] {
     ...(canOpenDiagram.value ? [{ label: t("diagram.open"), action: () => openDiagram(item), icon: Network }] : []),
     { label: "", separator: true },
     exportDataSubmenu(item),
-    { label: t("contextMenu.exportDatabase"), action: () => openDatabaseExport(item), icon: Upload },
+    { label: t("contextMenu.exportDatabase"), action: () => openDatabaseExport(item), icon: Upload, disabled: !supportsBackendTableExport(effectiveDatabaseType.value) },
     { label: t("contextMenu.exportStructure"), action: () => exportStructure(item), icon: FileCode },
     ...(canOpenDataDictionary.value ? [{ label: t("dataDictionary.title"), action: () => openDataDictionary(item), icon: FileText }] : []),
     { label: "", separator: true },

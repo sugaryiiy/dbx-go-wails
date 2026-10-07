@@ -637,8 +637,30 @@ export function formatMongoShellLiteral(value: unknown): string {
 
 export function serializeMongoDocumentId(value: unknown): string {
   if (typeof value === "string") return `__dbx_mongo_string_id__${JSON.stringify(value)}`;
-  if (isMongoExtendedJsonId(value)) return JSON.stringify(value);
+  // BSON document, date, binary and decimal IDs must retain their typed value;
+  // String(object) would instead target a document whose string ID is "[object Object]".
+  if (value !== null && typeof value === "object") {
+    assertMongoDocumentIdFieldOrder(value);
+    return JSON.stringify(value);
+  }
   return String(value);
+}
+
+function assertMongoDocumentIdFieldOrder(value: unknown): void {
+  if (!value || typeof value !== "object" || mongoExtendedJsonValueType(value)) return;
+  if (Array.isArray(value)) {
+    for (const item of value) assertMongoDocumentIdFieldOrder(item);
+    return;
+  }
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    // ECMAScript moves array-index property names before other properties and
+    // sorts them numerically. Original BSON document order cannot be recovered.
+    const index = Number(key);
+    if (Number.isInteger(index) && index >= 0 && index < 0xffffffff && String(index) === key) {
+      throw new Error("Editing or deleting MongoDB documents with integer-index keys in a compound _id is not supported because JavaScript cannot preserve BSON field order.");
+    }
+    assertMongoDocumentIdFieldOrder(item);
+  }
 }
 
 export function mongoDocumentIdForGrid(value: unknown): MongoInputValue {

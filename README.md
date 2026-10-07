@@ -41,6 +41,8 @@ separate from both Rust DBX and any concurrently running Go instance.
 
 - Native SQLite, MySQL/MariaDB and PostgreSQL connections, queries, transactions,
   cancellation, timeouts and basic metadata.
+- Native Redis key browsing and basic type editing, MongoDB documents/aggregation/indexes,
+  and ClickHouse HTTP SQL/metadata, with TLS and SSH. See [engine support](docs/go-native-engines.md).
 - Verified TLS/mTLS, SSH chains of up to four hops and encrypted shared tunnel
   profiles. See [secure connections](docs/go-secure-connections.md).
 - PostgreSQL table/view/materialized-view structural DDL, ordered index metadata
@@ -59,6 +61,7 @@ SQLite has real integration and HTTP round-trip coverage. Live MySQL 8.4 and
 PostgreSQL 17 passed direct TLS and one/two-hop SSH tests for CRUD, rollback,
 read-only enforcement and cancellation, plus MCP TLS checks. PostgreSQL structural
 DDL was rebuilt and verified; mTLS also has protocol integration coverage.
+Redis 7.4, MongoDB 8 and ClickHouse 25.8 passed live TLS/SSH and read-only tests.
 Import/export currently caps a job
 at 100,000 rows and 32 MiB; exports execute read-only queries. Additional database
 engines, advanced schema editing, AI, plugins and releases remain in migration.

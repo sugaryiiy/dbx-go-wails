@@ -20,6 +20,13 @@ describe("Go secure connection validation", () => {
     expect(fields.url_params).toBe("sslmode=prefer");
   });
 
+  it("keeps MongoDB authentication options separate from verified TLS", () => {
+    expect(goTLSValidationMessage({ db_type: "mongodb", ssl: true, url_params: "authSource=admin&authMechanism=SCRAM-SHA-256&directConnection=true" })).toBe("");
+    for (const params of ["tlsAllowInvalidCertificates=true", "replicaSet=rs0", "authMechanism=MONGODB-OIDC", "directConnection=false", "authSource=admin&authSource=other"]) {
+      expect(goTLSValidationMessage({ db_type: "mongodb", ssl: true, url_params: params })).toContain("Go MongoDB");
+    }
+  });
+
   it("accepts a known_hosts default and validates explicit SHA256 pins", () => {
     expect(goSSHValidationMessage({})).toBe("");
     expect(goSSHValidationMessage({ host_key_fingerprint: "SHA256:" + "A".repeat(43) })).toBe("");

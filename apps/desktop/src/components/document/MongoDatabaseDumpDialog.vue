@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { supportsMongoAdvancedOperations, mongoAdvancedUnavailableMessage } from "@/lib/mongo/mongoCapabilities";
 import { ArrowLeft, ArrowRight, DatabaseBackup, FolderOpen, Loader2, Play, Square, X } from "@lucide/vue";
 import { Dialog, DialogFooter, DialogHeader, DialogScrollContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,9 @@ import * as api from "@/lib/backend/api";
 
 const props = defineProps<{ connectionId: string; database: string; mode: "dump" | "restore" }>();
 const open = defineModel<boolean>("open", { default: false });
-const { t } = useI18n();
+const { t, locale } = useI18n();
+const mongoAdvancedAvailable = supportsMongoAdvancedOperations();
+const mongoAdvancedMessage = computed(() => mongoAdvancedUnavailableMessage(locale.value));
 const store = useConnectionStore();
 const desktop = isTauriRuntime();
 const restoring = computed(() => props.mode === "restore");
@@ -94,7 +97,7 @@ watch(
       cleanup();
       return;
     }
-    if (restoring.value) return;
+    if (!mongoAdvancedAvailable || restoring.value) return;
     const current = ++generation;
     loading.value = true;
     try {
@@ -298,7 +301,12 @@ function close() {
       }
     "
   >
-    <DialogScrollContent class="flex max-h-[calc(var(--dbx-viewport-height)-4rem)] min-h-0 flex-col overflow-hidden sm:max-w-[860px]">
+    <DialogScrollContent v-if="!mongoAdvancedAvailable">
+      <DialogHeader><DialogTitle>MongoDB</DialogTitle></DialogHeader>
+      <p role="note" class="text-sm text-muted-foreground">{{ mongoAdvancedMessage }}</p>
+      <Button variant="outline" @click="open = false">{{ t("common.close") }}</Button>
+    </DialogScrollContent>
+    <DialogScrollContent v-else class="flex max-h-[calc(var(--dbx-viewport-height)-4rem)] min-h-0 flex-col overflow-hidden sm:max-w-[860px]">
       <DialogHeader class="shrink-0 pr-8"
         ><DialogTitle class="flex items-center gap-2 text-base"><DatabaseBackup class="h-4 w-4" />{{ t(restoring ? "mongoDump.restoreTitle" : "mongoDump.dumpTitle") }}</DialogTitle></DialogHeader
       >

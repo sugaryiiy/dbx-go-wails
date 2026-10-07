@@ -35,6 +35,7 @@ function findNode(nodes: TreeNode[], id: string): TreeNode | undefined {
 
 async function setup(kind: MongoCollectionKind) {
   const api = {
+    mongoListCollections: vi.fn().mockResolvedValue([{ name: "reports", kind: "collection" }]),
     listIndexes: vi.fn().mockResolvedValue([{ name: "email_1", columns: ["email"], is_primary: false, is_unique: false }]),
   };
   vi.doMock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => false }));
@@ -76,6 +77,15 @@ describe("connectionStore MongoDB collection groups", () => {
     vi.unstubAllGlobals();
     installLocalStorage();
     setActivePinia(createPinia());
+    vi.doMock("@/lib/backend/goCapabilities", () => ({ isGoBackend: () => false }));
+  });
+
+  it("does not create the unsupported GridFS root in Go mode", async () => {
+    vi.doMock("@/lib/backend/goCapabilities", () => ({ isGoBackend: () => true }));
+    const { config, store } = await setup("collection");
+    store.treeNodes = [{ id: `${config.id}:app`, label: "app", type: "mongo-db", connectionId: config.id, database: "app", isExpanded: false, children: [] }];
+    await store.loadMongoCollections(config.id, "app");
+    expect(store.treeNodes[0]?.children?.map((node) => node.type)).toEqual(["mongo-collection"]);
   });
 
   it("does not expose an Indexes group or issue listIndexes for a view", async () => {
