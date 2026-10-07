@@ -44,11 +44,19 @@ pnpm build:go
 - CSV/TSV/XLSX 参数化事务导入；CSV/XLSX/JSON/文本查询导出及进度、取消。
 - 有主键表格增删改、复制 INSERT/UPDATE 和补偿 SQL。
 - Wails 原生窗口控制、文本剪贴板、文件对话框和导出保存。
+- Go MCP：13 个数据库工具、HTTP/stdio、连接和工具授权、Token 认证及查询审计。
 
 SQLite 已做真实数据库与 HTTP 集成测试；MySQL/PostgreSQL 尚无实库验证。
 导入导出当前限制单任务 10 万行、32 MiB；导出使用只读查询。
-其他数据库、TLS/SSH、高级结构编辑、AI/MCP、插件及发布更新仍待迁移。
+其他数据库、TLS/SSH、高级结构编辑、AI、插件及发布更新仍待迁移。
 后端未迁移能力会明确返回错误。详细状态见 [MIGRATION.md](MIGRATION.md)。
+
+## MCP 接入
+
+在「设置 → MCP → 权限授权」选择连接和工具并应用，再到「接入」开启服务。
+桌面默认地址为 `http://127.0.0.1:5225/mcp`，Web 使用现有服务的 `/mcp`。
+页面提供客户端配置与 Token 管理；`pnpm build:mcp` 构建 stdio CLI。
+详细步骤、工具和 SQL 边界见 [Go MCP 使用说明](docs/go-mcp.md)。
 
 ## 验证
 

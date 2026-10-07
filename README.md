@@ -48,13 +48,23 @@ separate from both Rust DBX and any concurrently running Go instance.
   query export, progress and cancellation.
 - Primary-key-based data grid edits, copied INSERT/UPDATE SQL and rollback SQL.
 - Native Wails window controls, text clipboard, file dialogs and export saving.
+- Go MCP with 13 database tools, Streamable HTTP/stdio, connection permissions,
+  bearer tokens and query auditing. See [MCP setup](docs/go-mcp.md).
 
 SQLite has real integration and HTTP round-trip coverage. MySQL/PostgreSQL have
 not yet been validated against live servers. Import/export currently caps a job
 at 100,000 rows and 32 MiB; exports execute read-only queries. TLS/SSH, additional
-database engines, advanced schema editing, AI/MCP, plugins and releases remain
+database engines, advanced schema editing, AI, plugins and releases remain
 in migration. Unsupported backend operations return an explicit error.
 See [MIGRATION.md](MIGRATION.md) for limitations and validation evidence.
+
+## MCP
+
+Open Settings → MCP, apply connection/tool permissions, then enable the service.
+Desktop defaults to `http://127.0.0.1:5225/mcp`; Web uses `/mcp` on its existing
+server. Copy a client template and supply the generated bearer token.
+`pnpm build:mcp` builds the `dbx-mcp-go` stdio CLI; use `--url` while DBX is running.
+See [the MCP guide](docs/go-mcp.md) for configuration and supported SQL limits.
 
 ## Verify
 

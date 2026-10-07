@@ -104,6 +104,11 @@ export default defineConfig(async ({ mode }) => ({
         }
       : undefined,
     proxy: {
+      [`${publicBasePath}/mcp`]: {
+        target: backendUrl,
+        changeOrigin: false,
+        rewrite: publicBasePath ? (requestPath) => requestPath.slice(publicBasePath.length) || "/" : undefined,
+      },
       [apiProxyPath]: {
         target: backendUrl,
         // Keep the browser-facing Host so Go's same-origin validation can

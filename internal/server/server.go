@@ -29,6 +29,8 @@ type Options struct {
 	Password string
 	Desktop  bool
 	Assets   fs.FS
+	// Stdio MCP uses the data store exclusively without restoring a listener.
+	DisableMCPListener bool
 }
 type Server struct {
 	database     *database.Manager
@@ -47,6 +49,7 @@ type Server struct {
 	lockedUntil  time.Time
 	extensions   *extensionState
 	sampleMu     sync.Mutex
+	mcpState     *mcpRuntime
 }
 
 func New(opts Options) (*Server, error) {
@@ -70,10 +73,15 @@ func New(opts Options) (*Server, error) {
 		_ = s.Close()
 		return nil, err
 	}
+	if err = s.initMCP(opts.DisableMCPListener); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 	return s, nil
 }
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
+		s.closeMCP()
 		s.extensions.close()
 		s.closeErr = s.database.Close()
 		if s.storeLock != nil {
@@ -90,6 +98,10 @@ func (s *Server) Close() error {
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "same-origin")
+	if !s.desktop && r.URL.Path == "/mcp" {
+		s.serveMCP(w, r, false)
+		return
+	}
 	if s.desktop && r.RemoteAddr != "" {
 		writeError(w, 403, "Desktop API is available only inside Wails")
 		return
@@ -156,6 +168,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Execution and connection mutations never accept a GET navigation.
 	if (strings.HasPrefix(route, "/api/query/") || (strings.HasPrefix(route, "/api/connection/") && route != "/api/connection/list")) && r.Method != http.MethodPost {
 		writeError(w, 405, "This operation requires POST")
+		return
+	}
+	if s.handleMCPSettings(w, r, payload) {
 		return
 	}
 	if s.handleApplication(w, r, payload) {

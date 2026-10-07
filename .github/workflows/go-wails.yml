@@ -31,6 +31,8 @@ jobs:
           cache: true
       - run: go test -race ./internal/... ./cmd/...
       - run: go build -o build/bin/dbx-web ./cmd/dbx-web
+      - run: go build -o build/bin/dbx-mcp-go ./cmd/dbx-mcp
+      - run: go vet ./internal/... ./cmd/...
 
   desktop:
     runs-on: macos-latest
@@ -49,6 +51,8 @@ jobs:
       - run: pnpm --filter dbx... install --frozen-lockfile
       - name: Test desktop adapters
         run: pnpm exec vitest run apps/desktop/src/lib/backend/wailsRuntime.spec.ts apps/desktop/src/lib/backend/wailsProgress.spec.ts apps/desktop/src/lib/backend/__tests__/wailsExport.spec.ts apps/desktop/src/lib/__tests__/common/webPath.spec.ts
+      - name: Test Go MCP settings and client configuration
+        run: pnpm exec vitest run apps/desktop/src/components/settings/__tests__/GoMcpServerPanel.spec.ts apps/desktop/src/lib/backend/__tests__/goMcpHttp.spec.ts apps/desktop/src/lib/__tests__/mcp apps/desktop/src/stores/__tests__/settingsStore.spec.ts apps/desktop/src/components/editor/__tests__/EditorSettingsDialog.mcpQueryTimeout.spec.ts apps/desktop/src/components/editor/__tests__/EditorSettingsDialog.mcpQueryTimeout.integration.spec.ts
       - run: pnpm build:wails
       - run: go test -tags desktop .
       - name: Test disposable HTTP workbench

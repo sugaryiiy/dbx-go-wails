@@ -163,9 +163,9 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
 };
 
 export const DEFAULT_MCP_GLOBAL_POLICY: McpGlobalPolicy = {
-  readOnly: false,
+  readOnly: true,
   allowDangerousSql: false,
-  allowedConnectionIds: null,
+  allowedConnectionIds: [],
   allowedGroupIds: [],
   allowedToolNames: null,
   connectionPolicies: [],
@@ -175,7 +175,7 @@ export const DEFAULT_MCP_GLOBAL_POLICY: McpGlobalPolicy = {
 };
 
 export function normalizeMcpGlobalPolicy(policy: Partial<McpGlobalPolicy> | null | undefined): McpGlobalPolicy {
-  const allowedConnectionIds = policy?.allowedConnectionIds === null || policy?.allowedConnectionIds === undefined ? null : [...new Set(policy.allowedConnectionIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0).map((id) => id.trim()))];
+  const allowedConnectionIds = policy?.allowedConnectionIds === null ? null : [...new Set((policy?.allowedConnectionIds ?? []).filter((id): id is string => typeof id === "string" && id.trim().length > 0).map((id) => id.trim()))];
   const allowedGroupIds = allowedConnectionIds === null ? [] : [...new Set((policy?.allowedGroupIds ?? []).filter((id): id is string => typeof id === "string" && id.trim().length > 0).map((id) => id.trim()))];
   const allowedToolNames = policy?.allowedToolNames === null || policy?.allowedToolNames === undefined ? null : [...new Set(policy.allowedToolNames.filter((name): name is string => typeof name === "string" && name.trim().length > 0).map((name) => name.trim()))];
   const connectionPolicies = Object.values(
@@ -234,8 +234,8 @@ export function normalizeMcpGlobalPolicy(policy: Partial<McpGlobalPolicy> | null
   // "inherit" <=> null.
   const queryTimeoutSecs = policy?.queryTimeoutSecs === null || policy?.queryTimeoutSecs === undefined ? null : typeof policy.queryTimeoutSecs === "number" && Number.isFinite(policy.queryTimeoutSecs) && policy.queryTimeoutSecs >= 0 ? Math.round(policy.queryTimeoutSecs) : null;
   return {
-    readOnly: policy?.readOnly === true,
-    allowDangerousSql: policy?.allowDangerousSql === true,
+    readOnly: policy?.readOnly !== false,
+    allowDangerousSql: policy?.readOnly === false && policy?.allowDangerousSql === true,
     allowedConnectionIds,
     allowedGroupIds,
     allowedToolNames,

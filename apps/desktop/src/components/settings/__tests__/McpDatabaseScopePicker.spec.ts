@@ -94,7 +94,7 @@ function emptyPolicy(connectionId: string, scope: McpConnectionPolicy["databaseS
   };
 }
 
-function mountHarness(policies: McpConnectionPolicy[], disabled = false) {
+function mountHarness(policies: McpConnectionPolicy[], disabled = false, sqliteOnlySelectedScope = false) {
   const root = document.createElement("div");
   document.body.appendChild(root);
   const emitted = { policies: [] as McpConnectionPolicy[][] };
@@ -104,6 +104,7 @@ function mountHarness(policies: McpConnectionPolicy[], disabled = false) {
     connectionPolicies: policies,
     disabled,
     busy: false,
+    sqliteOnlySelectedScope,
     "onUpdate:connectionPolicies": (next: McpConnectionPolicy[]) => emitted.policies.push(next),
   });
   app.mount(root);
@@ -153,6 +154,18 @@ function addManualDatabase(root: HTMLElement, name: string) {
 }
 
 describe("McpDatabaseScopePicker", () => {
+  it("Go模式阻止非SQLite指定库授权并跳过不可选的键盘项", async () => {
+    const mounted = mountHarness([], false, true);
+    await nextTick();
+    clickScopeRadio(mounted.root, "selected");
+    await nextTick();
+    expect(mounted.emitted.policies).toHaveLength(0);
+    const all = mounted.root.querySelector('[data-database-scope="all"]')!;
+    all.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await nextTick();
+    expect(mounted.emitted.policies.at(-1)?.[0]?.databaseScope).toBe("none");
+  });
+
   it("加载资源列表前先 ensureConnected（不激活侧边栏），未连接的 SQL 连接不再直接调 listDatabases", async () => {
     mocks.listDatabases.mockResolvedValue([{ name: "ORCL" }]);
     const first = mountHarness([]);

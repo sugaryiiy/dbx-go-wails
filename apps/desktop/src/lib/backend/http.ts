@@ -2243,19 +2243,27 @@ export async function saveMcpGlobalPolicy(policy: Omit<McpGlobalPolicy, "configu
 }
 
 export async function loadMcpHttpServerSettings(): Promise<import("@/lib/backend/tauri").McpHttpServerSettings> {
-  return { enabled: false, host: "127.0.0.1", port: 5225, path: "/mcp", allowRemote: false, allowedHosts: [], allowedOrigins: [] };
+  return get("/api/app-settings/mcp-http-server");
 }
 
-export async function saveMcpHttpServerSettings(_settings: import("@/lib/backend/tauri").McpHttpServerSettings): Promise<import("@/lib/backend/tauri").McpHttpServerStatus> {
-  throw new Error("The MCP HTTP server is available only in DBX Desktop");
+export async function saveMcpHttpServerSettings(settings: import("@/lib/backend/tauri").McpHttpServerSettings): Promise<import("@/lib/backend/tauri").McpHttpServerStatus> {
+  const res = await fetch(apiUrl("/api/app-settings/mcp-http-server"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "X-DBX-MCP-Settings": "1" },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw await backendResponseError(res);
+  return res.json();
 }
 
 export async function mcpHttpServerStatus(): Promise<import("@/lib/backend/tauri").McpHttpServerStatus> {
-  return { enabled: false, running: false, endpoint: null, accessToken: null, lastError: null, recentLogs: [] };
+  return get("/api/app-settings/mcp-http-server/status");
 }
 
 export async function rotateMcpHttpServerToken(): Promise<import("@/lib/backend/tauri").McpHttpServerStatus> {
-  throw new Error("The MCP HTTP server is available only in DBX Desktop");
+  const res = await fetch(apiUrl("/api/app-settings/mcp-http-server/rotate-token"), { method: "POST", headers: { "X-DBX-MCP-Settings": "1" } });
+  if (!res.ok) throw await backendResponseError(res);
+  return res.json();
 }
 
 export async function loadWebMcpHttpStatus(): Promise<import("@/lib/backend/tauri").WebMcpHttpStatus> {
@@ -5358,10 +5366,11 @@ export async function fetchChangelog(lang?: string): Promise<import("@/lib/app/c
   return get(`/api/changelog${query}`);
 }
 
+// Go includes its MCP service in the application; no external package is installed.
 export async function checkMcpServerStatus(): Promise<import("@/lib/backend/tauri").McpServerStatus> {
   return {
-    installed: false,
-    installation_source: null,
+    installed: true,
+    installation_source: "native",
     npm_available: false,
     npm_installed: false,
     node_path: null,
@@ -5373,27 +5382,27 @@ export async function checkMcpServerStatus(): Promise<import("@/lib/backend/taur
     native_bin_path: null,
     script_path: null,
     data_dir: null,
-    install_command: "npm install -g @dbx-app/mcp-server@latest",
-    update_command: "npm install -g @dbx-app/mcp-server@latest",
-    uninstall_command: "npm uninstall -g @dbx-app/mcp-server",
-    error: "MCP Server status is only available in the desktop app.",
+    install_command: "",
+    update_command: "",
+    uninstall_command: "",
+    error: null,
   };
 }
 
 export async function installMcpServer(): Promise<string> {
-  throw new Error("MCP Server installation is only available in the desktop app.");
+  throw new Error("MCP is built into DBX Go. Enable it in MCP settings.");
 }
 
 export async function installNativeMcpServer(): Promise<string> {
-  throw new Error("Native MCP Server installation is only available in the desktop app.");
+  return installMcpServer();
 }
 
 export async function uninstallMcpServer(): Promise<string> {
-  throw new Error("MCP Server uninstallation is only available in the desktop app.");
+  throw new Error("MCP is built into DBX Go. Disable it in MCP settings.");
 }
 
 export async function uninstallNpmMcpServer(): Promise<string> {
-  throw new Error("MCP Server npm fallback removal is only available in the desktop app.");
+  throw new Error("DBX Go does not manage the legacy npm MCP package.");
 }
 
 export async function getSystemProxyUrl(): Promise<string | null> {

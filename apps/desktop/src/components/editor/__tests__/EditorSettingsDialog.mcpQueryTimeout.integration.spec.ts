@@ -51,6 +51,19 @@ describe("EditorSettingsDialog MCP query timeout real-DOM integration", () => {
     return { harness, inputRef };
   }
 
+  it("Go zero input is reverted before the real Input updates its model", async () => {
+    vi.useFakeTimers();
+    const { harness, inputRef } = harnessFor();
+    const el = await mountInput({ modelValue: inputRef, onInput: harness.onMcpQueryTimeoutInput });
+    el.value = "0";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    vi.advanceTimersByTime(300);
+    await nextTick();
+    expect(harness.draft.value.queryTimeoutSecs).toBeNull();
+    expect(inputRef.value).toBe("");
+    expect(el.value).toBe("");
+  });
+
   it("typing into the real Input stages the fresh value after debounce", async () => {
     vi.useFakeTimers();
     const { harness, inputRef } = harnessFor();
