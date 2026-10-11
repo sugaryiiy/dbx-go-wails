@@ -2,6 +2,11 @@
 
 更新：2026-10-11。
 
+## 2026-10-11 工作台提示调整
+
+移除工作台顶部的 Go/Wails 迁移预览提示，释放该行占用的空间；中英文界面均生效。
+功能范围与迁移限制仍记录在本文档中。本次预览标签为 `go-v0.1.0-preview.20261011.4`。
+
 ## 2026-10-11 存储过程与事件 MCP
 
 Go MCP 新增 `dbx_list_objects`、`dbx_list_routines`、`dbx_get_routine_source`、

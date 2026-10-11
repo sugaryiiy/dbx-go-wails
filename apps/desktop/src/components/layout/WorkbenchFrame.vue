@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { useI18n } from "vue-i18n";
-import GoMigrationNotice from "./GoMigrationNotice.vue";
 const { t } = useI18n();
 </script>
 
 <template>
   <div class="dbx-workbench workbench-frame">
     <header v-if="$slots.header" class="workbench-frame-header"><slot name="header" /></header>
-    <GoMigrationNotice />
     <div class="workbench-frame-body">
       <slot name="navigation" />
       <main class="workbench-frame-stage" :aria-label="t('workbenchLayout.workspace')"><slot /></main>

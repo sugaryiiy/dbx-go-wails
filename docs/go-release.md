@@ -1,7 +1,7 @@
 # Go/Wails macOS 预览发布
 
-当前发布标签：`go-v0.1.0-preview.20261011.3`。应用版本为 0.1.0，最低 macOS 13。
-此预览新增 7 项对象 MCP 工具，支持过程/函数/触发器的只读列表和源码、MySQL/MariaDB 事件计划与状态；
+当前发布标签：`go-v0.1.0-preview.20261011.4`。应用版本为 0.1.0，最低 macOS 13。
+此预览移除工作台顶部迁移提示，包含 7 项对象 MCP 工具，支持过程/函数/触发器的只读列表和源码、MySQL/MariaDB 事件计划与状态；
 保留对象目录及 PostgreSQL 9.2/17 的表详情与查询补全修复，以及
 [迁移状态](../MIGRATION.md) 中记录的集成增量和功能边界。
 
@@ -10,8 +10,8 @@
 ```sh
 pnpm --filter dbx... install --frozen-lockfile
 node scripts/wails.mjs build
-python3 scripts/package-go-macos.py --tag go-v0.1.0-preview.20261011.3 \
-  --output build/wails/bin/DBX-Go-macOS-arm64-20261011-mcp-object-tools.dmg
+python3 scripts/package-go-macos.py --tag go-v0.1.0-preview.20261011.4 \
+  --output build/wails/bin/DBX-Go-macOS-arm64-20261011-remove-preview-banner.dmg
 ```
 
 脚本要求 Git 工作区没有待提交源码，不会收集连接配置或应用数据目录。
