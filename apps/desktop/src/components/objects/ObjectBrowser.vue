@@ -1622,7 +1622,9 @@ async function loadSourcePanel(row: ObjectBrowserRow, options?: { preserveEditin
   const database = props.database;
   const schema = row.schema || selectedSchema.value || database;
   try {
-    const result = await api.getObjectSource(connectionId, database, schema, row.name, row.type as ObjectSourceKind, row.signature ?? undefined);
+    const result = row.type === "TRIGGER" && row.partitionParentName
+      ? await api.getObjectSource(connectionId, database, schema, row.name, row.type, row.signature ?? undefined, row.partitionParentName)
+      : await api.getObjectSource(connectionId, database, schema, row.name, row.type as ObjectSourceKind, row.signature ?? undefined);
     if (sidePanelGuard.isStale(epoch)) return;
     sourceCanEdit.value = supportsBackendTableEditing(effectiveDatabaseType.value) && result.editable !== false && !["TRIGGER", "TYPE", "TYPE_BODY"].includes(row.type) && (row.type !== "SEQUENCE" || effectiveDatabaseType.value === "oceanbase-oracle");
     const editable = sourceCanEdit.value

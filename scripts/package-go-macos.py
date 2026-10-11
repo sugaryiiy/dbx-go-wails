@@ -73,6 +73,7 @@ def main():
             f"预览版本：{args.tag}\n源码提交：{commit}\n"
             f"平台：macOS {arch}，最低 macOS {info['LSMinimumSystemVersion']}。\n\n"
             "本版修复 PostgreSQL 旧版本的表详情和查询补全，支持表名及字段提示。\n"
+            "对象目录支持存储过程、函数、触发器、MySQL 事件和 PostgreSQL 序列的列表与源码。\n"
             "Go 迁移仍在进行，完整功能范围见仓库 MIGRATION.md。\n"
             "本预览采用 ad-hoc 签名，尚未公证；macOS 可能要求在隐私与安全性中允许打开。\n"
             "安装包不包含连接配置或凭据，应用使用原有 Go 数据目录。\n",

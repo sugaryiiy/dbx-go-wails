@@ -1,7 +1,7 @@
 # Go/Wails macOS 预览发布
 
-当前发布标签：`go-v0.1.0-preview.20261011`。应用版本为 0.1.0，最低 macOS 13。
-此预览包含 PostgreSQL 9.2/17 的表详情与查询补全修复，以及
+当前发布标签：`go-v0.1.0-preview.20261011.2`。应用版本为 0.1.0，最低 macOS 13。
+此预览包含对象列表、存储过程/函数/触发器/事件详情修复，PostgreSQL 9.2/17 的表详情与查询补全修复，以及
 [迁移状态](../MIGRATION.md) 中记录的集成增量和功能边界。
 
 在 macOS arm64 上安装前端依赖后，先完成源码提交，再构建和打包：
@@ -9,8 +9,8 @@
 ```sh
 pnpm --filter dbx... install --frozen-lockfile
 node scripts/wails.mjs build
-python3 scripts/package-go-macos.py --tag go-v0.1.0-preview.20261011 \
-  --output build/wails/bin/DBX-Go-macOS-arm64-20261011-pgsql-fix.dmg
+python3 scripts/package-go-macos.py --tag go-v0.1.0-preview.20261011.2 \
+  --output build/wails/bin/DBX-Go-macOS-arm64-20261011-object-catalog-fix.dmg
 ```
 
 脚本要求 Git 工作区没有待提交源码，不会收集连接配置或应用数据目录。

@@ -85,23 +85,17 @@ func postgresCompletion(ctx context.Context, db *sql.DB, database, schema string
  WHERE `+namespace+` AND c.relname=`+bind(parent)+` AND a.attnum>0 AND NOT a.attisdropped`)
 	}
 	if wanted["routine"] || wanted["function"] || wanted["procedure"] {
-		version, err := postgresVersion(ctx, db)
+		catalogKind, condition, err := postgresRoutineCatalogSQL(ctx, db)
 		if err != nil {
 			return nil, err
 		}
-		kind, condition := "'function'::text", "NOT p.proisagg"
-		if version >= 110000 {
-			kind = "CASE p.prokind WHEN 'p' THEN 'procedure' ELSE 'function' END"
-			condition = "p.prokind IN ('f','p','w')"
-			if !wanted["routine"] {
-				if !wanted["function"] {
-					condition = "p.prokind='p'"
-				} else if !wanted["procedure"] {
-					condition = "p.prokind IN ('f','w')"
-				}
+		kind := "lower(" + catalogKind + ")"
+		if !wanted["routine"] {
+			if !wanted["function"] {
+				condition += " AND (" + catalogKind + ")='PROCEDURE'"
+			} else if !wanted["procedure"] {
+				condition += " AND (" + catalogKind + ")='FUNCTION'"
 			}
-		} else if wanted["procedure"] && !wanted["routine"] && !wanted["function"] {
-			condition = "false"
 		}
 		queries = append(queries, `SELECT p.proname::text AS name,`+kind+` AS kind,n.nspname::text AS schema,
  `+emptyFields+`,obj_description(p.oid,'pg_proc') AS comment,pg_get_function_result(p.oid) AS data_type,

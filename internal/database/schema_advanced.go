@@ -74,9 +74,9 @@ func postgresAdvanced(ctx context.Context, db *sql.DB, schema, table, part strin
 		}
 		return raw, nil
 	case "functions":
-		kind, condition := "CASE p.prokind WHEN 'p' THEN 'PROCEDURE' ELSE 'FUNCTION' END", "p.prokind IN ('f','p','w')"
-		if version < 110000 {
-			kind, condition = "'FUNCTION'::text", "NOT p.proisagg"
+		kind, condition, err := postgresRoutineCatalogSQL(ctx, db)
+		if err != nil {
+			return nil, err
 		}
 		raw, err := records(ctx, db, `SELECT p.proname AS name,`+kind+` AS function_type,pg_get_function_result(p.oid) AS data_type,pg_get_functiondef(p.oid) AS definition,pg_get_function_identity_arguments(p.oid) AS arguments FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1 AND `+condition+` ORDER BY p.proname,pg_get_function_identity_arguments(p.oid)`, schema)
 		if err != nil {

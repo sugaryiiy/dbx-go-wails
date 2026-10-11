@@ -111,7 +111,9 @@ func (m *Manager) schema(ctx context.Context, path string, p map[string]any) (an
 			}
 			result = names
 		}
-	case "tables", "objects", "completion-objects":
+	case "objects", "completion-objects":
+		result, e = nativeObjects(ctx, db, c.Type, database, schema, p)
+	case "tables":
 		var list []record
 		switch c.Type {
 		case "sqlite":
@@ -127,12 +129,6 @@ func (m *Manager) schema(ctx context.Context, path string, p map[string]any) (an
 		list, e = filterTables(list, p)
 		if e != nil {
 			break
-		}
-		if strings.HasSuffix(path, "objects") {
-			for _, r := range list {
-				r["object_type"] = r["table_type"]
-				r["schema"] = schema
-			}
 		}
 		result = list
 	case "columns":
@@ -194,12 +190,22 @@ func (m *Manager) schema(ctx context.Context, path string, p map[string]any) (an
 		}
 	case "ddl", "object-source":
 		var ddl string
-		ddl, e = objectDDL(ctx, db, c.Type, database, schema, table, str(p, "object_type"))
+		objectType := strings.ToUpper(str(p, "object_type"))
+		if c.Type == "postgres" && (objectType == "FUNCTION" || objectType == "PROCEDURE" || objectType == "TRIGGER" || objectType == "SEQUENCE") {
+			ddl, e = postgresCatalogObjectSource(ctx, db, schema, table, objectType, p)
+		} else {
+			ddl, e = objectDDL(ctx, db, c.Type, database, schema, table, objectType)
+		}
 		if strings.HasSuffix(path, "object-source") {
 			result = record{"name": table, "schema": schema, "object_type": str(p, "object_type"), "source": ddl, "editable": true}
 		} else {
 			result = ddl
 		}
+	case "event-info":
+		if c.Type != "mysql" {
+			return nil, unsupported("scheduled events for " + c.Type)
+		}
+		result, e = mysqlEventInfo(ctx, db, database, table)
 	case "triggers":
 		if c.Type == "sqlite" {
 			var list []record
@@ -254,6 +260,7 @@ func filterTables(list []record, p map[string]any) ([]record, error) {
 	}
 	allowed := map[string]bool{}
 	for _, v := range strings.Split(types, ",") {
+		v = strings.TrimSpace(v)
 		if v != "" {
 			allowed[v] = true
 		}
@@ -407,33 +414,7 @@ func objectDDL(ctx context.Context, db *sql.DB, kind, database, schema, table, o
 		e := db.QueryRowContext(ctx, "SELECT sql FROM "+quoteIdentifier(schema, kind)+".sqlite_schema WHERE name=? AND type IN ('table','view','trigger','index')", table).Scan(&ddl)
 		return ddl.String, e
 	case "mysql":
-		rows, e := db.QueryContext(ctx, "SHOW CREATE TABLE "+quoteIdentifier(database, kind)+"."+quoteIdentifier(table, kind))
-		if e != nil {
-			return "", e
-		}
-		defer rows.Close()
-		if !rows.Next() {
-			return "", sql.ErrNoRows
-		}
-		cols, e := rows.Columns()
-		if e != nil {
-			return "", e
-		}
-		v := make([]any, len(cols))
-		ptr := make([]any, len(cols))
-		for i := range ptr {
-			ptr[i] = &v[i]
-		}
-		if e = rows.Scan(ptr...); e != nil {
-			return "", e
-		}
-		if len(v) < 2 {
-			return "", errors.New("SHOW CREATE returned no definition")
-		}
-		if b, ok := v[1].([]byte); ok {
-			return string(b), nil
-		}
-		return valueString(v[1]), nil
+		return mysqlCatalogObjectSource(ctx, db, database, table, objectType)
 	case "postgres":
 		return postgresObjectDDL(ctx, db, schema, table, objectType)
 	}
