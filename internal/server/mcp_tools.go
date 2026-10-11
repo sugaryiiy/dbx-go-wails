@@ -237,7 +237,7 @@ func (b *mcpBackend) Call(ctx context.Context, name string, args map[string]any)
 		return nil, err
 	}
 	if !p.Configured {
-		return nil, errors.New("MCP access is not configured; configure permissions in DBX Settings")
+		return nil, errors.New("MCP access is not configured; configure permissions in Database Workbench Settings")
 	}
 	if !p.allowsTool(name) {
 		return nil, errors.New("Tool is not allowed by MCP policy")
@@ -298,7 +298,7 @@ func (b *mcpBackend) Call(ctx context.Context, name string, args map[string]any)
 		}
 	}
 	if str(scope.config, "db_type") != "sqlite" && !boolValue(scope.config, "save_password") {
-		return nil, errors.New("MCP cannot reconnect without saved credentials; enable Save password for this connection in DBX")
+		return nil, errors.New("MCP cannot reconnect without saved credentials; enable Save password for this connection in Database Workbench")
 	}
 	timeout := 300
 	if p.QueryTimeoutSecs != nil {
@@ -313,7 +313,7 @@ func (b *mcpBackend) Call(ctx context.Context, name string, args map[string]any)
 	if str(scope.config, "db_type") == "sqlite" {
 		info, statErr := os.Stat(str(scope.config, "host"))
 		if statErr != nil || !info.Mode().IsRegular() {
-			return nil, errors.New("MCP requires an existing SQLite database file; open or create it in DBX first")
+			return nil, errors.New("MCP requires an existing SQLite database file; open or create it in Database Workbench first")
 		}
 	}
 	cfg := cloneMap(scope.config)

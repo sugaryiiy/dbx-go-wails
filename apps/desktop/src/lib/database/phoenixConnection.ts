@@ -13,7 +13,7 @@ export const PHOENIX_DIRECT_MAVEN_COORDINATE = PHOENIX_JDBC_ASSETS.direct.coordi
 export const PHOENIX_QUERY_SERVER_MAVEN_COORDINATE = PHOENIX_JDBC_ASSETS.query_server.coordinate;
 export const PHOENIX_DIRECT_LOGGING_MAVEN_COORDINATE = PHOENIX_JDBC_ASSETS.logging.coordinate;
 export const PHOENIX_DRIVER_NOT_INSTALLED_ERROR = "Apache Phoenix JDBC driver is not installed. Install it from the Driver Manager, then retry.";
-export const PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR = "DBX JDBC plugin is not installed. Install Apache Phoenix JDBC from the Driver Manager, then retry.";
+export const PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR = "Database Workbench JDBC plugin is not installed. Install Apache Phoenix JDBC from the Driver Manager, then retry.";
 
 export type PhoenixConnectionMode = "direct" | "query-server";
 

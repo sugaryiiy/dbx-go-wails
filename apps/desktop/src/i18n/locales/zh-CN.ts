@@ -8001,7 +8001,7 @@ export default withEnglishFallback({
     languageTitle: "语言 / Language",
     fontSize: "字号",
     toolbarTitle: "工具栏与工具窗口",
-    toolbarHiddenHint: '隐藏的工具窗口仍可从“工具”菜单打开。数据传输、对比、文件执行和驱动管理固定放在“工具”菜单。',
+    toolbarHiddenHint: "隐藏的工具窗口仍可从“工具”菜单打开。数据传输、对比、文件执行和驱动管理固定放在“工具”菜单。",
     exclusiveRightSidebarPanels: "右侧边栏一次仅显示一个面板",
     exclusiveRightSidebarPanelsDescription: "打开一个右侧面板时关闭其他面板。关闭此选项可同时显示多个面板。",
     uiScale: "界面缩放",
@@ -9270,7 +9270,7 @@ export default withEnglishFallback({
   },
   driverStore: {
     jreDirRemoveFailed: "无法删除旧的 JRE 目录：{path}（原始错误：{error}）",
-    jreDirRemoveFailedWindows: "无法删除旧的 JRE 目录：{path}\n可能的原因：\n  - 仍有 dbx Agent / java 进程占用该目录\n  - 防病毒软件正在扫描\n请关闭可能持有该目录的进程，或重启 dbx 后重试。\n（原始错误：{error}）",
+    jreDirRemoveFailedWindows: "无法删除旧的 JRE 目录：{path}\n可能的原因：\n  - 仍有 数据库工作台 Agent / java 进程占用该目录\n  - 防病毒软件正在扫描\n请关闭可能持有该目录的进程，或重启 数据库工作台 后重试。\n（原始错误：{error}）",
     jreInUseByDrivers: "JRE {jre} 正在被以下驱动使用：{drivers}，请先卸载这些驱动。",
     offlinePackageRegistryMissing: "ZIP 文件中未找到 agent-registry.json，请确认这是有效的离线驱动包。",
     progressJreExtract: "解压 JRE...",

@@ -1,0 +1,17 @@
+services:
+  dbx:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go
+      args:
+        DBX_PUBLIC_BASE_PATH: ${DBX_PUBLIC_BASE_PATH:-}
+    ports:
+      - "127.0.0.1:4224:4224"
+    environment:
+      DBX_PASSWORD: ${DBX_PASSWORD:?Set a DBX_PASSWORD before starting the service}
+      DBX_PUBLIC_BASE_PATH: ${DBX_PUBLIC_BASE_PATH:-}
+    volumes:
+      - dbx-go-data:/data
+    restart: unless-stopped
+volumes:
+  dbx-go-data:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/sugaryiiy/dbx-go-wails/internal/agent"
 	"strings"
 	"time"
 )
@@ -21,7 +22,7 @@ type nativeDriver interface {
 var nativeOpeners = map[string]func(context.Context, Config) (nativeDriver, error){}
 
 func usesNativeDriver(kind string) bool {
-	return kind == "redis" || kind == "mongodb" || kind == "clickhouse"
+	return nativeOpeners[kind] != nil || agent.UsesDatabase(kind)
 }
 
 func (c *Config) UnmarshalJSON(data []byte) error {
@@ -77,7 +78,7 @@ func testNative(ctx context.Context, c Config, withInfo bool) (any, error) {
 }
 
 func (m *Manager) connectNative(ctx context.Context, c Config) error {
-	driver, err := openNative(ctx, c)
+	driver, err := m.openNative(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -90,6 +91,12 @@ func (m *Manager) connectNative(ctx context.Context, c Config) error {
 		return errors.New("database manager is closed")
 	}
 	old := m.connections[c.ID]
+	if old != nil && old.maintenanceCancel != nil {
+		m.mu.Unlock()
+		cancel()
+		driver.Close()
+		return errors.New("SQLite restore is in progress")
+	}
 	for _, query := range m.running {
 		if query.connectionID == c.ID {
 			query.cancel()
@@ -115,7 +122,7 @@ func (m *Manager) handleNative(parent context.Context, path string, p map[string
 	// These routes manage the connection itself, including replacement/cancel.
 	switch path {
 	case "/api/connection/connect", "/api/connection/test", "/api/connection/test-info", "/api/connection/is-open", "/api/connection/disconnect",
-		"/api/connection/write-unlock", "/api/connection/write-unlock/lock", "/api/connection/write-unlock/state", "/api/query/cancel", "/api/query/close-session", "/api/query/close-client-session":
+		"/api/connection/write-unlock", "/api/connection/write-unlock/lock", "/api/connection/write-unlock/state", "/api/query/cancel":
 		return nil, false, nil
 	}
 	id := str(p, "connectionId", "connection_id")
@@ -126,6 +133,12 @@ func (m *Manager) handleNative(parent context.Context, path string, p map[string
 		return nil, false, nil
 	}
 	c := session.config
+	if path == "/api/query/close-session" || path == "/api/query/close-client-session" {
+		if _, ok := session.native.(*agentDriver); !ok {
+			m.mu.RUnlock()
+			return nil, false, nil
+		}
+	}
 	locked := (c.ReadOnly || c.Production || len(c.ProductionDatabases) > 0) && !time.Now().Before(session.unlockedUntil)
 	m.mu.RUnlock()
 	seconds := integer(p, c.QueryTimeout, "timeoutSecs")
@@ -164,7 +177,11 @@ func (m *Manager) handleNative(parent context.Context, path string, p map[string
 	case "/api/connection/check-health", "/api/connection/prewarm":
 		err = session.native.Ping(ctx)
 	case "/api/connection/identifier-quote":
-		if c.Type == "clickhouse" {
+		if quoter, ok := session.native.(interface {
+			IdentifierQuote(context.Context) (string, error)
+		}); ok {
+			result, err = quoter.IdentifierQuote(ctx)
+		} else if c.Type == "clickhouse" {
 			result = "`"
 		} else {
 			err = unsupported("SQL identifier quoting for " + c.Type)

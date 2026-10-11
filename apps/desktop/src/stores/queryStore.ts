@@ -1,3 +1,4 @@
+import { influxTableQueryOptions } from "@/lib/table/influxTableQuery";
 import { createQueryRequestTiming } from "@/lib/queryRequestTiming";
 import { appendNeo4jNodeCells, extractNeo4jNodeCells } from "@/lib/neo4j/neo4jNodeResult";
 import { UPDATE_RESTORE_KEY, assertUpdateAllowsInteraction } from "@/lib/app/updatePreparation";
@@ -4953,6 +4954,7 @@ export const useQueryStore = defineStore("query", () => {
         databaseType: effectiveDbType,
         driverProfile: conn?.driver_profile,
         serverVersion: conn?.database_info?.productVersion,
+        ...influxTableQueryOptions(conn, tableMeta.columns),
         identifierQuote,
         database: tableMeta.database,
         schema: tableMeta.schema,
@@ -6773,11 +6775,24 @@ export const useQueryStore = defineStore("query", () => {
 
   async function countTabResultRows(id: string): Promise<number | undefined> {
     const tab = tabs.value.find((candidate) => candidate.id === id);
-    if (!tab?.resultCountSql) return undefined;
+    if (!tab) return undefined;
 
     const target = queryResultExecutionLocation(tab);
     const connection = useConnectionStore().getConfig(target.connectionId);
     const databaseType = effectiveDatabaseTypeForConnection(connection);
+    if (!tab.resultCountSql && tab.mode === "data" && databaseType === "influxdb") {
+      const tableMeta = tableMetaForDataTab(tab);
+      if (!tableMeta?.tableName) return undefined;
+      tab.resultCountSql = await api.buildDataGridCountSql({
+        databaseType,
+        ...influxTableQueryOptions(connection, tableMeta.columns),
+        database: tableMeta.database,
+        tableName: tableMeta.tableName,
+        whereInput: tab.whereInput?.trim() || undefined,
+        injectDefaultTimeSeriesWhere: true,
+      });
+    }
+    if (!tab.resultCountSql) return undefined;
     let countResult: QueryResult | undefined;
     let isolatedClientSessionId: string | undefined;
 
@@ -8185,6 +8200,8 @@ export const useQueryStore = defineStore("query", () => {
                 if (!tableMeta?.tableName) return undefined;
                 return {
                   databaseType: effectiveDbType,
+                  ...influxTableQueryOptions(conn, tableMeta.columns),
+                  ...(effectiveDbType === "influxdb" ? { serverVersion: conn?.database_info?.productVersion, injectDefaultTimeSeriesWhere: true } : {}),
                   identifierQuote: useConnectionStore().connectionIdentifierQuote?.(current.connectionId),
                   catalog: tableMeta.catalog,
                   database: tableMeta.database,
@@ -9204,6 +9221,7 @@ export const useQueryStore = defineStore("query", () => {
             databaseType: effectiveDbType,
             driverProfile: conn?.driver_profile,
             serverVersion: conn?.database_info?.productVersion,
+            ...influxTableQueryOptions(conn, tableMeta.columns),
             identifierQuote,
             database: tableMeta.database,
             schema: tableMeta.schema,

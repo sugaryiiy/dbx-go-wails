@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const config = JSON.parse(readFileSync(path.join(root, "wails.json"), "utf8"));
 const command = process.argv[2] ?? "build";
 if (!["build", "dev", "doctor"].includes(command)) {
   throw new Error("Usage: node scripts/wails.mjs [build|dev|doctor] [Wails options]");
@@ -26,8 +28,8 @@ for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => child.kill(
 child.on("exit", (code) => {
   if (code !== 0 || command !== "dev") { process.exitCode = code ?? 1; return; }
   const executable = process.platform === "darwin"
-    ? path.join(root, "build/wails/bin/DBX Go.app/Contents/MacOS/dbx-go-wails")
-    : path.join(root, "build/wails/bin", process.platform === "win32" ? "dbx-go-wails.exe" : "dbx-go-wails");
+    ? path.join(root, `build/wails/bin/${config.name}.app/Contents/MacOS/${config.outputfilename}`)
+    : path.join(root, "build/wails/bin", process.platform === "win32" ? `${config.outputfilename}.exe` : config.outputfilename);
   child = spawn(executable, [], { cwd: root, stdio: "inherit", env: process.env });
   child.on("error", (error) => { console.error(error.message); process.exitCode = 1; });
   child.on("exit", (appCode) => { process.exitCode = appCode ?? 1; });

@@ -17,6 +17,9 @@ export interface BuildTableSelectSqlOptions {
    * renamed a built-in function across releases (Neo4j below 5 uses `id()` where 5+ uses
    * `elementId()`) need it to generate SQL the connected server understands. */
   serverVersion?: string;
+  influxDbVersion?: "1" | "2";
+  influxDbTagRenames?: Record<string, string>;
+  influxDbFieldRenames?: Record<string, string>;
   identifierQuote?: string;
   schema?: string;
   tableName: string;
@@ -449,9 +452,10 @@ export function normalizeWhereInput(whereInput?: string): string {
  *   `LIMIT 200` or less — awaiting the describe keeps every page size working.
  * * Neo4j/NebulaGraph: without node/tag/edge properties, the grid can only show a single
  *   vertex/edge value instead of separate property columns.
+ * * InfluxDB: same-name tag and field columns must be distinguished before Flux pivot.
  */
 export function requiresEagerTableMetadataForDataOpen(databaseType: DatabaseType | undefined): boolean {
-  return databaseType === "mysql" || databaseType === "postgres" || databaseType === "salesforce" || databaseType === "neo4j" || databaseType === "nebula";
+  return databaseType === "mysql" || databaseType === "postgres" || databaseType === "salesforce" || databaseType === "neo4j" || databaseType === "nebula" || databaseType === "influxdb";
 }
 
 export async function buildTableSelectSql(options: BuildTableSelectSqlOptions): Promise<string> {

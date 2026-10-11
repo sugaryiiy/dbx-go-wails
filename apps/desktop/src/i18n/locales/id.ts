@@ -5167,7 +5167,7 @@ export default withEnglishFallback({
     geometryTypePlaceholder: "Pilih atau ketik tipe geometri",
     sridPlaceholder: "mis. 4326",
     geometrySridHint: "Tentukan tipe geometri dan SRID untuk mengaktifkan pengindeksan spasial dan kueri spasial yang benar.",
-    geometryEmptyTypeHint: "Tipe geometri kosong setara dengan GEOMETRY (sub-tipe apa pun); dbx menghasilkan geometry(GEOMETRY, SRID).",
+    geometryEmptyTypeHint: "Tipe geometri kosong setara dengan GEOMETRY (sub-tipe apa pun); Database Workbench menghasilkan geometry(GEOMETRY, SRID).",
     enumValues: "Nilai enum",
     enumValueCount: "{count} nilai",
     addEnumValue: "Tambah nilai",
@@ -8615,7 +8615,8 @@ export default withEnglishFallback({
     mcpUninstallConfirm: "Hapus pemasangan Server MCP Database Workbench? Klien MCP yang dikonfigurasi tidak akan dapat memulainya lagi.",
     mcpUninstallFailed: "Penghapusan pemasangan gagal: {error}",
     mcpConfig: "Konfigurasi MCP",
-    mcpConfigOptionsHint: "Database Workbench mengontrol akses koneksi dan izin eksekusi secara terpusat untuk setiap klien MCP. Konfigurasi yang dihasilkan hanya berisi pengaturan runtime yang diperlukan untuk memulai server MCP dan terhubung ke instans Database Workbench ini, tanpa variabel izin atau cakupan koneksi.",
+    mcpConfigOptionsHint:
+      "Database Workbench mengontrol akses koneksi dan izin eksekusi secara terpusat untuk setiap klien MCP. Konfigurasi yang dihasilkan hanya berisi pengaturan runtime yang diperlukan untuk memulai server MCP dan terhubung ke instans Database Workbench ini, tanpa variabel izin atau cakupan koneksi.",
     mcpScopeConnection: "Koneksi yang diizinkan untuk MCP",
     mcpScopeConnectionDescription: "Database Workbench hanya mengekspos koneksi yang dipilih ke MCP. Perubahan berlaku untuk setiap klien MCP.",
     mcpScopeMode: "Mode cakupan koneksi",
@@ -8968,7 +8969,7 @@ export default withEnglishFallback({
   driverStore: {
     jreDirRemoveFailed: "Gagal menghapus direktori JRE lama: {path} (galat asli: {error})",
     jreDirRemoveFailedWindows:
-      "Gagal menghapus direktori JRE lama: {path}\nKemungkinan penyebab:\n  - proses dbx Agent / java masih menggunakan direktori ini\n  - perangkat lunak antivirus sedang memindainya\nTutup proses apa pun yang mungkin menggunakan direktori ini, atau mulai ulang dbx dan coba lagi.\n(galat asli: {error})",
+      "Gagal menghapus direktori JRE lama: {path}\nKemungkinan penyebab:\n  - proses Database Workbench Agent / java masih menggunakan direktori ini\n  - perangkat lunak antivirus sedang memindainya\nTutup proses apa pun yang mungkin menggunakan direktori ini, atau mulai ulang Database Workbench dan coba lagi.\n(galat asli: {error})",
     jreInUseByDrivers: "JRE {jre} sedang digunakan oleh driver: {drivers}. Hapus driver tersebut terlebih dahulu.",
     offlinePackageRegistryMissing: "agent-registry.json tidak ditemukan di dalam ZIP; ini bukan paket driver offline yang valid.",
     progressJreExtract: "Mengekstrak JRE...",

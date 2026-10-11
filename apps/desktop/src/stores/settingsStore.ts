@@ -509,10 +509,9 @@ export const AI_PROVIDER_PARTNER_PRESETS: readonly AiPartnerProviderPreset[] = [
     apiStyle: "completions",
     authMethod: "bearer",
     requiresApiKey: true,
-    websiteUrl: "https://www.aicodemirror.ai/register?invitecode=DK44NH",
-    apiKeyUrl: "https://www.aicodemirror.ai/register?invitecode=DK44NH",
+    websiteUrl: "https://www.aicodemirror.ai/",
+    apiKeyUrl: "https://www.aicodemirror.ai/register",
     descriptionKey: "ai.aicodemirrorDescription",
-    badgeKey: "ai.aicodemirrorSponsored",
   },
   {
     id: "jalapeno-cloud",
@@ -526,10 +525,9 @@ export const AI_PROVIDER_PARTNER_PRESETS: readonly AiPartnerProviderPreset[] = [
     apiStyle: "completions",
     authMethod: "bearer",
     requiresApiKey: true,
-    websiteUrl: "https://www.jalapeno-cloud.ai/dbx",
-    apiKeyUrl: "https://www.jalapeno-cloud.ai/dbx",
+    websiteUrl: "https://www.jalapeno-cloud.ai/",
+    apiKeyUrl: "https://www.jalapeno-cloud.ai/",
     descriptionKey: "ai.jalapenoDescription",
-    badgeKey: "ai.jalapenoSponsored",
   },
   {
     id: "hualong-ai",
@@ -543,10 +541,9 @@ export const AI_PROVIDER_PARTNER_PRESETS: readonly AiPartnerProviderPreset[] = [
     apiStyle: "completions",
     authMethod: "bearer",
     requiresApiKey: true,
-    websiteUrl: "https://api.hualong.online/register?promo=DBX%26HUALONG",
-    apiKeyUrl: "https://api.hualong.online/register?promo=DBX%26HUALONG",
+    websiteUrl: "https://api.hualong.online/register",
+    apiKeyUrl: "https://api.hualong.online/register",
     descriptionKey: "ai.hualongDescription",
-    badgeKey: "ai.hualongSponsored",
   },
 ];
 

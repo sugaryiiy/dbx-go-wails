@@ -1,6 +1,6 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "DBX Go",
+  "name": "Database Workbench",
   "outputfilename": "dbx-go-wails",
   "frontend:dir": ".",
   "frontend:install": "",
@@ -12,6 +12,6 @@
   "wailsjsdir": "apps/desktop/src/generated/wails",
   "build:dir": "build/wails",
   "build:tags": "desktop",
-  "author": { "name": "DBX Contributors" },
-  "info": { "productName": "DBX Go", "productVersion": "0.1.0", "copyright": "DBX Contributors", "comments": "Database Workbench — Go and Wails migration" }
+  "author": { "name": "Database Workbench" },
+  "info": { "productName": "Database Workbench", "productVersion": "0.1.0", "copyright": "", "comments": "Database Workbench" }
 }

@@ -11,8 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 
+	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/dbx-go-wails/internal/desktopfiles"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -23,6 +26,8 @@ type App struct {
 	alwaysOnTop atomic.Bool
 	backend     http.Handler
 	saveDialog  func(runtime.SaveDialogOptions) (string, error)
+	fileOnce    sync.Once
+	fileGrants  *desktopfiles.Grants
 }
 
 func desktopAPI(next http.Handler) http.Handler {
@@ -97,7 +102,16 @@ func (a *App) OpenFile(options FileDialogOptions) ([]string, error) {
 		}
 	}
 	if options.Multiple && !options.Directory {
-		return runtime.OpenMultipleFilesDialog(a.ctx, native)
+		paths, err := runtime.OpenMultipleFilesDialog(a.ctx, native)
+		if err != nil {
+			return nil, err
+		}
+		for _, path := range paths {
+			if err = a.files().Grant(path, false); err != nil {
+				return nil, err
+			}
+		}
+		return paths, nil
 	}
 	var selected string
 	var err error
@@ -109,6 +123,9 @@ func (a *App) OpenFile(options FileDialogOptions) ([]string, error) {
 	if err != nil || selected == "" {
 		return []string{}, err
 	}
+	if err = a.files().Grant(selected, options.Directory); err != nil {
+		return nil, err
+	}
 	return []string{selected}, nil
 }
 
@@ -118,10 +135,98 @@ func (a *App) SaveFile(options FileDialogOptions) (string, error) {
 }
 
 func (a *App) chooseSaveFile(options runtime.SaveDialogOptions) (string, error) {
+	var path string
+	var err error
 	if a.saveDialog != nil {
-		return a.saveDialog(options)
+		path, err = a.saveDialog(options)
+	} else {
+		path, err = runtime.SaveFileDialog(a.ctx, options)
 	}
-	return runtime.SaveFileDialog(a.ctx, options)
+	if err == nil && path != "" {
+		err = a.files().Grant(path, false)
+	}
+	return path, err
+}
+
+func (a *App) files() *desktopfiles.Grants {
+	a.fileOnce.Do(func() { a.fileGrants = desktopfiles.New() })
+	return a.fileGrants
+}
+func (a *App) ReadExternalSQL(path string, maxBytes int) (desktopfiles.Snapshot, error) {
+	return a.files().Read(path, maxBytes)
+}
+func (a *App) InspectExternalSQL(path string) (desktopfiles.Status, error) {
+	return a.files().Inspect(path)
+}
+func (a *App) WriteExternalSQL(path, content string, options desktopfiles.WriteOptions) (desktopfiles.WriteResult, error) {
+	return a.files().Write(path, content, options)
+}
+
+type SavedExternalSQL struct {
+	Path    string               `json:"path"`
+	Version desktopfiles.Version `json:"version"`
+}
+
+func (a *App) SaveExternalSQL(name, content, extension string) (*SavedExternalSQL, error) {
+	if extension == "" {
+		extension = "sql"
+	}
+	path, err := a.chooseSaveFile(runtime.SaveDialogOptions{Title: "Save SQL file", DefaultFilename: filepath.Base(name), Filters: nativeFilters([]FileFilter{{Name: "SQL", Extensions: []string{extension}}})})
+	if err != nil || path == "" {
+		return nil, err
+	}
+	result, err := a.files().Write(path, content, desktopfiles.WriteOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if result.Kind != "written" || result.Version == nil {
+		return nil, fmt.Errorf("SQL file changed while saving; retry")
+	}
+	return &SavedExternalSQL{Path: path, Version: *result.Version}, nil
+}
+func (a *App) ListSQLFiles(root, filter string) ([]desktopfiles.Entry, error) {
+	return a.files().List(root, filter)
+}
+func (a *App) CreateSQLFile(root, directory, name string) (string, error) {
+	return a.files().Create(root, directory, name)
+}
+func (a *App) RenameSQLFile(root, path, name string) (string, error) {
+	return a.files().Rename(root, path, name)
+}
+func (a *App) DeleteSQLFile(root, path string) error { return a.files().Delete(root, path) }
+
+func (a *App) IsSQLiteDatabaseFile(path string) (bool, error) {
+	real, err := a.files().Path(path)
+	if err != nil {
+		return false, err
+	}
+	return database.IsSQLiteFile(real)
+}
+func (a *App) BackupSQLiteDatabase(id, path string) error {
+	real, err := a.files().Path(path)
+	if err != nil {
+		return err
+	}
+	provider, ok := a.backend.(interface {
+		SQLiteBackup(context.Context, string, string) error
+	})
+	if !ok {
+		return fmt.Errorf("desktop backup backend is unavailable")
+	}
+	return provider.SQLiteBackup(a.ctx, id, real)
+}
+func (a *App) RestoreSQLiteDatabase(id, path string) error {
+	real, err := a.files().Path(path)
+	if err != nil {
+		return err
+	}
+	provider, ok := a.backend.(interface {
+		SQLiteRestore(context.Context, string, string) error
+	})
+	if !ok {
+		return fmt.Errorf("desktop restore backend is unavailable")
+	}
+	return provider.SQLiteRestore(a.ctx, id, real)
 }
 
 func (a *App) SaveFileBytes(defaultFilename, contentBase64 string) (string, error) {

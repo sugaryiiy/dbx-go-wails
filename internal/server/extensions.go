@@ -7,6 +7,21 @@ import (
 
 // Extension handlers are implemented separately from application persistence.
 func (s *Server) handleExtension(w http.ResponseWriter, r *http.Request, payload map[string]any) bool {
+	if s.handlePlugins(w, r, payload) {
+		return true
+	}
+	if s.handleSQLFile(w, r, payload) {
+		return true
+	}
+	if s.handleAgents(w, r, payload) {
+		return true
+	}
+	if s.handleAI(w, r, payload) || s.handleAppCache(w, r, payload) || s.handlePrompts(w, r, payload) || s.handleUserSkills(w, r, payload) {
+		return true
+	}
+	if s.handleAdvancedSQL(w, r, payload) || s.handleSchemaTools(w, r, payload) || s.handleDataCompare(w, r, payload) || s.handleDocs(w, r, payload) {
+		return true
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/import/") || strings.HasPrefix(r.URL.Path, "/api/export/") {
 		return s.handleFileTransfer(w, r, payload)
 	}

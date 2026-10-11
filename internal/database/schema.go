@@ -83,6 +83,9 @@ func (m *Manager) schema(ctx context.Context, path string, p map[string]any) (an
 		return nil, unsupported("SQLite attached schemas")
 	}
 	var result any
+	if result, handled, err := schemaAdvanced(ctx, db, c, database, schema, table, path, p); handled {
+		return result, redact(err, c)
+	}
 	switch strings.TrimPrefix(path, "/api/schema/") {
 	case "databases", "database-metadata":
 		switch c.Type {
@@ -134,6 +137,22 @@ func (m *Manager) schema(ctx context.Context, path string, p map[string]any) (an
 		result = list
 	case "columns":
 		result, e = columns(ctx, db, c.Type, database, schema, table)
+	case "completion-assistant":
+		if c.Type != "postgres" {
+			return nil, unsupported("completion assistant for " + c.Type)
+		}
+		result, e = postgresCompletion(ctx, db, database, schema, p)
+	case "table-comment":
+		switch c.Type {
+		case "postgres":
+			var comment sql.NullString
+			e = db.QueryRowContext(ctx, "SELECT obj_description(c.oid,'pg_class') FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2", schema, table).Scan(&comment)
+			if e == nil && comment.Valid {
+				result = comment.String
+			}
+		default:
+			return nil, unsupported("table comment for " + c.Type)
+		}
 	case "all-columns":
 		var tableRecords any
 		tableRecords, e = m.schema(ctx, "/api/schema/tables", p)
@@ -287,7 +306,7 @@ func columns(ctx context.Context, db *sql.DB, kind, database, schema, table stri
 	case "mysql":
 		out, e = records(ctx, db, "SELECT column_name AS name, column_type AS data_type, is_nullable='YES' AS is_nullable, column_default, column_key='PRI' AS is_primary_key, column_key='UNI' AS is_unique, extra, column_comment AS comment, numeric_precision, numeric_scale, character_maximum_length, character_set_name AS character_set, collation_name AS collation FROM information_schema.columns WHERE table_schema=? AND table_name=? ORDER BY ordinal_position", database, table)
 	case "postgres":
-		out, e = records(ctx, db, "SELECT a.attname AS name, format_type(a.atttypid,a.atttypmod) AS data_type, NOT a.attnotnull AS is_nullable, pg_get_expr(d.adbin,d.adrelid) AS column_default, EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=a.attrelid AND i.indisprimary AND a.attnum=ANY(i.indkey[0:i.indnkeyatts-1])) AS is_primary_key, CASE WHEN a.attidentity <> '' THEN 'IDENTITY' WHEN a.attgenerated <> '' THEN 'GENERATED' ELSE NULL END AS extra, col_description(a.attrelid,a.attnum) AS comment FROM pg_attribute a JOIN pg_class t ON t.oid=a.attrelid JOIN pg_namespace n ON n.oid=t.relnamespace LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum WHERE n.nspname=$1 AND t.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum", schema, table)
+		out, e = postgresColumns(ctx, db, schema, table)
 	}
 	for _, r := range out {
 		r["is_nullable"] = valueBool(r["is_nullable"])
@@ -369,7 +388,15 @@ func foreignKeys(ctx context.Context, db *sql.DB, kind, database, schema, table 
 	case "mysql":
 		return records(ctx, db, "SELECT k.constraint_name AS name, k.column_name AS `column`, k.referenced_table_schema AS ref_schema, k.referenced_table_name AS ref_table, k.referenced_column_name AS ref_column, r.update_rule AS on_update, r.delete_rule AS on_delete FROM information_schema.key_column_usage k JOIN information_schema.referential_constraints r ON r.constraint_schema=k.constraint_schema AND r.constraint_name=k.constraint_name AND r.table_name=k.table_name WHERE k.table_schema=? AND k.table_name=? AND k.referenced_table_name IS NOT NULL ORDER BY k.constraint_name,k.ordinal_position", database, table)
 	case "postgres":
-		return records(ctx, db, `SELECT c.conname AS name, a.attname AS "column", rn.nspname AS ref_schema, rt.relname AS ref_table, ra.attname AS ref_column, CASE c.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS on_update, CASE c.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS on_delete FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace JOIN pg_class rt ON rt.oid=c.confrelid JOIN pg_namespace rn ON rn.oid=rt.relnamespace CROSS JOIN LATERAL unnest(c.conkey,c.confkey) WITH ORDINALITY keys(local_col,remote_col,ord) JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=keys.local_col JOIN pg_attribute ra ON ra.attrelid=rt.oid AND ra.attnum=keys.remote_col WHERE c.contype='f' AND n.nspname=$1 AND t.relname=$2 ORDER BY c.conname,keys.ord`, schema, table)
+		return records(ctx, db, `SELECT c.conname AS name, a.attname AS "column", rn.nspname AS ref_schema, rt.relname AS ref_table, ra.attname AS ref_column,
+ (SELECT k FROM generate_subscripts(c.conkey,1) AS k WHERE c.conkey[k]=a.attnum) AS key_position,
+ CASE c.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS on_update,
+ CASE c.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS on_delete
+ FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace
+ JOIN pg_class rt ON rt.oid=c.confrelid JOIN pg_namespace rn ON rn.oid=rt.relnamespace
+ JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=ANY(c.conkey)
+ JOIN pg_attribute ra ON ra.attrelid=rt.oid AND ra.attnum=c.confkey[(SELECT k FROM generate_subscripts(c.conkey,1) AS k WHERE c.conkey[k]=a.attnum)]
+ WHERE c.contype='f' AND n.nspname=$1 AND t.relname=$2 ORDER BY c.conname,key_position`, schema, table)
 	}
 	return nil, unsupported("foreign key introspection")
 }

@@ -683,6 +683,7 @@ export async function installMarketplacePlugin(request: PluginMarketplaceInstall
 }
 
 export async function installPluginPackage(pathOrFile: string | File, allowUnsigned = false): Promise<PluginInstallResult> {
+  if (isWailsRuntime() && typeof pathOrFile === "string") return post("/api/plugins/install", { path: pathOrFile, allowUnsigned });
   let blob: Blob;
   let fileName: string;
   if (pathOrFile instanceof File) {
@@ -796,6 +797,35 @@ export async function readPluginUiAsset(pluginId: string, path: string): Promise
 }
 
 export async function subscribePluginEvents(onEvent: (event: PluginEvent) => void, onBinary?: (event: PluginBinaryEvent) => void): Promise<() => void> {
+  if (isWailsRuntime()) {
+    let stopped = false;
+    let after = 0;
+    const abort = new AbortController();
+    void (async () => {
+      while (!stopped) {
+        try {
+          const response = await fetch(apiUrl(`/api/plugins/events?poll=1&after_seq=${after}`), { signal: abort.signal });
+          if (!response.ok) throw await backendResponseError(response);
+          const payload = (await response.json()) as { events: Array<({ kind: "event" } & PluginEvent) | ({ kind: "binary" } & PluginBinaryEvent)>; lastSeq: number };
+          for (const event of payload.events) {
+            if (stopped) return;
+            if (event.kind === "event") onEvent(event);
+            if (event.kind === "binary") onBinary?.(event);
+          }
+          after = payload.lastSeq;
+        } catch (error) {
+          if (stopped) return;
+          console.warn("Plugin event polling failed", error);
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+    })();
+    return () => {
+      stopped = true;
+      abort.abort();
+    };
+  }
+
   const source = new EventSource(apiUrl("/api/plugins/events"));
   source.onmessage = (message) => {
     const payload = JSON.parse(message.data) as ({ kind: "event" } & PluginEvent) | ({ kind: "binary" } & PluginBinaryEvent) | { kind: "lagged" };
@@ -1008,12 +1038,14 @@ export async function exportAgentsOffline(_path: string, _driverKeys: string[]):
   throw new Error("Offline Agent package export is only available in the desktop app.");
 }
 
-export async function listUserSkills(_settings: UserSkillRootSettings): Promise<UserSkillsListResult> {
-  throw new Error("AI skills are only available in the desktop app.");
+export async function listUserSkills(settings: UserSkillRootSettings): Promise<UserSkillsListResult> {
+  if (!isWailsRuntime()) throw new Error("User skills are only available in the desktop app");
+  return post("/api/ai/skills/list", settings);
 }
 
-export async function readUserSkills(_ids: string[], _settings: UserSkillRootSettings): Promise<UserSkillsReadResult> {
-  throw new Error("AI skills are only available in the desktop app.");
+export async function readUserSkills(ids: string[], settings: UserSkillRootSettings): Promise<UserSkillsReadResult> {
+  if (!isWailsRuntime()) throw new Error("User skills are only available in the desktop app");
+  return post("/api/ai/skills/read", { ids, ...settings });
 }
 
 export async function importAgentDriver(dbType: string, pathOrFile: string | File): Promise<void> {
@@ -1103,14 +1135,17 @@ export async function deleteDatabaseBackupFiles(_paths: string[], _allowedRoots:
 }
 
 export async function isSqliteDatabaseFile(_path: string): Promise<boolean> {
+  if (isWailsRuntime()) return wailsApp().IsSQLiteDatabaseFile(_path);
   return false;
 }
 
 export async function backupSqliteDatabase(_connectionId: string, _destinationPath: string): Promise<void> {
+  if (isWailsRuntime()) return wailsApp().BackupSQLiteDatabase(_connectionId, _destinationPath);
   throw new Error("SQLite backup is only available in the desktop app.");
 }
 
 export async function restoreSqliteDatabase(_connectionId: string, _sourcePath: string): Promise<void> {
+  if (isWailsRuntime()) return wailsApp().RestoreSQLiteDatabase(_connectionId, _sourcePath);
   throw new Error("Remote SQLite restore is only available in the desktop app.");
 }
 
@@ -1194,8 +1229,8 @@ export async function listTables(connectionId: string, database: string, schema:
   return get(`/api/schema/tables?${qs({ connection_id: connectionId, database, schema, filter, limit, offset, object_types: objectTypes?.join(","), catalog, table_name_filter: tableNameFilter ? JSON.stringify(tableNameFilter) : undefined })}`);
 }
 
-export async function getTableComment(_connectionId: string, _database: string, _schema: string, _table: string, _catalog?: string): Promise<string | null> {
-  throw new Error("Table comment lookup is not available in the web backend");
+export async function getTableComment(connectionId: string, database: string, schema: string, table: string, catalog?: string): Promise<string | null> {
+  return get(`/api/schema/table-comment?${qs({ connection_id: connectionId, database, schema, table, catalog })}`);
 }
 
 export async function getMysqlTableAutoIncrement(connectionId: string, database: string, table: string): Promise<string | null> {
@@ -1643,18 +1678,22 @@ export async function executeInTransaction(connectionId: string, database: strin
 }
 
 export async function beginManualTransaction(_connectionId: string, _database: string, _schema?: string, _catalog?: string): Promise<string> {
+  if (isGoBackend()) return post("/api/transaction/begin", { connectionId: _connectionId, database: _database, schema: _schema, catalog: _catalog });
   throw new Error("Manual transaction management is only available in the desktop app.");
 }
 
 export async function executeInManualTransaction(_txnSessionId: string, _sql: string, _database: string, _schema?: string, _maxRows?: number, _tableDataPreview?: boolean, _pageSize?: number, _resultSessionId?: string, _classificationSql?: string): Promise<QueryResult[]> {
+  if (isGoBackend()) return post("/api/transaction/execute", { txnSessionId: _txnSessionId, sql: _sql, database: _database, schema: _schema, maxRows: _maxRows, tableDataPreview: _tableDataPreview, pageSize: _pageSize, resultSessionId: _resultSessionId, classificationSql: _classificationSql });
   throw new Error("Manual transaction management is only available in the desktop app.");
 }
 
 export async function commitManualTransaction(_txnSessionId: string): Promise<QueryResult> {
+  if (isGoBackend()) return post("/api/transaction/commit", { txnSessionId: _txnSessionId });
   throw new Error("Manual transaction management is only available in the desktop app.");
 }
 
 export async function rollbackManualTransaction(_txnSessionId: string): Promise<QueryResult> {
+  if (isGoBackend()) return post("/api/transaction/rollback", { txnSessionId: _txnSessionId });
   throw new Error("Manual transaction management is only available in the desktop app.");
 }
 
@@ -2002,11 +2041,41 @@ export async function buildDataCompareSyncPlan(options: DataCompareSyncPlanOptio
 // AI
 // ---------------------------------------------------------------------------
 
+async function pollAiEvents(sessionId: string, onEvent: (event: Record<string, unknown>) => void, signal?: AbortSignal): Promise<void> {
+  let after = 0;
+  try {
+    while (true) {
+      signal?.throwIfAborted();
+      const response = await fetch(apiUrl(`/api/ai/stream-events?${qs({ session_id: sessionId, after_seq: after })}`), { signal });
+      if (!response.ok) throw await backendResponseError(response);
+      const progress = (await response.json()) as { events: Record<string, unknown>[]; done: boolean; lastSeq: number };
+      for (const event of progress.events) {
+        onEvent(event);
+        after = Number(event.seq);
+      }
+      if (progress.done && after >= progress.lastSeq) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+  } catch (error) {
+    await aiCancelStream(sessionId).catch(() => undefined);
+    throw error;
+  }
+}
+
 export async function aiComplete(request: AiCompletionRequest): Promise<string> {
   return post("/api/ai/complete", { request });
 }
 
 export async function aiStream(sessionId: string, request: AiCompletionRequest, onChunk: (chunk: AiStreamChunk) => void): Promise<void> {
+  if (isWailsRuntime()) {
+    await post("/api/ai/stream", { sessionId, request, background: true });
+    return pollAiEvents(sessionId, (event) => {
+      const chunk = event as unknown as AiStreamChunk;
+      if (chunk.error) throw new Error(chunk.error);
+      onChunk(chunk);
+    });
+  }
+
   const res = await fetch(apiUrl("/api/ai/stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2112,6 +2181,22 @@ export async function aiAgentStream(
   signal?: AbortSignal,
   selectedDatabases?: string[],
 ): Promise<string> {
+  if (isWailsRuntime()) {
+    await post("/api/ai/agent-stream", { sessionId, request, connectionId, database, schema, dbType, mode: mode || "ask", allowWriteSql, confirmedWriteSql, confirmedConnectionId, confirmedDatabase, confirmedSchema, selectedDatabases, background: true });
+    let result = "";
+    await pollAiEvents(
+      sessionId,
+      (event) => {
+        if (!isAgentEvent(event)) throw new Error("Invalid AI agent event");
+        onEvent(event);
+        if (event.type === "error") throw new Error(event.message);
+        if (event.type === "agent_end") result = JSON.stringify(event);
+      },
+      signal,
+    );
+    return result;
+  }
+
   const res = await fetch(apiUrl("/api/ai/agent-stream"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2584,15 +2669,15 @@ export async function cloudSyncLocalCatalog(editorSettings?: unknown): Promise<S
 }
 
 export async function localBackupExport(): Promise<never> {
-  throw new Error("Local backup is available only in DBX Desktop.");
+  throw new Error("Local backup is available only in Database Workbench Desktop.");
 }
 
 export async function localBackupInspect(): Promise<never> {
-  throw new Error("Local backup is available only in DBX Desktop.");
+  throw new Error("Local backup is available only in Database Workbench Desktop.");
 }
 
 export async function localBackupImport(): Promise<never> {
-  throw new Error("Local backup is available only in DBX Desktop.");
+  throw new Error("Local backup is available only in Database Workbench Desktop.");
 }
 
 export async function webdavSyncInspect(config: WebDavConfig, secretsPassphrase?: string): Promise<SyncSnapshotCatalog> {
@@ -2691,16 +2776,16 @@ export async function deleteAiConversation(id: string): Promise<void> {
 // Background AI runs are a Desktop-only capability in this release. Keep the
 // symbols for backend-module parity without changing Web's request-bound SSE
 // lifecycle or adding a partially functional persistence API.
-export async function saveAiRun(_run: AiRun): Promise<void> {
-  throw new Error("Background AI runs are only available in DBX Desktop");
+export async function saveAiRun(run: AiRun): Promise<void> {
+  return post("/api/ai/run", { run });
 }
 
-export async function saveAiRunState(_conversation: AiConversation, _run: AiRun): Promise<void> {
-  throw new Error("Background AI runs are only available in DBX Desktop");
+export async function saveAiRunState(conversation: AiConversation, run: AiRun): Promise<void> {
+  return post("/api/ai/run-state", { conversation, run });
 }
 
 export async function loadAiRuns(): Promise<AiRun[]> {
-  return [];
+  return get("/api/ai/runs");
 }
 
 // ---------------------------------------------------------------------------
@@ -2733,6 +2818,10 @@ export async function setAiGlobalCustomInstructions(content: string): Promise<vo
 // ---------------------------------------------------------------------------
 
 export async function previewSqlFile(fileOrPath: string | File): Promise<SqlFilePreview> {
+  if (typeof fileOrPath === "string" && isWailsRuntime()) {
+    const snapshot = await wailsApp().ReadExternalSQL(fileOrPath, 32 * 1024 * 1024);
+    fileOrPath = new File([snapshot.content], fileOrPath.split(/[\\/]/).pop() || "upload.sql", { type: "application/sql" });
+  }
   if (typeof fileOrPath === "string") {
     // In web mode a raw path is not useful; throw a clear error
     throw new Error("previewSqlFile in web mode requires a File object, not a file path");
@@ -2796,22 +2885,27 @@ export async function pendingOpenPluginInstallLinks(): Promise<string[]> {
 }
 
 export async function readExternalSqlFile(_path: string, _maxSizeBytes?: number): Promise<string> {
+  if (isWailsRuntime()) return (await wailsApp().ReadExternalSQL(_path, _maxSizeBytes ?? 32 * 1024 * 1024)).content;
   throw new Error("Opening external SQL file paths is only available in the desktop app");
 }
 
 export async function readExternalSqlFileSnapshot(_path: string, _maxSizeBytes?: number): Promise<import("@/lib/backend/tauri").ExternalSqlFileSnapshot> {
+  if (isWailsRuntime()) return wailsApp().ReadExternalSQL(_path, _maxSizeBytes ?? 32 * 1024 * 1024);
   throw new Error("Opening external SQL file paths is only available in the desktop app");
 }
 
 export async function inspectExternalSqlFile(_path: string): Promise<import("@/lib/backend/tauri").ExternalSqlFileStatus> {
+  if (isWailsRuntime()) return wailsApp().InspectExternalSQL(_path);
   throw new Error("Inspecting external SQL file paths is only available in the desktop app");
 }
 
 export async function writeExternalSqlFile(_path: string, _content: string, _options: { expectedContentHash?: string; expectedMissing?: boolean } = {}): Promise<import("@/lib/backend/tauri").ExternalSqlFileWriteResult> {
+  if (isWailsRuntime()) return wailsApp().WriteExternalSQL(_path, _content, _options);
   throw new Error("Saving external SQL file paths is only available in the desktop app");
 }
 
 export async function saveExternalSqlFile(_defaultFileName: string, _content: string, _filterExtension?: string): Promise<{ path: string; version: import("@/types/database").ExternalSqlFileVersion } | null> {
+  if (isWailsRuntime()) return wailsApp().SaveExternalSQL(_defaultFileName, _content, _filterExtension ?? "sql");
   throw new Error("Saving SQL files locally is only available in the desktop app");
 }
 
@@ -2823,18 +2917,22 @@ export interface SqlFileEntry {
 }
 
 export async function listSqlFilesInFolder(_folderPath: string, _fileFilter?: string): Promise<SqlFileEntry[]> {
+  if (isWailsRuntime()) return wailsApp().ListSQLFiles(_folderPath, _fileFilter ?? "*.sql");
   throw new Error("Listing SQL files in a folder is only available in the desktop app");
 }
 
 export async function createSqlFileInFolder(_rootPath: string, _directoryPath: string, _fileName: string): Promise<string> {
+  if (isWailsRuntime()) return wailsApp().CreateSQLFile(_rootPath, _directoryPath, _fileName);
   throw new Error("Managing SQL files in folders is only available in the desktop app");
 }
 
 export async function renameSqlFileInFolder(_rootPath: string, _filePath: string, _fileName: string): Promise<string> {
+  if (isWailsRuntime()) return wailsApp().RenameSQLFile(_rootPath, _filePath, _fileName);
   throw new Error("Managing SQL files in folders is only available in the desktop app");
 }
 
 export async function deleteSqlFileInFolder(_rootPath: string, _filePath: string): Promise<void> {
+  if (isWailsRuntime()) return wailsApp().DeleteSQLFile(_rootPath, _filePath);
   throw new Error("Managing SQL files in folders is only available in the desktop app");
 }
 
@@ -5401,7 +5499,7 @@ export async function checkMcpServerStatus(): Promise<import("@/lib/backend/taur
 }
 
 export async function installMcpServer(): Promise<string> {
-  throw new Error("MCP is built into DBX Go. Enable it in MCP settings.");
+  throw new Error("MCP is built into Database Workbench Go. Enable it in MCP settings.");
 }
 
 export async function installNativeMcpServer(): Promise<string> {
@@ -5409,11 +5507,11 @@ export async function installNativeMcpServer(): Promise<string> {
 }
 
 export async function uninstallMcpServer(): Promise<string> {
-  throw new Error("MCP is built into DBX Go. Disable it in MCP settings.");
+  throw new Error("MCP is built into Database Workbench Go. Disable it in MCP settings.");
 }
 
 export async function uninstallNpmMcpServer(): Promise<string> {
-  throw new Error("DBX Go does not manage the legacy npm MCP package.");
+  throw new Error("Database Workbench Go does not manage the legacy npm MCP package.");
 }
 
 export async function getSystemProxyUrl(): Promise<string | null> {

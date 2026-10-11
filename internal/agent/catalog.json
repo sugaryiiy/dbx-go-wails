@@ -1,0 +1,479 @@
+[
+  {
+    "dbType": "sqlserver",
+    "label": "SQL Server",
+    "agentKey": null,
+    "defaultPort": 1433,
+    "driverProfiles": [
+      {
+        "profile": "sqlserver-legacy",
+        "agentKey": "sqlserver-legacy",
+        "label": "SQL Server legacy compatibility component",
+        "storeVisible": true,
+        "storeOrder": 47
+      }
+    ]
+  },
+  {
+    "dbType": "mongodb",
+    "label": "MongoDB (Legacy)",
+    "agentKey": "mongodb",
+    "defaultPort": 27017,
+    "driverProfiles": [
+      {
+        "profile": "mongodb-legacy",
+        "agentKey": "mongodb",
+        "label": "MongoDB (Legacy)",
+        "storeVisible": false
+      }
+    ]
+  },
+  {
+    "dbType": "oracle",
+    "label": "Oracle",
+    "agentKey": "oracle",
+    "defaultPort": 1521,
+    "driverProfiles": [
+      {
+        "profile": "oracle-legacy",
+        "agentKey": "oracle",
+        "label": "Oracle",
+        "storeVisible": false
+      },
+      {
+        "profile": "oracle-10g",
+        "agentKey": "oracle",
+        "label": "Oracle",
+        "storeVisible": false
+      },
+      {
+        "profile": "oci",
+        "agentKey": "oracle-oci",
+        "label": "Oracle (OCI)",
+        "storeVisible": true,
+        "storeOrder": 54
+      }
+    ]
+  },
+  {
+    "dbType": "dameng",
+    "label": "达梦 DM8",
+    "agentKey": "dameng",
+    "defaultPort": 5236,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "kingbase",
+    "label": "金仓KingbaseES",
+    "agentKey": "kingbase",
+    "defaultPort": 54321,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "highgo",
+    "label": "瀚高 HighGo",
+    "agentKey": "highgo",
+    "defaultPort": 5866,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "uxdb",
+    "label": "优炫 UXDB",
+    "agentKey": "uxdb",
+    "defaultPort": 52025,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "vastbase",
+    "label": "海量 Vastbase",
+    "agentKey": "vastbase",
+    "defaultPort": 5432,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "goldendb",
+    "label": "金篆 GoldenDB",
+    "agentKey": "goldendb",
+    "defaultPort": 3306,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "databend",
+    "label": "Databend",
+    "agentKey": "databend",
+    "defaultPort": 8000,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "yashandb",
+    "label": "崖山 YashanDB",
+    "agentKey": "yashandb",
+    "defaultPort": 1688,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "databricks",
+    "label": "Databricks SQL",
+    "agentKey": "databricks",
+    "defaultPort": 443,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "saphana",
+    "label": "SAP HANA",
+    "agentKey": "saphana",
+    "defaultPort": 30015,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "teradata",
+    "label": "Teradata",
+    "agentKey": "teradata",
+    "defaultPort": 1025,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "vertica",
+    "label": "Vertica",
+    "agentKey": "vertica",
+    "defaultPort": 5433,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "firebird",
+    "label": "Firebird",
+    "agentKey": "firebird",
+    "defaultPort": 3050,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "exasol",
+    "label": "Exasol",
+    "agentKey": "exasol",
+    "defaultPort": 8563,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "oceanbase-oracle",
+    "label": "OceanBase Oracle Mode",
+    "agentKey": "oceanbase-oracle",
+    "defaultPort": 2883,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "gbase",
+    "label": "南大通用 GBase 8a",
+    "agentKey": "gbase8a",
+    "defaultPort": 5258,
+    "driverProfiles": [
+      {
+        "profile": "gbase8s",
+        "agentKey": "gbase8s",
+        "label": "南大通用 GBase 8s",
+        "storeVisible": true,
+        "storeOrder": 16
+      },
+      {
+        "profile": "gbase8a",
+        "agentKey": "gbase8a",
+        "label": "南大通用 GBase 8a",
+        "storeVisible": true,
+        "storeOrder": 15
+      }
+    ]
+  },
+  {
+    "dbType": "access",
+    "label": "Microsoft Access",
+    "agentKey": "access",
+    "defaultPort": 0,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "h2",
+    "label": "H2",
+    "agentKey": "h2",
+    "defaultPort": 9092,
+    "driverProfiles": [
+      {
+        "profile": "h2-legacy",
+        "agentKey": "h2",
+        "packageKey": "h2-legacy",
+        "label": "H2 2.1 Legacy",
+        "storeVisible": false
+      },
+      {
+        "profile": "h2-v1",
+        "agentKey": "h2",
+        "label": "H2 1.x",
+        "storeVisible": false
+      },
+      {
+        "profile": "h2-v2",
+        "agentKey": "h2",
+        "label": "H2 2.0–2.1",
+        "storeVisible": false
+      },
+      {
+        "profile": "h2-v3",
+        "agentKey": "h2",
+        "label": "H2 2.2+",
+        "storeVisible": false
+      },
+      {
+        "profile": "h2-custom",
+        "agentKey": "h2",
+        "label": "H2 Custom JAR",
+        "storeVisible": false
+      }
+    ]
+  },
+  {
+    "dbType": "snowflake",
+    "label": "Snowflake",
+    "agentKey": "snowflake",
+    "defaultPort": 443,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "trino",
+    "label": "Trino",
+    "agentKey": "trino",
+    "defaultPort": 8080,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "hive",
+    "label": "Apache Hive",
+    "agentKey": "hive",
+    "defaultPort": 10000,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "argo",
+    "label": "星环Argo",
+    "agentKey": "argo",
+    "defaultPort": 10000,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "transwarp",
+    "label": "星环Inceptor",
+    "agentKey": "transwarp",
+    "defaultPort": 10000,
+    "driverProfiles": [
+      {
+        "profile": "transwarp-inceptor",
+        "agentKey": "transwarp",
+        "label": "星环Inceptor",
+        "storeVisible": false
+      }
+    ]
+  },
+  {
+    "dbType": "kyuubi",
+    "label": "Apache Kyuubi",
+    "agentKey": "hive",
+    "defaultPort": 10009,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "impala",
+    "label": "Apache Impala",
+    "agentKey": "hive",
+    "defaultPort": 21050,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "db2",
+    "label": "IBM DB2",
+    "agentKey": "db2",
+    "defaultPort": 50000,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "informix",
+    "label": "IBM Informix",
+    "agentKey": "informix",
+    "defaultPort": 9088,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "neo4j",
+    "label": "Neo4j",
+    "agentKey": "neo4j",
+    "defaultPort": 7687,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "nebula",
+    "label": "NebulaGraph",
+    "agentKey": "nebula",
+    "defaultPort": 9669,
+    "driverProfiles": [
+      {
+        "profile": "nebula-v3",
+        "agentKey": "nebula",
+        "label": "NebulaGraph 3.x",
+        "storeVisible": false
+      }
+    ]
+  },
+  {
+    "dbType": "cassandra",
+    "label": "Apache Cassandra",
+    "agentKey": "cassandra",
+    "defaultPort": 9042,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "bigquery",
+    "label": "Google BigQuery",
+    "agentKey": "bigquery",
+    "defaultPort": 0,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "spanner",
+    "label": "Google Cloud Spanner",
+    "agentKey": "spanner",
+    "defaultPort": 443,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "kylin",
+    "label": "Apache Kylin",
+    "agentKey": "kylin",
+    "defaultPort": 7070,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "ignite",
+    "label": "Apache Ignite",
+    "agentKey": "ignite",
+    "defaultPort": 10800,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "ignite3",
+    "label": "Apache Ignite 3",
+    "agentKey": "ignite3",
+    "defaultPort": 10800,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "sundb",
+    "label": "科蓝 SUNDB",
+    "agentKey": "sundb",
+    "defaultPort": 22581,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "oscar",
+    "label": "神通 OSCAR",
+    "agentKey": "oscar",
+    "defaultPort": 2003,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "tdengine",
+    "label": "TDengine",
+    "agentKey": "tdengine",
+    "defaultPort": 6041,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "xugu",
+    "label": "虚谷 XuguDB",
+    "agentKey": "xugu",
+    "defaultPort": 5138,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "etcd",
+    "label": "etcd",
+    "agentKey": "etcd",
+    "defaultPort": 2379,
+    "driverProfiles": [
+      {
+        "profile": "etcd-v2",
+        "agentKey": "etcd2",
+        "label": "etcd 2.x (v2 API)",
+        "storeVisible": true,
+        "storeOrder": 49
+      }
+    ]
+  },
+  {
+    "dbType": "zookeeper",
+    "label": "Apache ZooKeeper",
+    "agentKey": "zookeeper",
+    "defaultPort": 2181,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "mq",
+    "label": "Message Queue",
+    "agentKey": null,
+    "defaultPort": 8080,
+    "driverProfiles": [
+      {
+        "profile": "kafka",
+        "label": "Apache Kafka",
+        "agentKey": "kafka",
+        "storeVisible": true,
+        "storeOrder": 44
+      },
+      {
+        "profile": "rocketmq",
+        "label": "Apache RocketMQ",
+        "agentKey": "rocketmq",
+        "storeVisible": true,
+        "storeOrder": 45
+      },
+      {
+        "profile": "rabbitmq",
+        "label": "RabbitMQ",
+        "agentKey": "rabbitmq",
+        "storeVisible": true,
+        "storeOrder": 46
+      }
+    ]
+  },
+  {
+    "dbType": "iotdb",
+    "label": "Apache IoTDB",
+    "agentKey": "iotdb",
+    "defaultPort": 6667,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "iris",
+    "label": "InterSystems IRIS",
+    "agentKey": "iris",
+    "defaultPort": 1972,
+    "driverProfiles": [
+      {
+        "profile": "cache",
+        "agentKey": "cache",
+        "label": "InterSystems Caché",
+        "storeVisible": true,
+        "storeOrder": 51
+      }
+    ]
+  },
+  {
+    "dbType": "influxdb",
+    "label": "InfluxDB",
+    "agentKey": "influxdb",
+    "defaultPort": 8086,
+    "driverProfiles": []
+  },
+  {
+    "dbType": "spark",
+    "label": "Apache Spark",
+    "agentKey": "spark",
+    "defaultPort": 10015,
+    "driverProfiles": []
+  }
+]

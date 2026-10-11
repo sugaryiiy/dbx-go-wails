@@ -58,6 +58,7 @@ import { useToast } from "@/composables/useToast";
 import DatabaseIcon from "@/components/icons/DatabaseIcon.vue";
 import PluginConnectionFields from "@/components/plugins/PluginConnectionFields.vue";
 import GoSecureConnectionFields from "./GoSecureConnectionFields.vue";
+import ConnectionDatabaseSelect from "./ConnectionDatabaseSelect.vue";
 import GoSshHostVerification from "./GoSshHostVerification.vue";
 import { isGoTLSDatabase, normalizeGoTLSFields, validateGoTransportLayers } from "@/lib/connection/goSecureConnections";
 import PluginIcon from "@/components/plugins/PluginIcon.vue";
@@ -75,7 +76,7 @@ import {
 import type { PluginCenterFocus } from "@/lib/plugins/pluginCenterNavigation";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { isWailsRuntime, openWailsFile, saveWailsFile } from "@/lib/backend/wailsRuntime";
-import { GO_CONNECTION_PROFILES, isGoBackend } from "@/lib/backend/goCapabilities";
+import { GO_CONNECTION_PROFILES, isGoBackend, goAgentDriverKey, supportsGoConnectionProfile } from "@/lib/backend/goCapabilities";
 import { isWindows } from "@/lib/backend/platform";
 import { applyMeilisearchBasePathToExternalConfig, applyParsedConnectionUrl, normalizeMongoConnectionString, parseConnectionUrl } from "@/lib/connection/connectionUrl";
 import { hasXuguConnectionDatabase } from "@/lib/connection/xuguDatabase";
@@ -2363,7 +2364,7 @@ function formatInstallSize(bytes: number): string {
 function assertGoNativeConnection(config: Pick<ConnectionConfig, "db_type" | "driver_profile">): void {
   if (!goBackend) return;
   const profile = config.driver_profile;
-  if (!GO_CONNECTION_PROFILES.has(config.db_type) || (profile && profile !== "native" && profile !== config.db_type && !(config.db_type === "mysql" && profile === "mariadb"))) {
+  if (!supportsGoConnectionProfile(config.db_type, profile)) {
     throw new Error(appLocale.value.startsWith("zh") ? `Go 版暂未迁移此数据库或驱动：${profile || config.db_type}` : `This database or driver has not yet been migrated to Go: ${profile || config.db_type}`);
   }
 }
@@ -2371,17 +2372,17 @@ function assertGoNativeConnection(config: Pick<ConnectionConfig, "db_type" | "dr
 async function ensureRequiredAgentDriverInstalled(config: ConnectionConfig): Promise<void> {
   if (goBackend) {
     assertGoNativeConnection(config);
-    return;
+    if (!goAgentDriverKey(config.db_type, config.driver_profile)) return;
   }
-  if (requiresSqlServerLegacyCompatibilityComponent(config)) {
+  if (!goBackend && requiresSqlServerLegacyCompatibilityComponent(config)) {
     await installSqlServerLegacyCompatibilityComponentIfNeeded();
   }
 
-  const driverKey = agentDriverInstallKey(config.db_type, config.driver_profile, { ssh: connectionUsesSsh(config) });
+  const driverKey = goBackend ? goAgentDriverKey(config.db_type, config.driver_profile) : agentDriverInstallKey(config.db_type, config.driver_profile, { ssh: connectionUsesSsh(config) });
   if (!driverKey) return;
 
   let drivers = agentDrivers.value.length ? agentDrivers.value : await refreshLocalAgentDrivers();
-  if (!showAgentDriverInstallHint(config.db_type, drivers, config.driver_profile, { ssh: connectionUsesSsh(config) })) return;
+  if (!goBackend && !showAgentDriverInstallHint(config.db_type, drivers, config.driver_profile, { ssh: connectionUsesSsh(config) })) return;
   if (installedAgentDriver(drivers, driverKey)?.installed === true) return;
 
   drivers = await refreshLocalAgentDrivers();
@@ -3345,6 +3346,26 @@ const databasePlaceholder = computed(() => {
   if (!fallback) return t("connection.databasePlaceholder");
   return t("connection.databasePlaceholderWithDefault", { database: fallback });
 });
+
+const canSelectConnectionDatabase = computed(() => goBackend && ["mysql", "postgres", "clickhouse"].includes(form.value.db_type));
+const connectionDatabaseSelectScope = computed(() => connectionConfigFingerprint(connectionConfigSnapshotForVisibleDatabases()));
+
+async function loadConnectionDatabaseOptions(): Promise<string[]> {
+  if (!ensureConnectionHostResolvedFromUrl()) throw new Error(t("connection.host"));
+  const draftId = `__database_select_${uuid()}`;
+  const config = { ...connectionConfigForSubmit(draftId), one_time: true };
+  // MySQL can list accessible databases without selecting one first.
+  // This also allows choosing a database when the typed name does not exist.
+  if (config.db_type === "mysql") config.database = undefined;
+  try {
+    await api.connectDb(config);
+    return (await api.listDatabases(draftId)).map((database) => database.name);
+  } catch (cause) {
+    throw new Error(translateBackendError(t, errorMessage(cause)));
+  } finally {
+    await api.disconnectDb(draftId).catch(() => undefined);
+  }
+}
 
 const transportLayers = computed(() => form.value.transport_layers || []);
 const hasEnabledSshLayer = computed(() => transportLayers.value.some((layer) => layer.enabled !== false && layer.type === "ssh"));
@@ -9197,7 +9218,16 @@ function openExternalUrl(url: string) {
 
                     <div v-if="form.db_type !== 'hbase' && form.db_type !== 'meilisearch' && form.db_type !== 'solr' && form.db_type !== 'spanner'" class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ databaseLabel }}</Label>
-                      <Input v-model="form.database" class="col-span-3" :placeholder="databasePlaceholder" />
+                      <ConnectionDatabaseSelect
+                        v-if="canSelectConnectionDatabase"
+                        v-model="form.database"
+                        class="col-span-3"
+                        :placeholder="databasePlaceholder"
+                        :scope-key="connectionDatabaseSelectScope"
+                        :load-options="loadConnectionDatabaseOptions"
+                        :disabled="isTesting || isSaving || !hasRequiredConnectionTarget"
+                      />
+                      <Input v-else v-model="form.database" class="col-span-3" :placeholder="databasePlaceholder" />
                     </div>
 
                     <!-- Cloud Spanner: project/instance/database resource path instead of user/password/database -->
@@ -10646,7 +10676,7 @@ function openExternalUrl(url: string) {
                   <template v-else-if="selectedHttpTunnelLayer && !selectedLayerProfileId">
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.httpTunnelUrl") }}</Label>
-                      <Input v-model="selectedHttpTunnelLayer.url" class="col-span-3" placeholder="https://dbx.example.com/dbx_tunnel.php" :disabled="selectedHttpTunnelLayer.enabled === false" />
+                      <Input v-model="selectedHttpTunnelLayer.url" class="col-span-3" placeholder="https://database.example.com/dbx_tunnel.php" :disabled="selectedHttpTunnelLayer.enabled === false" />
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.httpTunnelToken") }}</Label>

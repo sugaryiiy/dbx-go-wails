@@ -5345,7 +5345,7 @@ export default {
     geometryTypePlaceholder: "Select or type a geometry type",
     sridPlaceholder: "e.g. 4326",
     geometrySridHint: "Specify geometry type and SRID to enable spatial indexing and correct spatial queries.",
-    geometryEmptyTypeHint: "Empty geometry type equals GEOMETRY (any sub-type); dbx emits geometry(GEOMETRY, SRID).",
+    geometryEmptyTypeHint: "Empty geometry type equals GEOMETRY (any sub-type); Database Workbench emits geometry(GEOMETRY, SRID).",
     enumValues: "Enum values",
     enumValueCount: "{count} values",
     addEnumValue: "Add value",
@@ -8015,7 +8015,7 @@ export default {
     languageTitle: "Language / 语言",
     fontSize: "Font Size",
     toolbarTitle: "Toolbar and tool windows",
-    toolbarHiddenHint: 'Hidden tool windows remain available in Tools. Data transfer, comparisons, file execution and driver management are always in Tools.',
+    toolbarHiddenHint: "Hidden tool windows remain available in Tools. Data transfer, comparisons, file execution and driver management are always in Tools.",
     exclusiveRightSidebarPanels: "Show one right sidebar panel at a time",
     exclusiveRightSidebarPanelsDescription: "Opening a right sidebar panel closes the others. Disable this to allow multiple panels.",
     uiScale: "UI Scale",
@@ -8932,7 +8932,8 @@ export default {
     mcpUninstallConfirm: "Uninstall Database Workbench MCP Server? Configured MCP clients will no longer be able to start it.",
     mcpUninstallFailed: "Uninstallation failed: {error}",
     mcpConfig: "MCP config",
-    mcpConfigOptionsHint: "Database Workbench centrally controls connection access and execution permissions for every MCP client. Generated configs contain only the runtime settings needed to start the MCP server and connect to this Database Workbench instance, with no permission or connection-scope variables.",
+    mcpConfigOptionsHint:
+      "Database Workbench centrally controls connection access and execution permissions for every MCP client. Generated configs contain only the runtime settings needed to start the MCP server and connect to this Database Workbench instance, with no permission or connection-scope variables.",
     mcpScopeConnection: "Connections allowed for MCP",
     mcpScopeConnectionDescription: "Database Workbench exposes only the selected connections to MCP. Changes apply to every MCP client.",
     mcpScopeMode: "Connection scope mode",
@@ -9288,7 +9289,8 @@ export default {
   },
   driverStore: {
     jreDirRemoveFailed: "Failed to remove the old JRE directory: {path} (original error: {error})",
-    jreDirRemoveFailedWindows: "Failed to remove the old JRE directory: {path}\nPossible causes:\n  - a dbx Agent / java process still holds the directory\n  - antivirus software is scanning it\nClose any process that may hold the directory, or restart dbx and try again.\n(original error: {error})",
+    jreDirRemoveFailedWindows:
+      "Failed to remove the old JRE directory: {path}\nPossible causes:\n  - a Database Workbench Agent / java process still holds the directory\n  - antivirus software is scanning it\nClose any process that may hold the directory, or restart Database Workbench and try again.\n(original error: {error})",
     jreInUseByDrivers: "JRE {jre} is in use by drivers: {drivers}. Uninstall them first.",
     offlinePackageRegistryMissing: "agent-registry.json not found in the ZIP; not a valid offline driver package.",
     progressJreExtract: "Extracting JRE...",

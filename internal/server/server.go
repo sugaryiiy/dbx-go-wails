@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sugaryiiy/dbx-go-wails/internal/agent"
 	"github.com/sugaryiiy/dbx-go-wails/internal/database"
 )
 
@@ -29,30 +30,47 @@ type Options struct {
 	Password string
 	Desktop  bool
 	Assets   fs.FS
+	BasePath string
 	// Stdio MCP uses the data store exclusively without restoring a listener.
 	DisableMCPListener bool
 }
 type Server struct {
-	database     *database.Manager
-	storeLock    *os.File
-	closeOnce    sync.Once
-	closeErr     error
-	dataDir      string
-	desktop      bool
-	assets       fs.FS
-	passwordHash [32]byte
-	mu           sync.Mutex
-	state        diskState
-	aead         cipher.AEAD
-	sessions     map[string]time.Time
-	failedLogins int
-	lockedUntil  time.Time
-	extensions   *extensionState
-	sampleMu     sync.Mutex
-	mcpState     *mcpRuntime
+	database      *database.Manager
+	storeLock     *os.File
+	closeOnce     sync.Once
+	closeErr      error
+	dataDir       string
+	desktop       bool
+	basePath      string
+	assets        fs.FS
+	passwordHash  [32]byte
+	mu            sync.Mutex
+	state         diskState
+	aead          cipher.AEAD
+	sessions      map[string]time.Time
+	failedLogins  int
+	lockedUntil   time.Time
+	extensions    *extensionState
+	sampleMu      sync.Mutex
+	mcpState      *mcpRuntime
+	aiRuntime     *aiRuntime
+	pluginRuntime *pluginRuntime
+	agentStore    *agent.Store
+	agents        *agentHTTPState
 }
 
 func New(opts Options) (*Server, error) {
+	base := strings.TrimSpace(opts.BasePath)
+	if base == "/" {
+		base = ""
+	}
+	base = strings.TrimSuffix(base, "/")
+	if base != "" && (!strings.HasPrefix(base, "/") || path.Clean(base) != base || strings.ContainsAny(base, "?%#\\\x00") || strings.Contains(base, "//")) {
+		return nil, errors.New("Web base path must be a clean absolute path")
+	}
+	if opts.Desktop && base != "" {
+		return nil, errors.New("Wails uses the root origin; Web base path is unavailable in desktop mode")
+	}
 	if !opts.Desktop && opts.Password == "" {
 		return nil, errors.New("Web mode requires a password")
 	}
@@ -68,8 +86,21 @@ func New(opts Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{database: database.NewManager(), dataDir: absolute, desktop: opts.Desktop, assets: opts.Assets, passwordHash: sha256.Sum256([]byte(opts.Password)), sessions: map[string]time.Time{}, extensions: newExtensionState()}
+	s := &Server{database: database.NewManager(), dataDir: absolute, desktop: opts.Desktop, assets: opts.Assets, passwordHash: sha256.Sum256([]byte(opts.Password)), sessions: map[string]time.Time{}, extensions: newExtensionState(), aiRuntime: newAIRuntime()}
+	s.basePath = base
 	if err = s.openStore(); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	s.agentStore, err = agent.NewStore(filepath.Join(s.dataDir, "agents"))
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	s.agents = newAgentHTTPState()
+	s.database.SetAgentStore(s.agentStore)
+	s.pluginRuntime = newPluginRuntime(s)
+	if err = s.recoverAIRuns(); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
@@ -81,9 +112,17 @@ func New(opts Options) (*Server, error) {
 }
 func (s *Server) Close() error {
 	s.closeOnce.Do(func() {
+		s.closeAI()
+		s.closePlugins()
+		s.closeAgentHTTP()
 		s.closeMCP()
 		s.extensions.close()
 		s.closeErr = s.database.Close()
+		if s.agentStore != nil {
+			if err := s.agentStore.Close(); s.closeErr == nil {
+				s.closeErr = err
+			}
+		}
 		if s.storeLock != nil {
 			_ = unlockStore(s.storeLock)
 			if err := s.storeLock.Close(); s.closeErr == nil {
@@ -96,6 +135,19 @@ func (s *Server) Close() error {
 
 // Desktop mode is for Wails' in-process asset handler only, never an HTTP listener.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.basePath != "" {
+		if r.URL.Path == s.basePath && (r.Method == "GET" || r.Method == "HEAD") {
+			http.Redirect(w, r, s.basePath+"/", http.StatusTemporaryRedirect)
+			return
+		}
+		if !strings.HasPrefix(r.URL.Path, s.basePath+"/") {
+			http.NotFound(w, r)
+			return
+		}
+		r = r.Clone(r.Context())
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, s.basePath)
+		r.URL.RawPath = ""
+	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "same-origin")
 	if !s.desktop && r.URL.Path == "/mcp" {
@@ -129,6 +181,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload := map[string]any{}
+	if s.handleAgentTransport(w, r) {
+		return
+	}
 	for key, values := range r.URL.Query() {
 		if len(values) > 0 {
 			payload[key] = values[0]
@@ -166,7 +221,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Execution and connection mutations never accept a GET navigation.
-	if (strings.HasPrefix(route, "/api/query/") || (strings.HasPrefix(route, "/api/connection/") && route != "/api/connection/list")) && r.Method != http.MethodPost {
+	if (strings.HasPrefix(route, "/api/query/") || strings.HasPrefix(route, "/api/transaction/") || (strings.HasPrefix(route, "/api/connection/") && route != "/api/connection/list")) && r.Method != http.MethodPost {
 		writeError(w, 405, "This operation requires POST")
 		return
 	}
@@ -276,7 +331,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request, p map[string]any)
 		return
 	}
 	s.sessions[token] = time.Now().Add(24 * time.Hour)
-	http.SetCookie(w, &http.Cookie{Name: "dbx_session", Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 86400})
+	http.SetCookie(w, &http.Cookie{Name: "dbx_session", Value: token, Path: s.basePath + "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 86400})
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -285,7 +340,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		delete(s.sessions, cookie.Value)
 		s.mu.Unlock()
 	}
-	http.SetCookie(w, &http.Cookie{Name: "dbx_session", Value: "", Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: "dbx_session", Value: "", Path: s.basePath + "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 func (s *Server) serveAsset(w http.ResponseWriter, r *http.Request) {

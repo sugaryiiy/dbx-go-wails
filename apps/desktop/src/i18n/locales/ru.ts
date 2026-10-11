@@ -5075,7 +5075,7 @@ export default withEnglishFallback({
     geometryTypePlaceholder: "Выберите или введите геометрический тип",
     sridPlaceholder: "например, 4326",
     geometrySridHint: "Укажите геометрический тип и SRID, чтобы включить пространственное индексирование и корректные пространственные запросы.",
-    geometryEmptyTypeHint: "Пустой геометрический тип равен GEOMETRY (любой подтип); dbx формирует geometry(GEOMETRY, SRID).",
+    geometryEmptyTypeHint: "Пустой геометрический тип равен GEOMETRY (любой подтип); Database Workbench формирует geometry(GEOMETRY, SRID).",
     enumValues: "Значения перечисления",
     enumValueCount: "Значений: {count}",
     addEnumValue: "Добавить значение",
@@ -9490,7 +9490,7 @@ export default withEnglishFallback({
   driverStore: {
     jreDirRemoveFailed: "Не удалось удалить старый каталог JRE: {path} (исходная ошибка: {error})",
     jreDirRemoveFailedWindows:
-      "Не удалось удалить старый каталог JRE: {path}\nВозможные причины:\n  - процесс dbx Agent / java всё ещё удерживает каталог\n  - антивирус сканирует его\nЗакройте любой процесс, который может удерживать каталог, или перезапустите dbx и повторите попытку.\n(исходная ошибка: {error})",
+      "Не удалось удалить старый каталог JRE: {path}\nВозможные причины:\n  - процесс Database Workbench Agent / java всё ещё удерживает каталог\n  - антивирус сканирует его\nЗакройте любой процесс, который может удерживать каталог, или перезапустите Database Workbench и повторите попытку.\n(исходная ошибка: {error})",
     jreInUseByDrivers: "JRE {jre} используется драйверами: {drivers}. Сначала удалите их.",
     offlinePackageRegistryMissing: "agent-registry.json не найден в ZIP; это не допустимый автономный пакет драйверов.",
     progressJreExtract: "Извлечение JRE...",

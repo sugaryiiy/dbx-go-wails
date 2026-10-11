@@ -8106,7 +8106,8 @@ export default withEnglishFallback({
   },
   driverStore: {
     jreDirRemoveFailed: "Eski JRE dizini kaldırılamadı: {path} (özgün hata: {error})",
-    jreDirRemoveFailedWindows: "Eski JRE dizini kaldırılamadı: {path}\nOlası nedenler:\n  - bir dbx Agent / java işlemi dizini hâlâ tutuyor\n  - antivirüs yazılımı dizini tarıyor\nDizini tutabilecek işlemleri kapatın ya da dbx'i yeniden başlatıp tekrar deneyin.\n(özgün hata: {error})",
+    jreDirRemoveFailedWindows:
+      "Eski JRE dizini kaldırılamadı: {path}\nOlası nedenler:\n  - bir Database Workbench Agent / java işlemi dizini hâlâ tutuyor\n  - antivirüs yazılımı dizini tarıyor\nDizini tutabilecek işlemleri kapatın ya da Database Workbench'i yeniden başlatıp tekrar deneyin.\n(özgün hata: {error})",
     jreInUseByDrivers: "JRE {jre} şu sürücüler tarafından kullanılıyor: {drivers}. Önce onları kaldırın.",
     offlinePackageRegistryMissing: "ZIP içinde agent-registry.json bulunamadı; geçerli bir çevrimdışı sürücü paketi değil.",
     progressJreExtract: "JRE çıkarılıyor...",

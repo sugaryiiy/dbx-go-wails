@@ -241,7 +241,7 @@ func (s *Server) webMCPStatusLocked() map[string]any {
 	if m.webToken != "" {
 		token, source = m.webToken, "managed"
 	}
-	return map[string]any{"enabled": m.web.Enabled, "endpointPath": "/mcp", "accessToken": token, "tokenSource": source, "allowedHosts": slices.Clone(m.web.AllowedHosts), "allowedOrigins": slices.Clone(m.web.AllowedOrigins), "deploymentManaged": false, "managementAvailable": true}
+	return map[string]any{"enabled": m.web.Enabled, "endpointPath": s.basePath + "/mcp", "accessToken": token, "tokenSource": source, "allowedHosts": slices.Clone(m.web.AllowedHosts), "allowedOrigins": slices.Clone(m.web.AllowedOrigins), "deploymentManaged": false, "managementAvailable": true}
 }
 func (s *Server) saveMCPDesktop(settings MCPHTTPSettings) (map[string]any, error) {
 	if !s.desktop {

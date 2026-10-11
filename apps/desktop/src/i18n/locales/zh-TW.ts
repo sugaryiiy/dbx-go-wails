@@ -7625,7 +7625,7 @@ export default withEnglishFallback({
   },
   driverStore: {
     jreDirRemoveFailed: "無法刪除舊的 JRE 目錄：{path}（原始錯誤：{error}）",
-    jreDirRemoveFailedWindows: "無法刪除舊的 JRE 目錄：{path}\n可能的原因：\n  - 仍有 dbx Agent / java 程序占用該目錄\n  - 防毒軟體正在掃描\n請關閉可能持有該目錄的程序，或重新啟動 dbx 後重試。\n（原始錯誤：{error}）",
+    jreDirRemoveFailedWindows: "無法刪除舊的 JRE 目錄：{path}\n可能的原因：\n  - 仍有 資料庫工作台 Agent / java 程序占用該目錄\n  - 防毒軟體正在掃描\n請關閉可能持有該目錄的程序，或重新啟動 資料庫工作台 後重試。\n（原始錯誤：{error}）",
     jreInUseByDrivers: "JRE {jre} 正在被以下驅動程式使用：{drivers}，請先卸載這些驅動程式。",
     offlinePackageRegistryMissing: "ZIP 檔案中未找到 agent-registry.json，請確認這是有效的離線驅動程式套件。",
     progressJreExtract: "解壓縮 JRE……",

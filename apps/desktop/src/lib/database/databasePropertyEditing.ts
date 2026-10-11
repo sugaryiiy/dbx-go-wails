@@ -62,7 +62,7 @@ export const DATABASE_PROPERTY_EDITING_MATRIX = {
   exasol: { deferred: "schema properties need product-specific handling" },
   opengauss: { database: ["databaseComment"], schema: ["schemaComment"] },
   "oceanbase-oracle": { deferred: "Oracle-mode schemas are users; use a dedicated user workflow" },
-  questdb: { deferred: "single database model in DBX" },
+  questdb: { deferred: "single database model in Database Workbench" },
   gbase: { deferred: "schema properties need product-specific handling" },
   access: { deferred: "file-backed database properties are not edited in-place" },
   h2: { deferred: "schema properties need product-specific handling" },

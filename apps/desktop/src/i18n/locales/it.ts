@@ -151,7 +151,8 @@ export default withEnglishFallback({
     dataAccessConsentTitle: "Richiesta di accesso ai dati",
     aiTools: {
       title: "Strumenti IA integrati",
-      description: "Disattivato per impostazione predefinita: l'assistente IA di Database Workbench (modalità Agent) può usare gli strumenti di questo plugin sulle connessioni aperte solo con l'interruttore acceso. Gli strumenti non di sola lettura chiederanno comunque approvazione a ogni chiamata.",
+      description:
+        "Disattivato per impostazione predefinita: l'assistente IA di Database Workbench (modalità Agent) può usare gli strumenti di questo plugin sulle connessioni aperte solo con l'interruttore acceso. Gli strumenti non di sola lettura chiederanno comunque approvazione a ogni chiamata.",
       preview: "Mostra strumenti",
       previewHint: "Avvia il plugin se non è in esecuzione.",
       previewFailed: "Impossibile elencare gli strumenti: {message}",
@@ -8270,7 +8271,7 @@ export default withEnglishFallback({
   driverStore: {
     jreDirRemoveFailed: "Impossibile rimuovere la vecchia directory JRE: {path} (errore originale: {error})",
     jreDirRemoveFailedWindows:
-      "Impossibile rimuovere la vecchia directory JRE: {path}\nCause possibili:\n  - un processo dbx Agent / java sta ancora usando la directory\n  - l'antivirus la sta analizzando\nChiudi ogni processo che potrebbe usare la directory, oppure riavvia dbx e riprova.\n(errore originale: {error})",
+      "Impossibile rimuovere la vecchia directory JRE: {path}\nCause possibili:\n  - un processo Database Workbench Agent / java sta ancora usando la directory\n  - l'antivirus la sta analizzando\nChiudi ogni processo che potrebbe usare la directory, oppure riavvia Database Workbench e riprova.\n(errore originale: {error})",
     jreInUseByDrivers: "Il JRE {jre} è in uso dai driver: {drivers}. Disinstallali prima.",
     offlinePackageRegistryMissing: "agent-registry.json non trovato nello ZIP; non è un pacchetto driver offline valido.",
     progressJreExtract: "Estrazione JRE...",
@@ -10596,7 +10597,8 @@ export default withEnglishFallback({
     launching: "Avvio di Database Workbench in corso…",
     openBackupDir: "Apri posizione backup",
     keyWillCreate: "Creato durante la prima migrazione",
-    keyWillCreateHint: "Questo dispositivo non dispone ancora di una chiave di crittografia locale Database Workbench. Dopo aver fatto clic su \"Avvia migrazione\", Database Workbench creerà una chiave persistente; se il sistema visualizza una finestra di autorizzazione all'accesso alle credenziali, consenti l'accesso.",
+    keyWillCreateHint:
+      "Questo dispositivo non dispone ancora di una chiave di crittografia locale Database Workbench. Dopo aver fatto clic su \"Avvia migrazione\", Database Workbench creerà una chiave persistente; se il sistema visualizza una finestra di autorizzazione all'accesso alle credenziali, consenti l'accesso.",
   },
   solrAdmin: {
     title: "Amministrazione Solr",

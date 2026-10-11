@@ -96,7 +96,7 @@ describe("plugin text completion", () => {
   it("appends host-owned task templates after the pinned system prompt and keeps no-task output identical", async () => {
     const complete = vi.fn().mockResolvedValue("ls -la\nWhy: lists files");
     const api = createPluginAiCompletion({ load: async () => [config], complete, confirm: async () => true });
-    const pinned = "You generate plain text for a DBX plugin.";
+    const pinned = "You generate plain text for a Database Workbench plugin.";
     await api.generateAiText("Plugin", { configId: "one", model: "a", prompt: "list files" });
     expect(complete.mock.calls[0][0].systemPrompt.startsWith(pinned)).toBe(true);
     expect(complete.mock.calls[0][0].systemPrompt).not.toContain("shell command");

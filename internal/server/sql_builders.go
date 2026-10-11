@@ -59,6 +59,11 @@ func isSimpleSelect(sql string) bool {
 }
 func buildSQL(path string, p map[string]any) (any, bool, error) {
 	options := mapValue(p, "options")
+	if str(options, "databaseType") == "influxdb" {
+		if result, handled, err := buildInfluxSQL(path, options); handled {
+			return result, true, err
+		}
+	}
 	if str(options, "databaseType") == "mariadb" {
 		options["databaseType"] = "mysql"
 	}

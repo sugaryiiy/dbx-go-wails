@@ -67,7 +67,8 @@ MCP 每次从持久化配置解析共享引用；保存共享配置会取消当�
 
 ## PostgreSQL 结构 DDL
 
-支持 PostgreSQL 12+ 的普通表、视图、物化视图；当前已在 PostgreSQL 17 上验证。
+普通表和视图已在 PostgreSQL 9.2 与 17 上验证；物化视图和较新的列、索引选项按服务器版本处理。
+表详情、索引、复合外键及查询补全使用兼容旧版本的系统目录查询，无需先展开侧栏即可补全表名和字段。
 导出包含列类型、默认值、非空、collation、serial/identity 序列定义与选项、生成列、
 主键/唯一/检查/外键/排除约束、索引和注释，以及已实现的列存储、统计目标及 replica identity 设置。
 索引保留表达式、列顺序、opclass、排序、INCLUDE 和筛选条件；复合外键保留列对应和动作。
@@ -86,6 +87,8 @@ MCP 每次从持久化配置解析共享引用；保存共享配置会取消当�
 go test -mod=mod -race ./internal/database -run 'TestDatabaseTLS|TestSSH|TestReferenceableIndexes'
 # 在环境中设置测试专用 DBX_TEST_POSTGRES_DSN 后：
 go test -mod=mod -race ./internal/database -run 'TestPostgres' -count=1
+# 同时设置测试专用 DBX_TEST_POSTGRES_LEGACY_DSN（9.2）和 DBX_TEST_POSTGRES_DSN（17）后：
+go test -mod=mod ./internal/database -run 'TestPostgresMetadataCompatibility' -count=1 -v
 # 使用仅供测试的数据库配置 JSON 文件：
 DBX_TEST_DATABASE_CONFIGS=/absolute/path/to/test-databases.json \
   go test -mod=mod -race ./internal/database -run TestNetworkDatabaseIntegration -count=1
@@ -95,6 +98,8 @@ DBX_TEST_DATABASE_CONFIGS=/absolute/path/to/test-databases.json \
 
 PostgreSQL 集成测试仅在提供 DSN 时运行，用户需有创建/删除 schema 的权限。
 测试使用随机 schema 并清理，检查生成 DDL 是否可执行、重建后结构是否一致，以及约束和生成列的实际行为。
+9.2/17 兼容性测试还覆盖列和表注释、复合外键顺序、表达式索引、冷缓存表名/字段补全、
+特殊字符筛选、候选限额，以及 DDL 删除重建后的外键实际约束。
 网络测试配置文件是 Go `Config` 的 JSON 数组，每项使用 `db_type`（`mysql` 或 `postgres`）、
 `host`、`port`、`username`、`password`、`database`、`ssl: true`、`ca_cert_path` 等连接字段。
 只使用有建表/删表权限的隔离测试库，将实际凭据文件保存在版本控制之外。

@@ -1,3 +1,4 @@
+import { influxTableQueryOptions } from "@/lib/table/influxTableQuery";
 import * as api from "@/lib/backend/api";
 import { connectionObjectTreeNodeSchema, effectiveDatabaseTypeForConnection, metadataSchemaForConnection } from "@/lib/database/jdbcDialect";
 import { invalidateTableMetadataCache, loadTableMetadata } from "@/lib/metadata/tableMetadataCache";
@@ -148,6 +149,7 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
         databaseType: effectiveDbType,
         driverProfile: config.driver_profile,
         serverVersion: connectionStore.getConfig(target.connectionId)?.database_info?.productVersion,
+        ...influxTableQueryOptions(connectionStore.getConfig(target.connectionId), columns),
         identifierQuote,
         schema: tableSchema,
         catalog: target.catalog,
@@ -206,6 +208,7 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
       databaseType: effectiveDbType,
       driverProfile: config.driver_profile,
       serverVersion: connectionStore.getConfig(target.connectionId)?.database_info?.productVersion,
+      ...influxTableQueryOptions(connectionStore.getConfig(target.connectionId), eagerColumns),
       identifierQuote,
       schema: tableSchema,
       catalog: target.catalog,
@@ -258,6 +261,7 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
         databaseType: effectiveDbType,
         driverProfile: config.driver_profile,
         serverVersion: connectionStore.getConfig(target.connectionId)?.database_info?.productVersion,
+        ...influxTableQueryOptions(connectionStore.getConfig(target.connectionId), eagerColumns),
         identifierQuote,
         schema: tableSchema,
         catalog: target.catalog,
@@ -306,6 +310,7 @@ async function openTableTarget(target: NavigationTarget, options: { tableInfoTab
           databaseType: effectiveDbType,
           driverProfile: config.driver_profile,
           serverVersion: connectionStore.getConfig(target.connectionId)?.database_info?.productVersion,
+          ...influxTableQueryOptions(connectionStore.getConfig(target.connectionId), columns),
           identifierQuote,
           schema: tableSchema,
           catalog: target.catalog,

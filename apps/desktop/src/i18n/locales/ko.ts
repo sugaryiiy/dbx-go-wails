@@ -8045,7 +8045,8 @@ export default withEnglishFallback({
   },
   driverStore: {
     jreDirRemoveFailed: "이전 JRE 디렉터리 제거 실패: {path} (원래 오류: {error})",
-    jreDirRemoveFailedWindows: "이전 JRE 디렉터리 제거 실패: {path}\n가능한 원인:\n  - dbx Agent/java 프로세스가 여전히 디렉터리를 사용 중\n  - 백신 소프트웨어가 검사 중\n디렉터리를 사용할 수 있는 프로세스를 닫거나 dbx를 다시 시작하고 다시 시도하세요.\n(원래 오류: {error})",
+    jreDirRemoveFailedWindows:
+      "이전 JRE 디렉터리 제거 실패: {path}\n가능한 원인:\n  - Database Workbench Agent/java 프로세스가 여전히 디렉터리를 사용 중\n  - 백신 소프트웨어가 검사 중\n디렉터리를 사용할 수 있는 프로세스를 닫거나 Database Workbench를 다시 시작하고 다시 시도하세요.\n(원래 오류: {error})",
     jreInUseByDrivers: "JRE {jre}은(는) 드라이버가 사용 중입니다: {drivers}. 먼저 제거하세요.",
     offlinePackageRegistryMissing: "ZIP에 agent-registry.json이 없습니다. 올바른 오프라인 드라이버 패키지가 아닙니다.",
     progressJreExtract: "JRE 압춑 푸는 중...",

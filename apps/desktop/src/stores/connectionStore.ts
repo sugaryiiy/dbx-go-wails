@@ -5032,7 +5032,7 @@ export const useConnectionStore = defineStore("connection", () => {
         await startDisconnectRequest(config.id);
         setConnectionError(config.id, PLUGIN_CONFIG_RECONNECT_PASSWORD_MESSAGE);
       } catch (error) {
-        setConnectionError(config.id, `Plugin settings were saved, but DBX could not disconnect the stale plugin connection: ${connectionErrorMessage(error)}. Reconnect manually to apply the new settings.`);
+        setConnectionError(config.id, `Plugin settings were saved, but Database Workbench could not disconnect the stale plugin connection: ${connectionErrorMessage(error)}. Reconnect manually to apply the new settings.`);
       }
       return;
     }

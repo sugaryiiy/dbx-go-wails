@@ -60,20 +60,24 @@ func postgresIndexes(ctx context.Context, db *sql.DB, schema, table string) ([]r
 		return nil, err
 	}
 	defer tx.Rollback()
+	version, err := postgresVersion(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	raw, err := records(ctx, tx, `SELECT ci.relname AS name, i.indisunique AND i.indisvalid AS is_unique,
  i.indisprimary AS is_primary, i.indisvalid AS is_valid, i.indimmediate AS is_immediate,
  am.amname AS index_type, pg_get_expr(i.indpred,i.indrelid) AS filter,
- obj_description(ci.oid,'pg_class') AS comment, pos.n > i.indnkeyatts AS included,
- COALESCE(a.attname::text,pg_get_indexdef(i.indexrelid,pos.n,false)) AS column_name,
- i.indkey[pos.n-1] = 0 AS is_expression, i.indoption[pos.n-1] AS key_option,
+ obj_description(ci.oid,'pg_class') AS comment, pos.attnum > `+postgresIndexKeyCountSQL(version)+` AS included,
+ COALESCE(a.attname::text,pg_get_indexdef(i.indexrelid,pos.attnum,false)) AS column_name,
+ i.indkey[pos.attnum-1] = 0 AS is_expression, i.indoption[pos.attnum-1] AS key_option,
  CASE WHEN NOT op.opcdefault THEN quote_ident(opn.nspname)||'.'||quote_ident(op.opcname) END AS opclass,
  EXISTS(SELECT 1 FROM pg_constraint con WHERE con.conindid=i.indexrelid AND con.conrelid=i.indrelid AND con.contype IN ('p','u','x')) AS constraint_backed
  FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace ns ON ns.oid=t.relnamespace
  JOIN pg_class ci ON ci.oid=i.indexrelid JOIN pg_am am ON am.oid=ci.relam
- CROSS JOIN LATERAL generate_series(1,i.indnatts) AS pos(n)
- LEFT JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=i.indkey[pos.n-1] AND a.attnum>0
- LEFT JOIN pg_opclass op ON op.oid=i.indclass[pos.n-1] LEFT JOIN pg_namespace opn ON opn.oid=op.opcnamespace
- WHERE ns.nspname=$1 AND t.relname=$2 ORDER BY ci.relname,pos.n`, schema, table)
+ JOIN pg_attribute pos ON pos.attrelid=i.indexrelid AND pos.attnum>0 AND pos.attnum<=i.indnatts
+ LEFT JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=i.indkey[pos.attnum-1] AND a.attnum>0
+ LEFT JOIN pg_opclass op ON op.oid=i.indclass[pos.attnum-1] LEFT JOIN pg_namespace opn ON opn.oid=op.opcnamespace
+ WHERE ns.nspname=$1 AND t.relname=$2 ORDER BY ci.relname,pos.attnum`, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -157,10 +161,7 @@ func postgresObjectDDL(ctx context.Context, db *sql.DB, schema, table, requested
 	if err = tx.QueryRowContext(ctx, "SELECT current_setting('server_version_num')::int").Scan(&version); err != nil {
 		return "", err
 	}
-	if version < 120000 {
-		return "", unsupported("PostgreSQL DDL extraction requires PostgreSQL 12 or later")
-	}
-	rels, err := records(ctx, tx, pgDDLRelationSQL, schema, table)
+	rels, err := records(ctx, tx, postgresDDLRelationQuery(version), schema, table)
 	if err != nil {
 		return "", err
 	}
@@ -177,7 +178,7 @@ func postgresObjectDDL(ctx context.Context, db *sql.DB, schema, table, requested
 	if requestedType != "" && requestedType != objectType {
 		return "", fmt.Errorf("requested %s but PostgreSQL relation is %s", requestedType, objectType)
 	}
-	for _, flag := range []string{"relispartition", "typed", "inherited", "relrowsecurity", "relforcerowsecurity", "policies", "triggers", "altered_internal_triggers", "rules", "extension_member"} {
+	for _, flag := range []string{"relispartition", "typed", "has_oids", "inherited", "relrowsecurity", "relforcerowsecurity", "policies", "triggers", "altered_internal_triggers", "rules", "extension_member"} {
 		if valueBool(rel[flag]) {
 			return "", unsupported("PostgreSQL DDL with " + flag)
 		}
@@ -189,32 +190,68 @@ func postgresObjectDDL(ctx context.Context, db *sql.DB, schema, table, requested
 		return "", unsupported("PostgreSQL non-heap table access methods")
 	}
 	oid := rel["oid"]
-	cols, err := records(ctx, tx, `SELECT a.attnum,a.attname AS name,format_type(a.atttypid,a.atttypmod) AS data_type,
+	columnQuery := `SELECT a.attnum,a.attname AS name,format_type(a.atttypid,a.atttypmod) AS data_type,
  a.attnotnull,a.attidentity::text AS identity,a.attgenerated::text AS generated,pg_get_expr(d.adbin,d.adrelid) AS expression,
  CASE WHEN a.attcollation<>0 AND a.attcollation<>ty.typcollation THEN quote_ident(cn.nspname)||'.'||quote_ident(co.collname) END AS collation,
  a.attstorage::text AS storage,ty.typstorage::text AS default_storage,to_jsonb(a)->>'attcompression' AS compression,
  array_to_json(a.attoptions)::text AS options,a.attstattarget AS statistics,col_description(a.attrelid,a.attnum) AS comment
  FROM pg_attribute a JOIN pg_type ty ON ty.oid=a.atttypid LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
  LEFT JOIN pg_collation co ON co.oid=a.attcollation LEFT JOIN pg_namespace cn ON cn.oid=co.collnamespace
- WHERE a.attrelid=$1 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`, oid)
+ WHERE a.attrelid=$1 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`
+	if version < 100000 {
+		columnQuery = strings.ReplaceAll(columnQuery, "a.attidentity::text", "''::text")
+	}
+	if version < 120000 {
+		columnQuery = strings.ReplaceAll(columnQuery, "a.attgenerated::text", "''::text")
+	}
+	compression := "NULL::text"
+	if version >= 140000 {
+		compression = "a.attcompression::text"
+	}
+	columnQuery = strings.ReplaceAll(columnQuery, "to_jsonb(a)->>'attcompression'", compression)
+	cols, err := records(ctx, tx, columnQuery, oid)
 	if err != nil {
 		return "", err
 	}
-	sequences, err := records(ctx, tx, `SELECT dep.refobjsubid AS attnum,dep.deptype::text AS dependency,
+	sequenceQuery := `SELECT dep.refobjsubid AS attnum,dep.deptype::text AS dependency,
  ns.nspname AS schema,s.relname AS name,s.relpersistence::text AS persistence,format_type(q.seqtypid,NULL) AS data_type,
  q.seqstart,q.seqincrement,q.seqmin,q.seqmax,q.seqcache,q.seqcycle,obj_description(s.oid,'pg_class') AS comment
  FROM pg_depend dep JOIN pg_class s ON s.oid=dep.objid AND s.relkind='S' JOIN pg_namespace ns ON ns.oid=s.relnamespace
  JOIN pg_sequence q ON q.seqrelid=s.oid WHERE dep.refclassid='pg_class'::regclass AND dep.classid='pg_class'::regclass
- AND dep.refobjid=$1 AND dep.deptype IN ('a','i') ORDER BY dep.refobjsubid,s.oid`, oid)
+ AND dep.refobjid=$1 AND dep.deptype IN ('a','i') ORDER BY dep.refobjsubid,s.oid`
+	if version < 100000 {
+		sequenceQuery = `SELECT dep.refobjsubid AS attnum,dep.deptype::text AS dependency,
+ ns.nspname AS schema,s.relname AS name,s.relpersistence::text AS persistence,'bigint'::text AS data_type,
+ obj_description(s.oid,'pg_class') AS comment FROM pg_depend dep
+ JOIN pg_class s ON s.oid=dep.objid AND s.relkind='S' JOIN pg_namespace ns ON ns.oid=s.relnamespace
+ WHERE dep.refclassid='pg_class'::regclass AND dep.classid='pg_class'::regclass
+ AND dep.refobjid=$1 AND dep.deptype='a' ORDER BY dep.refobjsubid,s.oid`
+	}
+	sequences, err := records(ctx, tx, sequenceQuery, oid)
 	if err != nil {
 		return "", err
 	}
-	indexes, err := records(ctx, tx, `SELECT c.relname AS name,pg_get_indexdef(i.indexrelid) AS definition,
+	if version < 100000 {
+		for _, sequence := range sequences {
+			options, e := postgresLegacySequenceOptions(ctx, tx, valueString(sequence["schema"]), valueString(sequence["name"]))
+			if e != nil {
+				return "", e
+			}
+			for key, value := range options {
+				sequence[key] = value
+			}
+		}
+	}
+	indexQuery := `SELECT c.relname AS name,pg_get_indexdef(i.indexrelid) AS definition,
  i.indisvalid,i.indisready,i.indisreplident,array_to_json(c.reloptions)::text AS options,
  ts.spcname AS tablespace,obj_description(c.oid,'pg_class') AS comment,
  EXISTS(SELECT 1 FROM pg_constraint con WHERE con.conindid=i.indexrelid AND con.conrelid=i.indrelid AND con.contype IN ('p','u','x')) AS constraint_backed
  FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid LEFT JOIN pg_tablespace ts ON ts.oid=c.reltablespace
- WHERE i.indrelid=$1 ORDER BY c.relname`, oid)
+ WHERE i.indrelid=$1 ORDER BY c.relname`
+	if version < 90400 {
+		indexQuery = strings.ReplaceAll(indexQuery, "i.indisreplident", "false AS indisreplident")
+	}
+	indexes, err := records(ctx, tx, indexQuery, oid)
 	if err != nil {
 		return "", err
 	}
@@ -245,7 +282,11 @@ func postgresObjectDDL(ctx context.Context, db *sql.DB, schema, table, requested
 		if valueString(sequence["persistence"]) == "u" {
 			prefix += "UNLOGGED "
 		}
-		statements = append(statements, prefix+"SEQUENCE "+pgQualified(valueString(sequence["schema"]), valueString(sequence["name"]))+" AS "+valueString(sequence["data_type"])+" "+pgSequenceOptions(sequence)+";")
+		typeClause := ""
+		if version >= 100000 {
+			typeClause = " AS " + valueString(sequence["data_type"])
+		}
+		statements = append(statements, prefix+"SEQUENCE "+pgQualified(valueString(sequence["schema"]), valueString(sequence["name"]))+typeClause+" "+pgSequenceOptions(sequence)+";")
 	}
 	options, err := pgOptions(rel["options"])
 	if err != nil {

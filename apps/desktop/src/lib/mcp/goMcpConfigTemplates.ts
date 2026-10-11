@@ -5,13 +5,13 @@ export const GO_MCP_TOKEN_PLACEHOLDER = "replace-with-your-mcp-token";
 
 export function buildGoMcpConfig(endpoint: string, format: GoMcpConfigFormat): string {
   if (format === "codex") {
-    return `[mcp_servers.dbx]\nurl = ${JSON.stringify(endpoint)}\nbearer_token_env_var = "${GO_MCP_TOKEN_ENV}"`;
+    return `[mcp_servers.workbench]\nurl = ${JSON.stringify(endpoint)}\nbearer_token_env_var = "${GO_MCP_TOKEN_ENV}"`;
   }
   if (format === "stdio") {
     return JSON.stringify(
       {
         mcpServers: {
-          dbx: {
+          workbench: {
             command: "/absolute/path/to/dbx-mcp-go",
             args: ["--url", endpoint],
             env: { [GO_MCP_TOKEN_ENV]: GO_MCP_TOKEN_PLACEHOLDER },
@@ -27,7 +27,7 @@ export function buildGoMcpConfig(endpoint: string, format: GoMcpConfigFormat): s
     url: endpoint,
     headers: { Authorization: `Bearer ${GO_MCP_TOKEN_PLACEHOLDER}` },
   };
-  return JSON.stringify(format === "vscode" ? { servers: { dbx: server } } : { mcpServers: { dbx: server } }, null, 2);
+  return JSON.stringify(format === "vscode" ? { servers: { workbench: server } } : { mcpServers: { workbench: server } }, null, 2);
 }
 
 export function mcpEndpointUrl(origin: string, endpointPath: string, apiPath = "/api"): string {

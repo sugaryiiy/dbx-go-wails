@@ -53,7 +53,7 @@ vi.mock("@/stores/settingsStore", async (original) => ({ ...(await original<type
 vi.mock("@/stores/tunnelProfileStore", () => ({ useTunnelProfileStore: () => ({ profiles: [], profileById: () => undefined, init: vi.fn() }) }));
 vi.mock("@/lib/backend/api", async (original) => ({ ...(await original<typeof import("@/lib/backend/api")>()), ...backend }));
 vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => false }));
-vi.mock("@/lib/backend/goCapabilities", () => ({ isGoBackend: () => true, GO_CONNECTION_PROFILES: new Set(["sqlite", "mysql", "mariadb", "postgres", "redis", "mongodb", "clickhouse"]) }));
+vi.mock("@/lib/backend/goCapabilities", async (original) => ({ ...(await original<typeof import("@/lib/backend/goCapabilities")>()), isGoBackend: () => true }));
 const native = vi.hoisted(() => ({ open: vi.fn() }));
 vi.mock("@/lib/backend/wailsRuntime", () => ({ isWailsRuntime: () => true, openWailsFile: native.open, saveWailsFile: vi.fn() }));
 vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
@@ -221,6 +221,95 @@ async function saveDraft() {
 }
 
 describe("Go secure connection editor", () => {
+  it("saves and tests InfluxDB 2.x through HTTP without installing an agent", async () => {
+    backend.installAgent.mockRejectedValue(new Error("driver is not present in the registry"));
+    await mountDialog(
+      savedConnection({
+        db_type: "influxdb",
+        driver_profile: "influxdb",
+        driver_label: "InfluxDB",
+        host: "influx.example.test",
+        port: 8086,
+        username: "",
+        password: "influx-token",
+        database: "db",
+        ssl: false,
+        ca_cert_path: "",
+        client_cert_path: "",
+        client_key_path: "",
+        external_config: { version: "2", org: "gb" },
+      }),
+    );
+    const test = [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Test");
+    expect(test).toBeTruthy();
+    test!.click();
+    await vi.waitFor(() => expect(backend.testConnectionWithInfo).toHaveBeenCalled());
+    expect(backend.testConnectionWithInfo).toHaveBeenCalledWith(expect.objectContaining({ db_type: "influxdb", password: "influx-token", external_config: { version: "2", org: "gb" } }));
+    await settle();
+    await saveDraft();
+    expect(store.updateConnection).toHaveBeenCalledWith(expect.objectContaining({ db_type: "influxdb", external_config: { version: "2", org: "gb" } }));
+    expect(backend.installAgent).not.toHaveBeenCalled();
+  });
+
+  it("lists databases with a temporary connection, searches and saves the selected database", async () => {
+    backend.listDatabases.mockResolvedValue([{ name: "orders" }, { name: "mes" }, { name: "analytics" }]);
+    await mountDialog(savedConnection({ database: "missing_database", visible_databases: undefined }));
+    (document.querySelector("[data-connection-database-trigger]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.querySelectorAll("[data-connection-database-option]")).toHaveLength(3));
+    const draftConfig = backend.connectDb.mock.calls[0][0];
+    expect(draftConfig).toMatchObject({ one_time: true, host: "old.example.test", username: "old-user", password: "old-password" });
+    expect(draftConfig.id).not.toBe("saved-production");
+    expect(draftConfig.database).toBeUndefined();
+    expect(backend.listDatabases).toHaveBeenCalledWith(draftConfig.id);
+    expect(backend.disconnectDb).toHaveBeenCalledWith(draftConfig.id);
+    const search = document.querySelector("[data-connection-database-search]") as HTMLInputElement;
+    search.value = "MES";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await settle();
+    const options = document.querySelectorAll<HTMLButtonElement>("[data-connection-database-option]");
+    expect(options).toHaveLength(1);
+    expect(options[0].textContent?.trim()).toBe("mes");
+    options[0].click();
+    await settle();
+    expect((document.querySelector("[data-connection-database-input]") as HTMLInputElement).value).toBe("mes");
+    await saveDraft();
+    expect(store.updateConnection).toHaveBeenCalledWith(expect.objectContaining({ database: "mes" }));
+  });
+
+  it("keeps manual database input and disconnects when database listing fails", async () => {
+    backend.listDatabases.mockRejectedValue(new Error("database listing denied"));
+    await mountDialog(savedConnection({ visible_databases: undefined }));
+    (document.querySelector("[data-connection-database-trigger]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.body.textContent).toContain("database listing denied"));
+    expect(backend.disconnectDb).toHaveBeenCalledWith(backend.connectDb.mock.calls[0][0].id);
+    expect((document.querySelector("[data-connection-database-input]") as HTMLInputElement).value).toBe("orders");
+    backend.listDatabases.mockResolvedValue([{ name: "mes" }]);
+    const retry = [...document.querySelectorAll("button")].find((button) => button.textContent?.trim() === i18n.global.t("common.retry"));
+    retry!.click();
+    await vi.waitFor(() => expect(document.querySelectorAll("[data-connection-database-option]")).toHaveLength(1));
+  });
+
+  it("ignores database results from the previous server after the connection draft changes", async () => {
+    let finishOld!: (value: { name: string }[]) => void;
+    backend.listDatabases.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishOld = resolve;
+      }),
+    );
+    const props = await mountDialog(savedConnection({ visible_databases: undefined }));
+    (document.querySelector("[data-connection-database-trigger]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(backend.listDatabases).toHaveBeenCalledOnce());
+    props.editConfig = savedConnection({ id: "new-server", host: "new.example.test", visible_databases: undefined });
+    await settle();
+    finishOld([{ name: "old_server_database" }]);
+    await settle();
+    backend.listDatabases.mockResolvedValue([{ name: "new_server_database" }]);
+    (document.querySelector("[data-connection-database-trigger]") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.querySelector("[data-connection-database-option]")?.textContent).toContain("new_server_database"));
+    expect(document.body.textContent).not.toContain("old_server_database");
+    expect(backend.connectDb.mock.calls[1][0].host).toBe("new.example.test");
+  });
+
   for (const profile of ["sqlite", "mysql", "mariadb", "postgres", "redis", "mongodb", "clickhouse"] as const) {
     it(`tests native ${profile} without legacy agent installation or progress subscriptions`, async () => {
       backend.listInstalledAgentsLocal.mockRejectedValue(new Error("unmigrated agents endpoint"));

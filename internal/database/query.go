@@ -21,6 +21,7 @@ type QueryResult struct {
 	ExecutionTimeMS int64    `json:"execution_time_ms"`
 	Truncated       bool     `json:"truncated,omitempty"`
 	HasMore         bool     `json:"has_more"`
+	SessionID       string   `json:"session_id,omitempty"`
 	StatementIndex  int      `json:"statement_index"`
 	ExecutionError  bool     `json:"execution_error,omitempty"`
 	Error           any      `json:"error,omitempty"`
@@ -35,18 +36,24 @@ type queryRunner interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
+var ErrCommitOutcomeUnknown = errors.New("transaction commit outcome is unknown; check the database before retrying")
+
 func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (any, error) {
+	if str(p, "resultSessionId") != "" {
+		result, err := m.fetchResult(p)
+		if err != nil {
+			return nil, err
+		}
+		if path == "/api/query/execute-multi" {
+			return []QueryResult{result.(QueryResult)}, nil
+		}
+		return result, nil
+	}
 	id := str(p, "connectionId", "connection_id")
 	database := str(p, "database")
 	db, cfg, locked, e := m.pool(ctx, id, database)
 	if e != nil {
 		return nil, e
-	}
-	if boolean(p, "preserveExplicitTransaction") {
-		return nil, unsupported("persistent explicit transactions")
-	}
-	if str(p, "resultSessionId") != "" {
-		return nil, unsupported("retained result cursors")
 	}
 	mode := str(p, "executionMode")
 	if mode != "" && mode != "simple" && mode != "postgres_read_only_transaction" {
@@ -87,14 +94,34 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 	if path == "/api/query/execute" && len(statements) != 1 {
 		return nil, errors.New("execute requires exactly one SQL statement; use execute-multi for scripts")
 	}
+	stateful, explicit := false, false
 	for _, s := range statements {
 		switch firstWord(s, cfg.Type) {
-		case "BEGIN", "START", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE", "END", "SET", "USE", "ATTACH", "DETACH":
-			return nil, unsupported("persistent transaction/session statements; use execute-in-transaction for atomic batches")
+		case "BEGIN", "START", "COMMIT", "ROLLBACK", "SAVEPOINT", "RELEASE", "END":
+			stateful = true
+			explicit = true
+		case "SET", "USE", "ATTACH", "DETACH":
+			stateful = true
+		}
+		if containsSQLWord(s, "TEMP", cfg.Type) || containsSQLWord(s, "TEMPORARY", cfg.Type) {
+			stateful = true
 		}
 		if (locked || boolean(p, "readOnly") || mode == "postgres_read_only_transaction") && (!ordinaryRead(s, cfg.Type) || containsSQLWord(s, "INTO", cfg.Type)) {
 			return nil, errors.New("writes are locked for this read-only or production connection; unlock writes explicitly before executing this statement")
 		}
+	}
+	if len(statements) == 0 {
+		if path == "/api/query/execute-multi" {
+			return []QueryResult{}, nil
+		}
+		return emptyResult(), nil
+	}
+	if explicit && (path == "/api/query/execute-in-transaction" || boolean(p, "useTransaction")) {
+		return nil, errors.New("explicit transaction statements cannot be combined with automatic transactions")
+	}
+	clientID := str(p, "clientSessionId")
+	if boolean(p, "preserveExplicitTransaction") && clientID == "" {
+		return nil, errors.New("preserveExplicitTransaction requires clientSessionId")
 	}
 	timeout := integer(p, cfg.QueryTimeout, "timeoutSecs")
 	if timeout < 0 || timeout > 86400 {
@@ -112,18 +139,61 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 			m.mu.Unlock()
 			return nil, errors.New("execution id is already running")
 		}
-		m.running[executionID] = runningQuery{cancel: cancel, connectionID: id}
+		m.running[executionID] = runningQuery{cancel: cancel, connectionID: id, clientSessionID: clientID}
 		m.mu.Unlock()
 		defer func() { m.mu.Lock(); delete(m.running, executionID); m.mu.Unlock() }()
 	}
-	conn, e := db.Conn(ctx)
-	if e != nil {
-		return nil, redact(e, cfg)
+	m.mu.RLock()
+	existingSession := m.sessions[sessionKey(id, database, clientID)] != nil
+	m.mu.RUnlock()
+	var conn *sql.Conn
+	var session *querySession
+	if clientID != "" && (stateful || existingSession || boolean(p, "preserveExplicitTransaction")) {
+		if sqlitePath(cfg) == ":memory:" && cfg.Type == "sqlite" {
+			return nil, unsupported("persistent sessions for private in-memory SQLite; use a database file")
+		}
+		session, e = m.acquireQuerySession(ctx, db, id, database, clientID)
+		if e != nil {
+			return nil, redact(e, cfg)
+		}
+		conn = session.conn
+		defer func() {
+			if ctx.Err() != nil {
+				session.closeLocked()
+			}
+			session.lastUsed = time.Now()
+			session.mu.Unlock()
+		}()
+	} else {
+		conn, e = db.Conn(ctx)
+		if e != nil {
+			return nil, redact(e, cfg)
+		}
+		defer func() {
+			if stateful {
+				cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				_, _ = conn.ExecContext(cleanup, "ROLLBACK")
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
+			conn.Close()
+		}()
 	}
-	defer conn.Close()
 	var runner queryRunner = conn
 	protected := locked || boolean(p, "readOnly") || mode == "postgres_read_only_transaction"
-	if protected && cfg.Type == "sqlite" {
+	if session != nil && session.readOnly {
+		protected = true
+		for _, statement := range statements {
+			if !ordinaryRead(statement, cfg.Type) || containsSQLWord(statement, "INTO", cfg.Type) {
+				return nil, errors.New("backup snapshots only allow read-only SQL")
+			}
+		}
+	}
+	if protected && session != nil && !session.readOnly && (session.inTransaction || session.dirty) {
+		session.closeLocked()
+		return nil, errors.New("session was rolled back and closed because writes are locked; execute the read again")
+	}
+	if protected && cfg.Type == "sqlite" && (session == nil || !session.readOnly) {
 		if _, e = conn.ExecContext(ctx, "PRAGMA query_only = ON"); e != nil {
 			return nil, e
 		}
@@ -135,7 +205,10 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 			}
 		}()
 	}
-	transaction := path == "/api/query/execute-in-transaction" || boolean(p, "useTransaction") || protected && cfg.Type != "sqlite"
+	transaction := path == "/api/query/execute-in-transaction" || boolean(p, "useTransaction") || protected && cfg.Type != "sqlite" && (session == nil || !session.readOnly)
+	if transaction && session != nil && session.inTransaction {
+		return nil, errors.New("an explicit transaction is already open in this tab; commit or roll it back first")
+	}
 	if transaction && cfg.Type == "mysql" {
 		for _, statement := range statements {
 			switch mainVerb(statement, cfg.Type) {
@@ -185,8 +258,8 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 		maxRows = 100000
 	}
 	pageSize := integer(p, 0, "pageSize")
-	if pageSize > 0 && pageSize < maxRows {
-		maxRows = pageSize
+	if pageSize < 0 || pageSize > 100000 {
+		return nil, errors.New("pageSize must be between 0 and 100000")
 	}
 	offset := integer(p, 0, "rowOffset")
 	if offset < 0 || offset > 10000000 {
@@ -215,12 +288,35 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 			result.ExecutionError = true
 			result.Error = map[string]any{"message": err.Error(), "kind": "database"}
 		}
+		if err == nil && session != nil {
+			switch firstWord(s, cfg.Type) {
+			case "BEGIN", "START", "SAVEPOINT":
+				session.inTransaction = true
+			case "COMMIT", "END":
+				session.inTransaction = false
+			case "ROLLBACK":
+				if !containsSQLWord(s, "TO", cfg.Type) {
+					session.inTransaction = false
+				}
+			case "SET", "USE", "ATTACH", "DETACH":
+				session.dirty = true
+			}
+			if containsSQLWord(s, "TEMP", cfg.Type) || containsSQLWord(s, "TEMPORARY", cfg.Type) {
+				session.dirty = true
+			}
+		}
+		if err == nil && pageSize > 0 && offset == 0 && ordinaryRead(s, cfg.Type) {
+			result, e = m.retainResult(result, p, pageSize)
+			if e != nil {
+				return nil, e
+			}
+		}
 		results = append(results, result)
 		aggregate.AffectedRows += result.AffectedRows
 	}
 	if tx != nil {
 		if e = tx.Commit(); e != nil {
-			return nil, redact(e, cfg)
+			return nil, redact(fmt.Errorf("%w: %w", ErrCommitOutcomeUnknown, e), cfg)
 		}
 	}
 	aggregate.ExecutionTimeMS = time.Since(start).Milliseconds()

@@ -35,7 +35,11 @@ jobs:
       - run: go vet ./internal/... ./cmd/...
 
   desktop:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -48,14 +52,32 @@ jobs:
         with:
           node-version: 22.13.0
           cache: pnpm
-      - run: pnpm --filter dbx... install --frozen-lockfile
+      - run: pnpm --filter dbx... install --frozen-lockfile --force
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
       - name: Test desktop adapters
         run: pnpm exec vitest run apps/desktop/src/lib/backend/wailsRuntime.spec.ts apps/desktop/src/lib/backend/wailsProgress.spec.ts apps/desktop/src/lib/backend/__tests__/wailsExport.spec.ts apps/desktop/src/lib/__tests__/common/webPath.spec.ts
       - name: Test Go MCP settings and client configuration
         run: pnpm exec vitest run apps/desktop/src/components/settings/__tests__/GoMcpServerPanel.spec.ts apps/desktop/src/lib/backend/__tests__/goMcpHttp.spec.ts apps/desktop/src/lib/__tests__/mcp apps/desktop/src/stores/__tests__/settingsStore.spec.ts apps/desktop/src/components/editor/__tests__/EditorSettingsDialog.mcpQueryTimeout.spec.ts apps/desktop/src/components/editor/__tests__/EditorSettingsDialog.mcpQueryTimeout.integration.spec.ts
       - name: Test Go secure connection editors
         run: pnpm exec vitest run apps/desktop/src/components/connection/__tests__/ConnectionDialog.goSecure.spec.ts apps/desktop/src/lib/connection/goSecureConnections.spec.ts apps/desktop/src/components/ssh/__tests__/SshHostKeyPromptDialog.spec.ts apps/desktop/src/lib/__tests__/connection/tunnelProfiles.spec.ts
-      - run: pnpm build:wails
-      - run: go test -tags desktop .
+      - run: pnpm typecheck
+      - name: Build macOS or Windows desktop
+        if: runner.os != 'Linux'
+        run: pnpm build:wails
+      - name: Build Linux desktop
+        if: runner.os == 'Linux'
+        run: pnpm build:wails -tags desktop,webkit2_41
+      - name: Test native bindings
+        if: runner.os != 'Linux'
+        run: go test -tags desktop .
+      - name: Test Linux native bindings
+        if: runner.os == 'Linux'
+        run: go test -tags desktop,webkit2_41 .
       - name: Test disposable HTTP workbench
         run: pnpm test:go-smoke
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dbx-go-${{ runner.os }}
+          path: build/wails/bin/

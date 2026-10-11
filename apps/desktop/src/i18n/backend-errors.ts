@@ -86,6 +86,7 @@ const exactMessageKeys: Record<string, string> = {
   "Plugin update blocked by active operations. Please wait for them to finish.": "pluginPlatform.updateBlockedByOperations",
   [PHOENIX_DRIVER_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
   [PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
+  "DBX JDBC plugin is not installed. Install Apache Phoenix JDBC from the Driver Manager, then retry.": "connection.phoenixDriverNotInstalled",
 };
 
 const patterns: [RegExp, string][] = [

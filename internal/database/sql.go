@@ -53,6 +53,8 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 	dollar := ""
 	hasCode := false
 	words := []string{}
+	triggerBody, triggerCases := 0, 0
+	sqliteTrigger := false
 	appendStatement := func(end int) error {
 		if !hasCode {
 			return nil
@@ -64,6 +66,9 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 			for _, word := range words[1:] {
 				switch word {
 				case "TRIGGER", "PROCEDURE", "FUNCTION", "EVENT":
+					if dialect == "postgres" || dialect == "sqlite" && word == "TRIGGER" {
+						goto normalCreate
+					}
 					return unsupported("CREATE " + word + " scripts")
 				case "TABLE", "VIEW", "INDEX", "DATABASE", "SCHEMA", "SEQUENCE", "TYPE", "EXTENSION", "ROLE", "USER":
 					goto normalCreate
@@ -74,6 +79,7 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 
 		result = append(result, sqlStatement{text: strings.TrimSpace(source[start:end]), words: words})
 		words = []string{}
+		sqliteTrigger = false
 		hasCode = false
 		return nil
 	}
@@ -163,6 +169,9 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 			}
 		}
 		if ch == ';' {
+			if triggerBody > 0 {
+				continue
+			}
 			if depth != 0 {
 				return nil, errors.New("unbalanced SQL parentheses")
 			}
@@ -191,7 +200,27 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 				j++
 			}
 			if depth == 0 {
-				words = append(words, strings.ToUpper(source[i:j]))
+				word := strings.ToUpper(source[i:j])
+				words = append(words, word)
+				if dialect == "sqlite" && len(words) > 1 && words[0] == "CREATE" && word == "TRIGGER" {
+					sqliteTrigger = true
+				}
+				if sqliteTrigger {
+					switch word {
+					case "BEGIN":
+						triggerBody++
+					case "CASE":
+						if triggerBody > 0 {
+							triggerCases++
+						}
+					case "END":
+						if triggerCases > 0 {
+							triggerCases--
+						} else if triggerBody > 0 {
+							triggerBody--
+						}
+					}
+				}
 			}
 			hasCode = true
 			i = j - 1
@@ -206,6 +235,9 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 	}
 	if depth != 0 {
 		return nil, errors.New("unbalanced SQL parentheses")
+	}
+	if triggerBody != 0 || triggerCases != 0 {
+		return nil, errors.New("unterminated SQLite trigger body")
 	}
 	if e := appendStatement(len(source)); e != nil {
 		return nil, e

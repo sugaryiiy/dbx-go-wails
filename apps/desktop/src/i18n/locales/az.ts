@@ -8234,7 +8234,7 @@ export default withEnglishFallback({
   driverStore: {
     jreDirRemoveFailed: "Köhnə JRE qovluğunu silmək mümkün olmadı: {path} (ilkin xəta: {error})",
     jreDirRemoveFailedWindows:
-      "Köhnə JRE qovluğunu silmək mümkün olmadı: {path}\nMümkün səbəblər:\n  - dbx Agent / java prosesi hələ də qovluqdan istifadə edir\n  - antivirus proqramı onu yoxlayır\nQovluqdan istifadə edə bilən bütün prosesləri bağlayın və ya dbx-i yenidən başladıb bir daha cəhd edin.\n(ilkin xəta: {error})",
+      "Köhnə JRE qovluğunu silmək mümkün olmadı: {path}\nMümkün səbəblər:\n  - Database Workbench Agent / java prosesi hələ də qovluqdan istifadə edir\n  - antivirus proqramı onu yoxlayır\nQovluqdan istifadə edə bilən bütün prosesləri bağlayın və ya dbx-i yenidən başladıb bir daha cəhd edin.\n(ilkin xəta: {error})",
     jreInUseByDrivers: "JRE {jre} bu drayverlər tərəfindən istifadə olunur: {drivers}. Əvvəlcə onları silin.",
     offlinePackageRegistryMissing: "ZIP-də agent-registry.json tapılmadı; bu, etibarlı oflayn drayver paketi deyil.",
     progressJreExtract: "JRE arxivdən çıxarılır...",

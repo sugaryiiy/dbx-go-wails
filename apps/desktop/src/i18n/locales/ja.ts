@@ -8312,7 +8312,7 @@ export default withEnglishFallback({
   driverStore: {
     jreDirRemoveFailed: "古い JRE ディレクトリを削除できませんでした: {path}（元のエラー: {error}）",
     jreDirRemoveFailedWindows:
-      "古い JRE ディレクトリを削除できませんでした: {path}\n考えられる原因:\n  - dbx Agent / java プロセスがディレクトリを使用中です\n  - ウイルス対策ソフトがスキャン中です\nディレクトリを使用している可能性のあるプロセスを終了するか、dbx を再起動して再試行してください。\n（元のエラー: {error}）",
+      "古い JRE ディレクトリを削除できませんでした: {path}\n考えられる原因:\n  - Database Workbench Agent / java プロセスがディレクトリを使用中です\n  - ウイルス対策ソフトがスキャン中です\nディレクトリを使用している可能性のあるプロセスを終了するか、Database Workbench を再起動して再試行してください。\n（元のエラー: {error}）",
     jreInUseByDrivers: "JRE {jre} は次のドライバーが使用中です: {drivers}。先にアンインストールしてください。",
     offlinePackageRegistryMissing: "ZIP 内に agent-registry.json が見つかりません。有効なオフラインドライバーパッケージではありません。",
     progressJreExtract: "JREを展開中...",

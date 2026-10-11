@@ -8271,7 +8271,7 @@ export default withEnglishFallback({
   driverStore: {
     jreDirRemoveFailed: "Não foi possível remover o diretório JRE antigo: {path} (erro original: {error})",
     jreDirRemoveFailedWindows:
-      "Não foi possível remover o diretório JRE antigo: {path}\nCausas possíveis:\n  - um processo dbx Agent / java ainda está usando o diretório\n  - o antivírus está analisando o diretório\nFeche qualquer processo que possa estar usando o diretório, ou reinicie o dbx e tente novamente.\n(erro original: {error})",
+      "Não foi possível remover o diretório JRE antigo: {path}\nCausas possíveis:\n  - um processo Database Workbench Agent / java ainda está usando o diretório\n  - o antivírus está analisando o diretório\nFeche qualquer processo que possa estar usando o diretório, ou reinicie o Database Workbench e tente novamente.\n(erro original: {error})",
     jreInUseByDrivers: "O JRE {jre} está em uso pelos drivers: {drivers}. Desinstale-os primeiro.",
     offlinePackageRegistryMissing: "agent-registry.json não encontrado no ZIP; não é um pacote de drivers offline válido.",
     progressJreExtract: "Extraindo JRE...",

@@ -153,7 +153,8 @@ export default withEnglishFallback({
     dataAccessConsentTitle: "Solicitud de acceso a datos",
     aiTools: {
       title: "Herramientas de IA integradas",
-      description: "Desactivado por defecto: el asistente de IA de Database Workbench (modo Agent) solo puede usar las herramientas de este plugin en sus conexiones abiertas mientras el interruptor esté encendido. Las herramientas no declaradas de solo lectura seguirán pidiendo aprobación en cada llamada.",
+      description:
+        "Desactivado por defecto: el asistente de IA de Database Workbench (modo Agent) solo puede usar las herramientas de este plugin en sus conexiones abiertas mientras el interruptor esté encendido. Las herramientas no declaradas de solo lectura seguirán pidiendo aprobación en cada llamada.",
       preview: "Ver herramientas",
       previewHint: "Inicia el plugin si no está en ejecución.",
       previewFailed: "No se pudieron listar las herramientas: {message}",
@@ -8524,7 +8525,7 @@ export default withEnglishFallback({
   driverStore: {
     jreDirRemoveFailed: "No se pudo eliminar el directorio JRE antiguo: {path} (error original: {error})",
     jreDirRemoveFailedWindows:
-      "No se pudo eliminar el directorio JRE antiguo: {path}\nCausas posibles:\n  - un proceso dbx Agent / java sigue usando el directorio\n  - el antivirus lo está analizando\nCierre cualquier proceso que pueda estar usando el directorio, o reinicie dbx e inténtelo de nuevo.\n(error original: {error})",
+      "No se pudo eliminar el directorio JRE antiguo: {path}\nCausas posibles:\n  - un proceso Database Workbench Agent / java sigue usando el directorio\n  - el antivirus lo está analizando\nCierre cualquier proceso que pueda estar usando el directorio, o reinicie Database Workbench e inténtelo de nuevo.\n(error original: {error})",
     jreInUseByDrivers: "El JRE {jre} está en uso por los controladores: {drivers}. Desinstálelos primero.",
     offlinePackageRegistryMissing: "No se encontró agent-registry.json en el ZIP; no es un paquete de controladores offline válido.",
     progressJreExtract: "Extrayendo JRE...",

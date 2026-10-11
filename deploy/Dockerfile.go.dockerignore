@@ -1,0 +1,14 @@
+.git
+.dbx-dev
+.idea
+**/node_modules
+**/target
+**/build
+dist
+outputs
+vendor
+agents
+docs
+.env
+.env.*
+*.log

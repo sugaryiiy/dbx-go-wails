@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	mysql "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/sugaryiiy/dbx-go-wails/internal/agent"
 	_ "modernc.org/sqlite"
 )
 
@@ -56,26 +59,31 @@ type Config struct {
 }
 
 type connection struct {
-	config        Config
-	pools         map[string]*sql.DB
-	native        nativeDriver
-	life          context.Context
-	cancel        context.CancelFunc
-	unlockedUntil time.Time
+	config            Config
+	pools             map[string]*sql.DB
+	native            nativeDriver
+	life              context.Context
+	cancel            context.CancelFunc
+	unlockedUntil     time.Time
+	maintenanceCancel context.CancelFunc
 }
 type runningQuery struct {
-	cancel       context.CancelFunc
-	connectionID string
+	cancel          context.CancelFunc
+	connectionID    string
+	clientSessionID string
 }
 type Manager struct {
-	mu          sync.RWMutex
-	connections map[string]*connection
-	running     map[string]runningQuery
-	closed      bool
+	mu             sync.RWMutex
+	connections    map[string]*connection
+	sessions       map[string]*querySession
+	resultSessions map[string]*resultSession
+	running        map[string]runningQuery
+	closed         bool
+	agentStore     *agent.Store
 }
 
 func NewManager() *Manager {
-	return &Manager{connections: map[string]*connection{}, running: map[string]runningQuery{}}
+	return &Manager{connections: map[string]*connection{}, running: map[string]runningQuery{}, sessions: map[string]*querySession{}, resultSessions: map[string]*resultSession{}}
 }
 func (m *Manager) Close() error {
 	m.mu.Lock()
@@ -83,9 +91,15 @@ func (m *Manager) Close() error {
 	for _, q := range m.running {
 		q.cancel()
 	}
+	for _, c := range m.connections {
+		if c.maintenanceCancel != nil {
+			c.maintenanceCancel()
+		}
+	}
 	connections := m.connections
 	m.connections = map[string]*connection{}
 	m.mu.Unlock()
+	m.closeQuerySessions("", "", "")
 	var errs []error
 	for _, c := range connections {
 		if c.cancel != nil {
@@ -145,6 +159,12 @@ func (c Config) normalized() Config {
 	return c
 }
 func (c Config) validate() error {
+	if usesServiceDriver(c.Type) {
+		return validateServiceConfig(c)
+	}
+	if agent.UsesDatabase(c.Type) {
+		return validateAgentConfig(c)
+	}
 	switch c.Type {
 	case "sqlite", "mysql", "postgres", "redis", "mongodb", "clickhouse":
 	default:
@@ -187,6 +207,9 @@ func sqlitePath(c Config) string {
 }
 
 func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
+	if usesNativeDriver(c.Type) {
+		return nil, unsupported("database/sql pool for " + c.Type)
+	}
 	if e := c.validate(); e != nil {
 		return nil, e
 	}
@@ -290,8 +313,13 @@ func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
 		return nil, redact(e, c)
 	}
 	if c.Type == "sqlite" {
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
+		if sqlitePath(c) == ":memory:" {
+			db.SetMaxOpenConns(1)
+			db.SetMaxIdleConns(1)
+		} else {
+			db.SetMaxOpenConns(16)
+			db.SetMaxIdleConns(2)
+		}
 	} else {
 		db.SetMaxOpenConns(8)
 		db.SetMaxIdleConns(2)
@@ -311,12 +339,48 @@ type sanitizedError struct {
 
 func (e sanitizedError) Error() string { return e.message }
 func (e sanitizedError) Unwrap() error { return e.cause }
+
+var jaasSecretPattern = regexp.MustCompile(`(?i)(?:password|secret|token)\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^']*)'|([^\s;]+))`)
+
 func redact(err error, c Config) error {
 	if err == nil {
 		return nil
 	}
 	message := err.Error()
 	secrets := []string{c.Password}
+	var collectSecrets func(any)
+	collectSecrets = func(raw any) {
+		switch value := raw.(type) {
+		case map[string]any:
+			for key, item := range value {
+				name := strings.ToLower(strings.NewReplacer("_", "", "-", "", ".", "").Replace(key))
+				if text, ok := item.(string); ok {
+					if strings.Contains(name, "password") || strings.Contains(name, "secret") || strings.Contains(name, "token") || name == "apikey" || name == "accesskey" || name == "privatekey" || name == "keypassphrase" || name == "value" || name == "key" {
+						secrets = append(secrets, text)
+					}
+					if strings.Contains(name, "jaasconfig") {
+						secrets = append(secrets, text)
+						for _, match := range jaasSecretPattern.FindAllStringSubmatch(text, -1) {
+							for _, secret := range match[1:] {
+								if secret != "" {
+									secrets = append(secrets, secret)
+								}
+								if decoded, decodeErr := strconv.Unquote("\"" + secret + "\""); decodeErr == nil {
+									secrets = append(secrets, decoded)
+								}
+							}
+						}
+					}
+				}
+				collectSecrets(item)
+			}
+		case []any:
+			for _, item := range value {
+				collectSecrets(item)
+			}
+		}
+	}
+	collectSecrets(c.Raw["external_config"])
 	for _, layer := range c.Transports {
 		for _, name := range []string{"password", "key_passphrase", "token", "private_key"} {
 			if value, ok := layer[name].(string); ok {
@@ -324,7 +388,16 @@ func redact(err error, c Config) error {
 			}
 		}
 	}
+	// Replace longer credentials first so one secret cannot partially hide
+	// another and leave a suffix exposed. URLs and forms can encode them.
+	encoded := append([]string{}, secrets...)
 	for _, secret := range secrets {
+		if secret != "" {
+			encoded = append(encoded, url.QueryEscape(secret), url.PathEscape(secret))
+		}
+	}
+	sort.Slice(encoded, func(i, j int) bool { return len(encoded[i]) > len(encoded[j]) })
+	for _, secret := range encoded {
 		if secret != "" {
 			message = strings.ReplaceAll(message, secret, "[REDACTED]")
 		}
@@ -339,6 +412,13 @@ func (m *Manager) Connect(ctx context.Context, c Config) error {
 	if c.ID == "" {
 		return errors.New("connection id is required")
 	}
+	m.mu.RLock()
+	busy := m.connections[c.ID] != nil && m.connections[c.ID].maintenanceCancel != nil
+	m.mu.RUnlock()
+	if busy {
+		return errors.New("SQLite restore is in progress")
+	}
+	m.closeQuerySessions(c.ID, "", "")
 	if usesNativeDriver(c.Type) {
 		return m.connectNative(ctx, c)
 	}
@@ -353,6 +433,11 @@ func (m *Manager) Connect(ctx context.Context, c Config) error {
 		return errors.New("database manager is closed")
 	}
 	old := m.connections[c.ID]
+	if old != nil && old.maintenanceCancel != nil {
+		m.mu.Unlock()
+		db.Close()
+		return errors.New("SQLite restore is in progress")
+	}
 	for _, q := range m.running {
 		if q.connectionID == c.ID {
 			q.cancel()
@@ -382,6 +467,10 @@ func (m *Manager) pool(ctx context.Context, id, database string) (*sql.DB, Confi
 		return nil, Config{}, false, errors.New("database connection is not open")
 	}
 	cfg := c.config
+	if c.maintenanceCancel != nil {
+		m.mu.RUnlock()
+		return nil, cfg, false, errors.New("SQLite restore is in progress")
+	}
 	if c.native != nil {
 		m.mu.RUnlock()
 		return nil, cfg, false, unsupported("SQL pool operations for " + cfg.Type)
@@ -424,6 +513,10 @@ func (m *Manager) pool(ctx context.Context, id, database string) (*sql.DB, Confi
 		db.Close()
 		return nil, cfg, locked, errors.New("connection was closed while connecting")
 	}
+	if c.maintenanceCancel != nil {
+		db.Close()
+		return nil, cfg, locked, errors.New("SQLite restore is in progress")
+	}
 	if existing := c.pools[database]; existing != nil {
 		db.Close()
 		db = existing
@@ -433,6 +526,12 @@ func (m *Manager) pool(ctx context.Context, id, database string) (*sql.DB, Confi
 	return db, cfg, locked, nil
 }
 func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (any, error) {
+	if result, handled, err := m.handleManualTransaction(ctx, path, p); handled {
+		return result, err
+	}
+	if path == "/api/query/execute-script-2pc" || path == "/api/query/execute-schema-diff-deploy" {
+		return m.executeSchemaDeployment(ctx, p)
+	}
 	if result, handled, err := m.handleNative(ctx, path, p); handled {
 		return result, err
 	}
@@ -443,7 +542,7 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 			return nil, e
 		}
 		if usesNativeDriver(c.Type) {
-			return testNative(ctx, c, path == "/api/connection/test-info")
+			return m.testNative(ctx, c, path == "/api/connection/test-info")
 		}
 		db, e := openDB(ctx, c, c.Database)
 		if e != nil {
@@ -472,6 +571,10 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 		id := str(p, "connectionId", "connection_id")
 		m.mu.Lock()
 		c := m.connections[id]
+		if c != nil && c.maintenanceCancel != nil {
+			m.mu.Unlock()
+			return nil, errors.New("SQLite restore is in progress")
+		}
 		delete(m.connections, id)
 		for _, q := range m.running {
 			if q.connectionID == id {
@@ -479,6 +582,7 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 			}
 		}
 		m.mu.Unlock()
+		m.closeQuerySessions(id, "", "")
 		if c != nil {
 			if c.cancel != nil {
 				c.cancel()
@@ -493,26 +597,30 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 		return nil, nil
 	case "/api/connection/write-unlock", "/api/connection/write-unlock/lock", "/api/connection/write-unlock/state":
 		m.mu.Lock()
-		defer m.mu.Unlock()
 		c := m.connections[str(p, "connectionId", "connection_id")]
 		if c == nil {
+			m.mu.Unlock()
 			return nil, errors.New("database connection is not open")
 		}
 		if path == "/api/connection/write-unlock" {
 			seconds := integer(p, 0, "durationSecs")
 			if seconds < 1 || seconds > 3600 {
+				m.mu.Unlock()
 				return nil, errors.New("unlock duration must be between 1 and 3600 seconds")
 			}
 			c.unlockedUntil = time.Now().Add(time.Duration(seconds) * time.Second)
 		}
 		if strings.HasSuffix(path, "/lock") {
 			c.unlockedUntil = time.Time{}
+			m.mu.Unlock()
+			m.closeQuerySessions(c.config.ID, "", "")
 			return nil, nil
 		}
 		remaining := time.Until(c.unlockedUntil).Milliseconds()
 		if remaining < 0 {
 			remaining = 0
 		}
+		m.mu.Unlock()
 		return map[string]any{"remainingMs": remaining}, nil
 	case "/api/connection/identifier-quote", "/api/connection/database-info", "/api/connection/check-health", "/api/connection/prewarm":
 		db, c, _, e := m.pool(ctx, str(p, "connectionId", "connection_id"), str(p, "database"))
@@ -538,9 +646,13 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 			q.cancel()
 		}
 		return ok, nil
-	case "/api/query/close-session", "/api/query/close-client-session":
-		// Results are bounded and materialized; this engine never retains a cursor.
-		return false, nil
+	case "/api/query/close-client-session":
+		if str(p, "clientSessionId") == "" {
+			return nil, errors.New("clientSessionId is required")
+		}
+		return m.closeQuerySessions(str(p, "connectionId"), str(p, "database"), str(p, "clientSessionId")), nil
+	case "/api/query/close-session":
+		return m.closeResultSession(str(p, "connectionId"), str(p, "sessionId")), nil
 	case "/api/query/execute", "/api/query/execute-multi", "/api/query/execute-batch", "/api/query/execute-in-transaction", "/api/query/execute-script":
 		return m.execute(ctx, path, p)
 	default:
