@@ -411,7 +411,18 @@ func objectDDL(ctx context.Context, db *sql.DB, kind, database, schema, table, o
 	switch kind {
 	case "sqlite":
 		var ddl sql.NullString
-		e := db.QueryRowContext(ctx, "SELECT sql FROM "+quoteIdentifier(schema, kind)+".sqlite_schema WHERE name=? AND type IN ('table','view','trigger','index')", table).Scan(&ddl)
+		statement := "SELECT sql FROM " + quoteIdentifier(schema, kind) + ".sqlite_schema WHERE name=?"
+		args := []any{table}
+		switch strings.ToUpper(strings.TrimSpace(objectType)) {
+		case "":
+			statement += " AND type IN ('table','view')"
+		case "TABLE", "VIEW", "TRIGGER", "INDEX":
+			statement += " AND type=?"
+			args = append(args, strings.ToLower(strings.TrimSpace(objectType)))
+		default:
+			return "", unsupported("SQLite source for " + objectType)
+		}
+		e := db.QueryRowContext(ctx, statement, args...).Scan(&ddl)
 		return ddl.String, e
 	case "mysql":
 		return mysqlCatalogObjectSource(ctx, db, database, table, objectType)

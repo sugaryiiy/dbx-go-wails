@@ -46,6 +46,7 @@ func mcpToolDefinitions() []mcpbridge.Tool {
 	p = selector()
 	p["all_schemas"] = map[string]any{"type": "boolean"}
 	list = append(list, tool("dbx_list_tables", "List tables and views in the selected database/schema.", p, nil, true))
+	list = append(list, mcpObjectToolDefinitions()...)
 	for _, spec := range []struct{ name, desc string }{{"dbx_describe_table", "Get table columns, indexes, foreign keys and DDL."}, {"dbx_get_table_ddl", "Get table or view DDL."}, {"dbx_list_indexes", "List indexes on a table."}} {
 		p = selector()
 		p["table"] = strSchema()
@@ -108,14 +109,23 @@ func mcpCheckArgs(name string, args map[string]any) error {
 			spec := props[k].(map[string]any)
 			switch spec["type"] {
 			case "string":
-				if _, ok := v.(string); !ok {
+				text, ok := v.(string)
+				if !ok {
 					return fmt.Errorf("%s must be a string", k)
+				}
+				if !mcpSchemaAllowsString(spec, text) {
+					return fmt.Errorf("%s has an unsupported value", k)
 				}
 			case "boolean":
 				if _, ok := v.(bool); !ok {
 					return fmt.Errorf("%s must be boolean", k)
 				}
 			case "integer":
+				switch v.(type) {
+				case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
+				default:
+					return fmt.Errorf("%s must be an integer", k)
+				}
 				n, parseErr := strconv.ParseFloat(fmt.Sprint(v), 64)
 				if parseErr != nil || math.IsNaN(n) || math.IsInf(n, 0) || n < float64(spec["minimum"].(int)) || n > float64(spec["maximum"].(int)) || n != math.Trunc(n) {
 					return fmt.Errorf("%s is outside its supported integer range", k)
@@ -125,12 +135,14 @@ func mcpCheckArgs(name string, args map[string]any) error {
 				if !ok {
 					return fmt.Errorf("%s must be an array", k)
 				}
-				if len(a) > 20 {
-					return errors.New("MCP table list exceeds 20 items")
+				if max, ok := spec["maxItems"].(int); ok && len(a) > max {
+					return fmt.Errorf("%s exceeds %d items", k, max)
 				}
+				itemSpec := spec["items"].(map[string]any)
 				for _, x := range a {
-					if _, ok := x.(string); !ok {
-						return errors.New("MCP table names must be strings")
+					text, ok := x.(string)
+					if !ok || !mcpSchemaAllowsString(itemSpec, text) {
+						return fmt.Errorf("%s items must be supported strings", k)
 					}
 				}
 			case "object":
@@ -272,6 +284,9 @@ func (b *mcpBackend) Call(ctx context.Context, name string, args map[string]any)
 			return []map[string]any{}, nil
 		}
 	}
+	if err = mcpValidateObjectToolArgs(name, args, scope); err != nil {
+		return nil, err
+	}
 	switch name {
 	case "dbx_list_saved_sql", "dbx_get_saved_sql", "dbx_save_sql":
 		return b.s.mcpSavedSQL(name, args, scope)
@@ -337,6 +352,8 @@ func (b *mcpBackend) Call(ctx context.Context, name string, args map[string]any)
 		return list, nil
 	case "dbx_list_tables":
 		return mcpTables(ctx, manager, req, boolValue(args, "all_schemas"))
+	case "dbx_list_objects", "dbx_list_routines", "dbx_list_events", "dbx_list_triggers", "dbx_get_object_source", "dbx_get_routine_source", "dbx_get_event_info":
+		return b.s.mcpObjectMetadata(ctx, manager, name, args, scope, req)
 	case "dbx_describe_table", "dbx_list_indexes", "dbx_get_table_ddl":
 		req["table"] = str(args, "table")
 		if name == "dbx_get_table_ddl" {
@@ -454,15 +471,19 @@ func mcpTables(ctx context.Context, m *database.Manager, req map[string]any, all
 		return nil, err
 	}
 	out := []map[string]any{}
-	for _, schema := range v.([]map[string]any) {
+	schemas, err := mcpSchemaNames(v)
+	if err != nil {
+		return nil, err
+	}
+	for _, schema := range schemas {
 		r := cloneMap(req)
-		r["schema"] = schema["name"]
+		r["schema"] = schema
 		v, err = m.Handle(ctx, "/api/schema/tables", r)
 		if err != nil {
 			return nil, err
 		}
 		for _, table := range v.([]map[string]any) {
-			table["schema"] = schema["name"]
+			table["schema"] = schema
 			out = append(out, table)
 		}
 	}

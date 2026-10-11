@@ -2,6 +2,25 @@
 
 更新：2026-10-11。
 
+## 2026-10-11 存储过程与事件 MCP
+
+Go MCP 新增 `dbx_list_objects`、`dbx_list_routines`、`dbx_get_routine_source`、
+`dbx_list_events`、`dbx_list_triggers`、`dbx_get_object_source` 和 `dbx_get_event_info`，
+工具总数增至 20。HTTP/stdio 复用相同定义和保存权限；工具仅列出账户可见对象、
+读取定义与事件计划/状态，不调用或修改例程、触发器和事件。
+
+列表支持类型/名称筛选与分页，定义支持按字符分段读取；PostgreSQL 例程使用精确
+重载签名，触发器用所属表区分同名对象。事件工具专用于 MySQL/MariaDB 定时事件，
+未包含 PostgreSQL event trigger。自由文本进行凭据脱敏；对象身份保持完整以支持后续读取。
+
+设置页增加全部 7 项工具的中英文授权选项，保留已有显式工具授权列表，工具数按
+实际选项计算。5 个专项前端测试文件的 48 项检查、全量 Vue 类型检查和变更格式检查通过。
+MySQL 8.4、PostgreSQL 9.2/17 和 SQLite 隔离实库验证通过，包含禁用事件的计划/状态、
+重载函数、同名触发器、跨 schema 列表、长源码分页与凭据脱敏。HTTP/stdio 均发现
+全部 20 项工具，读取定义不会执行对象；只读及连接/工具授权拦截通过。
+全量 Go race、go vet、原生绑定测试和隔离 HTTP 冒烟通过。
+本次预览标签为 `go-v0.1.0-preview.20261011.3`；安装包验收另记录于本地产物。
+
 ## 2026-10-11 对象列表与详情修复
 
 修复对象浏览器和侧栏复用表列表，导致存储过程、函数、触发器、事件与序列
@@ -90,7 +109,7 @@ Web 模式使用同一服务实现并要求登录。默认命令和 CI 已切换
 | 示例 | 真实 SQLite customers/products/orders/order_items，重新打开保留修改 |
 | 导入 | CSV/TSV/XLSX 预览与映射、参数化事务写入、失败整体回滚、取消/进度 |
 | 导出 | CSV/XLSX/JSON/文本、只读查询、Web 下载和 Wails 原生保存、取消/进度 |
-| MCP | 官方 Go SDK，HTTP/stdio，13 个数据库工具；默认关闭、只读授权、Token 轮换、权限撤销及审计，详见 [使用说明](docs/go-mcp.md) |
+| MCP | 官方 Go SDK，HTTP/stdio，20 个数据库工具；包括对象、存储过程/函数、表触发器及 MySQL/MariaDB 定时事件的只读列表/详情/定义；默认关闭、只读授权、Token 轮换、权限撤销及审计，详见 [使用说明](docs/go-mcp.md) |
 | CI | Go 后端多平台测试，macOS Wails 构建；配置已写入，远端执行尚未验证 |
 
 ## 当前限制
@@ -100,6 +119,7 @@ Web 模式使用同一服务实现并要求登录。默认命令和 CI 已切换
 - Redis 暂限单机及 string/hash/list/set/zset（原子编辑需要 Redis 7+）；MongoDB 暂限单节点 SCRAM；ClickHouse 无事务、直接表格编辑或通用导入。新增三类引擎尚未接入 MCP；现有关系型表格编辑、导入等能力不自动适用于它们。
 - PostgreSQL DDL 不是完整备份：不导出数据、权限、所有权或序列当前位置，引用对象需预先存在；分区/继承/外部表、RLS、触发器/规则等高级对象明确拒绝，详见 [DDL 边界](docs/go-secure-connections.md#postgresql-结构-ddl)。
 - 持久事务会话、显式 BEGIN/COMMIT 脚本和 CREATE TRIGGER 尚未支持；事务执行接口可用。
+- MCP 可读取例程、触发器和 MySQL/MariaDB 定时事件元数据及定义，但不调用或修改这些对象；PostgreSQL event trigger 尚未通过 MCP 暴露。读取使用保存账户的可见范围，新增工具不自动加入已有显式授权列表。
 - 编辑保存遇到主键记录已被外部删除时，当前沿用原版 0 行受影响结果，尚无专门的并发冲突提示。
 - MySQL 参数化导入限 InnoDB 表；含反斜杠的手写 SQL 字面量、可执行版本注释和复合 CREATE 例程明确拒绝，避免方言歧义。
 - 高级 SQL 解析/语义引用、复杂结构编辑、数据对比/同步及高级管理操作尚未完整迁移。
@@ -127,8 +147,8 @@ Web 模式使用同一服务实现并要求登录。默认命令和 CI 已切换
 
 - MCP：官方 SDK 新旧协议、stdio 实际子进程、HTTP → stdio 代理、只读拦截、批量回滚、权限范围和失败审计均通过。
 - MCP 生命周期：Token 轮换、停用和权限收紧可取消真实 SQLite 长查询；应用退出等待审计落盘后释放存储锁；域名反向代理、精确 Host/Origin 校验通过真实 TCP 测试。
-- MCP 桌面实测：在隔离示例目录通过设置向导授权并启用服务；HTTP 和 CLI 客户端均发现 13 工具，查询订单总数得到 5，DELETE 被拒绝；重启恢复服务和 Token。
-- MCP 最终全量 Go race、go vet、Vue 类型检查与相关前端回归、macOS Wails 构建通过。界面截图：`outputs/mcp-settings-smoke.png`（本地产物）。
+- MCP 桌面初版实测：在隔离示例目录通过设置向导授权并启用服务；HTTP 和 CLI 客户端均发现当时的 13 项基础工具，查询订单总数得到 5，DELETE 被拒绝；重启恢复服务和 Token。新增 7 项对象工具的验证不包含在这条记录中。
+- MCP 基础版全量 Go race、go vet、Vue 类型检查与相关前端回归、macOS Wails 构建通过。界面截图：`outputs/mcp-settings-smoke.png`（本地产物）。
 
 - TLS/mTLS 协议测试验证受信证书、主机名/CA 不匹配拒绝、客户端证书配对及旧 TLS 版本拒绝；SSH 协议测试覆盖多跳、known_hosts/指纹、密码/私钥/agent、取消和连接隔离。相关 race 测试通过。
 - MySQL 8.4、PostgreSQL 17 实库矩阵：直连 TLS、单跳/双跳 SSH 均通过 CRUD、事务回滚、只读写入与 `FOR UPDATE` 拒绝、超时/显式取消、关闭及重连；检查实际会话 TLS cipher，错误 CA/主机名被拒绝。以 `DBX_TEST_DATABASE_CONFIGS` 指定测试配置文件启用。

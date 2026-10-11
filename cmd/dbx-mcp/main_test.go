@@ -89,6 +89,29 @@ func TestLocalCLIStoreLockAndEOFCleanup(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &sample); err != nil || sample.Connection.ID == "" {
 		t.Fatalf("Sample connection: %s", response.Body)
 	}
+	var sampleConfig struct {
+		Connection map[string]any `json:"connection"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &sampleConfig); err != nil {
+		t.Fatal(err)
+	}
+	connectionRequest, _ := json.Marshal(map[string]any{"config": sampleConfig.Connection})
+	request = httptest.NewRequest(http.MethodPost, "/api/connection/connect", bytes.NewReader(connectionRequest))
+	request.RemoteAddr = ""
+	response = httptest.NewRecorder()
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Open sample for trigger fixture: %s", response.Body)
+	}
+	triggerSQL := "CREATE TRIGGER customers_mcp_changed AFTER INSERT ON customers BEGIN SELECT 1; END"
+	triggerRequest, _ := json.Marshal(map[string]any{"connectionId": sample.Connection.ID, "database": "main", "sql": triggerSQL})
+	request = httptest.NewRequest(http.MethodPost, "/api/query/execute", bytes.NewReader(triggerRequest))
+	request.RemoteAddr = ""
+	response = httptest.NewRecorder()
+	app.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Seed trigger for source inspection: %s", response.Body)
+	}
 	if err := app.SaveMCPPolicy(server.MCPPolicy{Configured: true, ReadOnly: true, AllowedConnectionIDs: []string{sample.Connection.ID}, AllowedGroupIDs: []string{}}); err != nil {
 		t.Fatal(err)
 	}
@@ -100,12 +123,28 @@ func TestLocalCLIStoreLockAndEOFCleanup(t *testing.T) {
 	if err != nil || len(tools.Tools) == 0 {
 		t.Fatalf("List tools: %v %v", tools, err)
 	}
+	metadataTools := map[string]bool{
+		"dbx_list_objects": false, "dbx_list_routines": false, "dbx_list_events": false,
+		"dbx_list_triggers": false, "dbx_get_object_source": false,
+		"dbx_get_routine_source": false, "dbx_get_event_info": false,
+	}
 	for _, tool := range tools.Tools {
 		if tool.Name == "dbx_execute_query" && (tool.Annotations == nil || tool.Annotations.ReadOnlyHint) {
 			t.Fatal("SQL execution incorrectly advertised read-only")
 		}
 		if tool.Name == "dbx_list_tables" && (tool.Annotations == nil || !tool.Annotations.ReadOnlyHint) {
 			t.Fatal("Metadata did not advertise read-only")
+		}
+		if _, wanted := metadataTools[tool.Name]; wanted {
+			if metadataTools[tool.Name] || tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+				t.Fatalf("CLI object metadata contract missing or duplicated: %#v", tool)
+			}
+			metadataTools[tool.Name] = true
+		}
+	}
+	for name, found := range metadataTools {
+		if !found {
+			t.Fatalf("CLI discovery lacks %s", name)
 		}
 	}
 	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "dbx_execute_query", Arguments: map[string]any{"connection_id": sample.Connection.ID, "database": "main", "sql": "SELECT name FROM customers ORDER BY id LIMIT 1"}})
@@ -114,6 +153,14 @@ func TestLocalCLIStoreLockAndEOFCleanup(t *testing.T) {
 	}
 	if len(result.Content) != 1 || !strings.Contains(result.Content[0].(*mcp.TextContent).Text, "rows") {
 		t.Fatalf("Missing query rows: %#v", result)
+	}
+	listed, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "dbx_list_triggers", Arguments: map[string]any{"connection_id": sample.Connection.ID, "database": "main", "relation_name": "customers"}})
+	if err != nil || listed.IsError || len(listed.Content) != 1 || !strings.Contains(listed.Content[0].(*mcp.TextContent).Text, "customers_mcp_changed") {
+		t.Fatalf("CLI trigger catalog lost: %#v %v", listed, err)
+	}
+	source, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "dbx_get_object_source", Arguments: map[string]any{"connection_id": sample.Connection.ID, "database": "main", "name": "customers_mcp_changed", "object_type": "TRIGGER"}})
+	if err != nil || source.IsError || len(source.Content) != 1 || !strings.Contains(source.Content[0].(*mcp.TextContent).Text, triggerSQL) {
+		t.Fatalf("CLI trigger source lost: %#v %v", source, err)
 	}
 	denied, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "dbx_execute_query", Arguments: map[string]any{"connection_id": sample.Connection.ID, "database": "main", "sql": "DELETE FROM customers"}})
 	if err != nil || !denied.IsError {

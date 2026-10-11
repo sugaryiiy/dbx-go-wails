@@ -47,6 +47,9 @@ func ValidateMCPSQL(source, dialect string, readOnly, allowDDL bool) ([]string, 
 		if err != nil {
 			return nil, err
 		}
+		if (verb == "CREATE" || verb == "ALTER" || verb == "DROP") && mcpEventDDL(tokens) {
+			return nil, errors.New("Scheduled event DDL is unavailable through Go MCP")
+		}
 		if !allowDDL && (verb == "UPDATE" || verb == "DELETE") && !mcpGuardedPredicate(tokens) {
 			return nil, errors.New("UPDATE/DELETE requires a simple unquoted column = literal WHERE condition, or explicit high-risk SQL permission")
 		}
@@ -108,6 +111,37 @@ func ValidateMCPSQL(source, dialect string, readOnly, allowDDL bool) ([]string, 
 	}
 	return statements, nil
 }
+
+// Scheduled events can execute SQL after the MCP request and its permissions
+// expire. They are not ordinary DDL, even when high-risk SQL is allowed.
+func mcpEventDDL(tokens []string) bool {
+	if len(tokens) < 2 {
+		return false
+	}
+	start := 1
+	if len(tokens) > 3 && strings.EqualFold(tokens[1], "OR") && strings.EqualFold(tokens[2], "REPLACE") {
+		start = 3
+	}
+	if start < len(tokens) {
+		switch strings.ToUpper(tokens[start]) {
+		case "UNIQUE", "UNLOGGED", "MATERIALIZED":
+			start++
+		}
+	}
+	if start < len(tokens) {
+		switch strings.ToUpper(tokens[start]) {
+		case "TABLE", "VIEW", "INDEX", "SEQUENCE":
+			return false // Ordinary object names/columns may be named event.
+		}
+	}
+	for _, token := range tokens[start:] {
+		if strings.EqualFold(token, "EVENT") {
+			return true
+		}
+	}
+	return false
+}
+
 func mcpIdentifier(s string) bool {
 	if s == "" {
 		return false

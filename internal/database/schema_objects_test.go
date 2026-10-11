@@ -51,6 +51,24 @@ func TestSQLiteObjectCatalogIncludesTriggers(t *testing.T) {
 	}
 }
 
+func TestSQLiteObjectSourceDistinguishesSameNamedTableAndTrigger(t *testing.T) {
+	m, _ := testManager(t)
+	m.mu.Lock()
+	m.connections["fixture"] = m.connections["test"]
+	m.mu.Unlock()
+	run(t, m, "CREATE TABLE shared(id INTEGER)")
+	run(t, m, "CREATE TRIGGER shared AFTER INSERT ON shared BEGIN SELECT 1; END")
+	for _, kind := range []string{"TABLE", "TRIGGER"} {
+		value := catalogCall(t, m, "main", "main", "object-source", map[string]any{"table": "shared", "object_type": kind}).(record)
+		if !strings.HasPrefix(valueString(value["source"]), "CREATE "+kind+" ") {
+			t.Fatalf("%s source returned a different object: %#v", kind, value)
+		}
+	}
+	if source := catalogCall(t, m, "main", "main", "ddl", map[string]any{"table": "shared"}).(string); !strings.HasPrefix(source, "CREATE TABLE ") {
+		t.Fatalf("table DDL returned a trigger: %s", source)
+	}
+}
+
 func TestMySQLObjectCatalog(t *testing.T) {
 	dsn := os.Getenv("DBX_TEST_MYSQL_DSN")
 	if dsn == "" {

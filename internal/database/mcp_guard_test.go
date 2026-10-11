@@ -36,3 +36,25 @@ func TestMCPGuardReadonlyWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPGuardEventsRemainUnavailableWithHighRiskPermission(t *testing.T) {
+	for _, statement := range []string{
+		"CREATE EVENT reset_people ON SCHEDULE EVERY 1 DAY DO DELETE FROM people",
+		"CREATE DEFINER='app'@'localhost' EVENT reset_people ON SCHEDULE EVERY 1 DAY DO UPDATE people SET name='reset'",
+		"ALTER EVENT reset_people ENABLE",
+		"DROP EVENT IF EXISTS reset_people",
+	} {
+		if _, err := ValidateMCPSQL(statement, "mysql", false, true); err == nil {
+			t.Errorf("asynchronous event DDL was accepted: %s", statement)
+		}
+	}
+	for _, statement := range []string{
+		"CREATE TABLE event(event INTEGER)",
+		"ALTER TABLE event ADD event_time DATETIME",
+		"DROP TABLE event",
+	} {
+		if _, err := ValidateMCPSQL(statement, "mysql", false, true); err != nil {
+			t.Errorf("ordinary DDL using an event identifier: %v", err)
+		}
+	}
+}
