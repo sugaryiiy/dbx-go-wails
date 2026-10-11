@@ -1,4 +1,5 @@
 import { redisGroupingZhCN as redisGrouping } from "./redisGrouping";
+import { commonBackendErrorsZhCN } from "./commonBackendErrors";
 import { withEnglishFallback } from "./fallback";
 import docs from "./docs/zh-CN";
 import { dataDictionaryZhCN as dataDictionary } from "./dataDictionaryMessages";
@@ -2924,6 +2925,7 @@ export default withEnglishFallback({
     mcpLearnMore: "了解更多",
   },
   backendErrors: {
+    common: commonBackendErrorsZhCN,
     jdbc: {
       connectionFailed: "数据库连接在操作开始前失败（阶段：{stage}）。",
       connectionInterrupted: "数据库连接在操作执行期间中断（阶段：{stage}）。",

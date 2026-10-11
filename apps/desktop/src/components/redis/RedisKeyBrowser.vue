@@ -2,6 +2,7 @@
 import { computed, markRaw, nextTick, ref, shallowRef, onMounted, onUnmounted, onActivated, onDeactivated, watch } from "vue";
 import type { CalendarDateTime } from "@internationalized/date";
 import { useI18n } from "vue-i18n";
+import { translateBackendError } from "@/i18n/backend-errors";
 import { Search, RefreshCw, Loader2, ChevronRight, ChevronDown, FolderClosed, FolderOpen, Trash2, Plus, KeyRound, TerminalSquare, Asterisk, Radio, Clock, Copy, X, Shield } from "@lucide/vue";
 import { RecycleScroller } from "vue-virtual-scroller";
 import "vue-virtual-scroller/dist/vue-virtual-scroller.css";
@@ -825,7 +826,7 @@ async function selectAllKeys() {
     try {
       fetchedAll = await fetchAll();
     } catch (error) {
-      toast(errorMessage(error), 5000);
+      toast(translateBackendError(t, error), 5000);
       return;
     }
     // A search or scope change may have replaced the result while SCAN was running.
@@ -1184,7 +1185,7 @@ async function maybeAutoLoadMoreRedisKeys() {
     scrollHeight: scroller.scrollHeight,
   });
   if (shouldLoad) {
-    await loadMore(autoLoadBudget).catch((error) => toast(errorMessage(error), 5000));
+    await loadMore(autoLoadBudget).catch((error) => toast(translateBackendError(t, error), 5000));
   }
 }
 
@@ -1209,7 +1210,7 @@ function onRedisKeyScroll(event: Event) {
       scrollHeight: scroller.scrollHeight,
     });
     if (shouldLoad) {
-      void loadMore().catch((error) => toast(errorMessage(error), 5000));
+      void loadMore().catch((error) => toast(translateBackendError(t, error), 5000));
     }
   });
 }
@@ -1513,7 +1514,7 @@ async function fillGroupSubtree(group: RedisKeyTreeGroupNode, requestId = search
     // 失败不阻塞浏览；已并入的进度保留在游标里，下次展开/续扫从断点重试
     if (requestId === searchRequestId && subtreeFillOperations.get(group.id) === operationId) {
       subtreePendingGroupCursors.set(group.id, cursor);
-      toast(errorMessage(error), 5000);
+      toast(translateBackendError(t, error), 5000);
     }
   } finally {
     if (requestId === searchRequestId && subtreeFillOperations.get(group.id) === operationId) {
@@ -1991,7 +1992,7 @@ async function saveBatchExpiry() {
     // Surface the underlying cause as well; the count toast above keeps the partial result.
     if (summary.errors.length > 0) toast(summary.errors[0], 5000);
   } catch (error) {
-    toast(errorMessage(error), 5000);
+    toast(translateBackendError(t, error), 5000);
   } finally {
     savingBatchExpiry.value = false;
     showBatchExpiryDialog.value = false;
@@ -3246,7 +3247,7 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
 
 <template>
   <div ref="rootRef" class="h-full" :style="editorFontFamilyStyle">
-    <RedisKeyGroupingDialog v-model:open="groupingDialogOpen" :config="customGrouping" :saving="groupingSaving" :error="groupingError" @save="saveGrouping" />
+    <RedisKeyGroupingDialog v-model:open="groupingDialogOpen" :config="customGrouping" :saving="groupingSaving" :error="groupingError ? translateBackendError(t, groupingError) : ''" @save="saveGrouping" />
     <Splitpanes class="redis-workspace-splitpanes h-full">
       <!-- Key tree (left) -->
       <Pane :size="36" :min-size="24">
@@ -3414,7 +3415,7 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
               t(customGrouping.inner_view === "list" ? "redisGrouping.list" : "redisGrouping.tree")
             }}</Button>
             <Button variant="ghost" size="sm" class="h-6 text-xs" @click="groupingDialogOpen = true">{{ t("redisGrouping.settings") }}</Button>
-            <span v-if="groupingError" role="alert" class="text-xs text-destructive">{{ groupingError }}</span>
+            <span v-if="groupingError" role="alert" class="text-xs text-destructive">{{ translateBackendError(t, groupingError) }}</span>
           </div>
           <p v-if="legacyGroupingPreparing" role="status" class="shrink-0 px-2 py-1 text-xs text-muted-foreground">{{ t("redisGrouping.preparingLegacy") }}</p>
           <RedisGroupedKeyList
@@ -3642,7 +3643,7 @@ defineExpose({ focusSearch, insertCommand, executeCommand: executeAiCommand });
                       <span class="shrink-0 text-[#d7ba7d]">{{ entry.prompt }}</span>
                       <span class="min-w-0 text-slate-200">{{ entry.command }}</span>
                     </div>
-                    <pre v-if="entry.output" class="ml-0 whitespace-pre-wrap break-words pl-0" :class="entry.error ? 'text-[#ff6b6b]' : 'text-slate-300'">{{ entry.output }}</pre>
+                    <pre v-if="entry.output" class="ml-0 whitespace-pre-wrap break-words pl-0" :class="entry.error ? 'text-[#ff6b6b]' : 'text-slate-300'">{{ entry.error ? translateBackendError(t, entry.output) : entry.output }}</pre>
                   </div>
                 </div>
 

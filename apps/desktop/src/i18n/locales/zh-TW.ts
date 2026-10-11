@@ -1,4 +1,5 @@
 import { redisGroupingZhTW as redisGrouping } from "./redisGrouping";
+import { commonBackendErrorsZhTW } from "./commonBackendErrors";
 import { withEnglishFallback } from "./fallback";
 import { mongodbDatabaseDumpZhTW as mongoDump } from "./mongodbDatabaseDump";
 import { meilisearchManagementZhTW } from "./meilisearchManagement";
@@ -2732,6 +2733,7 @@ export default withEnglishFallback({
     mcpLearnMore: "了解更多",
   },
   backendErrors: {
+    common: commonBackendErrorsZhTW,
     jdbc: {
       connectionFailed: "資料庫連線在操作開始前失敗（階段：{stage}）。",
       connectionInterrupted: "資料庫連線在操作執行期間中斷（階段：{stage}）。",

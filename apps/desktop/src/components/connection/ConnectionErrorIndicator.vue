@@ -4,6 +4,7 @@ import { useI18n } from "vue-i18n";
 import { AlertTriangle } from "@lucide/vue";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useConnectionStore } from "@/stores/connectionStore";
+import { translateBackendError } from "@/i18n/backend-errors";
 
 const props = withDefaults(
   defineProps<{
@@ -19,7 +20,10 @@ const props = withDefaults(
 const { t } = useI18n();
 const connectionStore = useConnectionStore();
 
-const errorMessage = computed(() => (props.connectionId ? connectionStore.connectionErrors[props.connectionId] : ""));
+const errorMessage = computed(() => {
+  const raw = props.connectionId ? connectionStore.connectionErrors[props.connectionId] : "";
+  return raw ? translateBackendError(t, raw) : "";
+});
 
 function clearError() {
   if (props.connectionId) connectionStore.clearConnectionError(props.connectionId);

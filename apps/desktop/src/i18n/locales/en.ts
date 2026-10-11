@@ -1,4 +1,5 @@
 import { redisGroupingEn as redisGrouping } from "./redisGrouping";
+import { commonBackendErrorsEn } from "./commonBackendErrors";
 import docs from "./docs/en";
 import { dataDictionaryEn as dataDictionary } from "./dataDictionaryMessages";
 import { consulUiMessages } from "./consulUi";
@@ -2990,6 +2991,7 @@ export default {
     mcpLearnMore: "Learn more",
   },
   backendErrors: {
+    common: commonBackendErrorsEn,
     jdbc: {
       connectionFailed: "Database connection failed before the operation started (stage: {stage}).",
       connectionInterrupted: "Database connection was interrupted while the operation was running (stage: {stage}).",

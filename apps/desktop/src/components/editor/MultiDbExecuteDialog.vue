@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { translateBackendError } from "@/i18n/backend-errors";
 import { AlertTriangle, Check, CheckSquare, ChevronDown, ChevronRight, Download, FolderOpen, Layers, Loader2, MinusSquare, Pencil, Play, RefreshCw, Search, Settings2, Square, Trash2, X } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -205,7 +206,7 @@ async function settleMergeTargetTransaction(itemId: string, action: "commit" | "
   const item = batch.value?.items.find((candidate) => candidate.id === itemId);
   if (!item?.transaction || item.settling) return;
   const settled = await execution.finishTransaction(itemId, action);
-  if (!settled) toast(item.errorMessage ? t("multiDbExecute.txnActionFailed", { message: item.errorMessage }) : t("common.failed"), 5000);
+  if (!settled) toast(item.errorMessage ? t("multiDbExecute.txnActionFailed", { message: translateBackendError(t, item.errorMessage) }) : t("common.failed"), 5000);
 }
 
 /** Commits every target that succeeded, leaving errored ones for a decision. */
@@ -938,7 +939,7 @@ watch(
                 <div class="truncate text-sm" :class="statusClass(item.status)">{{ targetLabel(item.target) }}</div>
                 <div class="text-xs text-muted-foreground">{{ isAwaitingTarget(item) ? t("multiDbExecute.awaitingConfirmation") : statusLabel(item.status) }}</div>
                 <div v-if="item.durationMs !== undefined" class="text-xs tabular-nums text-muted-foreground">{{ t("multiDbExecute.elapsed", { duration: formatDataTransferDuration(item.durationMs) }) }}</div>
-                <div v-if="item.errorMessage" class="mt-1 whitespace-pre-wrap break-words text-xs text-destructive">{{ item.errorMessage }}</div>
+                <div v-if="item.errorMessage" class="mt-1 whitespace-pre-wrap break-words text-xs text-destructive">{{ translateBackendError(t, item.errorMessage) }}</div>
               </div>
               <div v-if="item.transaction" class="flex shrink-0 gap-2">
                 <Button size="sm" :disabled="isExecuting || item.settling || !item.transaction.canCommit" @click="execution.finishTransaction(item.id, 'commit')">{{ t("multiDbExecute.commit") }}</Button>
