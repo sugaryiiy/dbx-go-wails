@@ -42,7 +42,7 @@ def main():
     name = config["name"] + ".app"
     built = ROOT / config["build:dir"] / "bin" / name
     binary = Path("Contents/MacOS") / config["outputfilename"]
-    info = plistlib.loads((built / "Contents/Info.plist").read_bytes())
+    info = plistlib.loads(run("plutil", "-convert", "xml1", "-o", "-", str(built / "Contents/Info.plist")))
     arch = run("lipo", "-archs", str(built / binary)).decode().strip()
     expected_digest = digest(built / binary)
     output = args.output if args.output.is_absolute() else ROOT / args.output
