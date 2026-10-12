@@ -17,6 +17,7 @@ export interface WailsApp {
   Minimize(): Promise<void>;
   ToggleMaximize(): Promise<void>;
   SetAlwaysOnTop(value: boolean): Promise<void>;
+  SetTheme(mode: "light" | "dark" | "system"): Promise<void>;
   Close(): Promise<void>;
   ClipboardReadText(): Promise<string>;
   ClipboardWriteText(text: string): Promise<void>;

@@ -27,6 +27,7 @@ import {
 } from "@/lib/app/appTheme";
 import { safeLocalStorageGet, safeLocalStorageSet } from "@/lib/backend/safeStorage";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isWailsRuntime, wailsApp } from "@/lib/backend/wailsRuntime";
 import { persistAppAppearancePatch } from "@/lib/app/appAppearance";
 
 function isLinuxTauriRuntime() {
@@ -144,6 +145,10 @@ function applyTheme() {
   doc.offsetHeight; // eslint-disable-line @typescript-eslint/no-unused-expressions
   themeRevision.value += 1;
   requestAnimationFrame(() => doc.classList.remove("disable-transitions"));
+  if (isWailsRuntime()) {
+    void wailsApp().SetTheme(themeMode.value).catch(() => {});
+    return;
+  }
   if (!isTauriRuntime()) return;
 
   const tauriTheme = getTauriThemeForMode(themeMode.value);

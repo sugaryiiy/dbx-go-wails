@@ -60,6 +60,13 @@ func (a *App) SetAlwaysOnTop(value bool) {
 	runtime.WindowSetAlwaysOnTop(a.ctx, value)
 	a.alwaysOnTop.Store(value)
 }
+func (a *App) SetTheme(mode string) error {
+	if mode != "light" && mode != "dark" && mode != "system" {
+		return fmt.Errorf("invalid window theme: %q", mode)
+	}
+	setWindowTheme(a.ctx, mode)
+	return nil
+}
 func (a *App) Close()                               { runtime.Quit(a.ctx) }
 func (a *App) ClipboardReadText() (string, error)   { return runtime.ClipboardGetText(a.ctx) }
 func (a *App) ClipboardWriteText(text string) error { return runtime.ClipboardSetText(a.ctx, text) }
