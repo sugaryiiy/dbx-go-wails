@@ -36,12 +36,24 @@ import { MULTI_SOURCE_MAX_ROWS_PER_SOURCE } from "@/lib/query/multiSourceResult"
 import { translateBackendError } from "@/i18n/backend-errors";
 
 const DANGER_RE = /^\s*(DROP|DELETE|TRUNCATE|ALTER|UPDATE|MERGE|REPLACE)\b/i;
+const ROUTINE_ACCOUNT_PART = "(?:`(?:``|[^`])*`|'(?:''|[^'])*'|\"(?:\"\"|[^\"])*\"|[^\\s@]+)";
+const PROCEDURE_DEFINITION_RE = new RegExp(`^(?:CREATE(?:\\s+OR\\s+(?:REPLACE|ALTER))?|ALTER)\\s+(?:(?:NON)?EDITIONABLE\\s+)?(?:DEFINER\\s*=\\s*${ROUTINE_ACCOUNT_PART}(?:\\s*@\\s*${ROUTINE_ACCOUNT_PART})?\\s+)?(?:PROCEDURE|PROC)\\b`, "i");
 
 interface SqlExecutionOptions {
   openInNewResultTab?: boolean;
   editorViewportRequestId?: number;
   /** Tab that owns this execution request; resolved once, never re-read from the global active tab. */
   tabId?: string;
+}
+
+export interface ProcedureExecutionRequest {
+  tabId: string;
+  connectionId: string;
+  database: string;
+  databaseType?: DatabaseType;
+  schema?: string;
+  catalog?: string;
+  routineName: string;
 }
 
 /**
@@ -150,6 +162,20 @@ function firstQueryExecutionError(tab: Pick<QueryTab, "result" | "results">) {
   return results.find((result) => isQueryExecutionErrorResult(result));
 }
 
+function isCompleteProcedureSourceExecution(tab: QueryTab, source: SqlExecutionOverride | undefined, sql: string, databaseType?: DatabaseType): boolean {
+  if (typeof source === "string" || tab.objectSource?.objectType !== "PROCEDURE") return false;
+  const fullSql = isSqlExecutionSnapshot(source) ? source.fullSql : tab.sql;
+  const sourceStatements = splitSqlStatementRanges(fullSql, databaseType);
+  const executionStatements = splitSqlStatementRanges(sql, databaseType);
+  // Multiple ranges may include independent statements, even when their text
+  // starts with CREATE PROCEDURE. Preserve the requested script in that case.
+  if (sourceStatements.length !== 1 || executionStatements.length !== 1) return false;
+  const definition = sourceStatements[0].sql.trim();
+  // A source tab can still contain an explicit CALL or an independently edited
+  // query. Only a complete procedure definition represents a routine run.
+  return PROCEDURE_DEFINITION_RE.test(stripSqlComments(definition).trimStart()) && definition === executionStatements[0].sql.trim();
+}
+
 export function useSqlExecution(deps: {
   activeTab: ComputedRef<QueryTab | undefined>;
   activeConnection: ComputedRef<ConnectionConfig | undefined>;
@@ -159,6 +185,7 @@ export function useSqlExecution(deps: {
   blockDangerousRedisCommands?: Ref<boolean>;
   onMissingDatabase?: (tabId?: string) => void;
   requestDangerConfirmation?: (request: SqlExecutionDangerRequest) => Promise<boolean>;
+  requestProcedureExecution?: (request: ProcedureExecutionRequest) => Promise<string | undefined>;
   onExecutionStarted?: (editorViewportRequestId: number) => void;
   onExecutionCancelled?: (editorViewportRequestId: number) => void;
 }) {
@@ -256,6 +283,39 @@ export function useSqlExecution(deps: {
     if (requiresDatabaseSelection(tab, context.connection, sql)) {
       deps.onMissingDatabase?.(context.tabId);
       cancelEditorViewportRequest(editorViewportRequestId);
+      return;
+    }
+    const databaseType = effectiveDatabaseTypeForConnection(context.connection) ?? context.connection?.db_type;
+    if (deps.requestProcedureExecution && isCompleteProcedureSourceExecution(tab, sqlOverride, sql, databaseType)) {
+      const sourceSchema = tab.objectSource!.schema;
+      const tabSchema = tab.schema;
+      const procedureTarget: ProcedureExecutionRequest = {
+        tabId: context.tabId,
+        connectionId: tab.connectionId,
+        database: tab.database,
+        databaseType,
+        schema: sourceSchema || tabSchema,
+        catalog: tab.catalog,
+        routineName: tab.objectSource!.name,
+      };
+      const procedureSql = await deps.requestProcedureExecution(procedureTarget);
+      const currentTab = resolveExecutionTab(context.tabId);
+      if (
+        !procedureSql?.trim() ||
+        !currentTab ||
+        currentTab.connectionId !== procedureTarget.connectionId ||
+        currentTab.database !== procedureTarget.database ||
+        currentTab.catalog !== procedureTarget.catalog ||
+        currentTab.schema !== tabSchema ||
+        currentTab.objectSource?.objectType !== "PROCEDURE" ||
+        currentTab.objectSource.name !== procedureTarget.routineName ||
+        currentTab.objectSource.schema !== sourceSchema
+      ) {
+        cancelEditorViewportRequest(editorViewportRequestId);
+        return;
+      }
+      // Generated CALL/EXEC text has no source offset in the definition editor.
+      await continueExecute(context, procedureSql, undefined, executionOptions);
       return;
     }
     if (supportsSqlTemplateParameters(context.connection, sql) && prepareSqlParameterDialog(sql, sourceOffset, executionOptions)) {

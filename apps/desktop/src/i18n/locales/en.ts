@@ -4065,6 +4065,8 @@ export default {
     parameterDefault: "DEFAULT",
     parameterDefaultHint: "When DEFAULT is checked, MagpieDB omits that argument so the database uses the procedure default.",
     parameterValuePlaceholder: "Enter value",
+    procedureParameterValuesRequired: "Enter parameter values or select NULL / DEFAULT: {names}.",
+    procedureEmptyStringHint: "To pass an empty string, enter '' in the SQL preview.",
     outputOnly: "Output only",
     sqlPreview: "SQL Preview",
     resetSqlPreview: "Reset SQL",

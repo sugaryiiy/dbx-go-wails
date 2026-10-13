@@ -423,6 +423,21 @@ func runStatement(ctx context.Context, q queryRunner, statement, dialect string,
 	if e = rows.Err(); e != nil {
 		return out, e
 	}
+	// A MySQL CALL can keep executing after its first result set. Advance and
+	// drain the remaining sets while the driver's context watcher is active;
+	// Rows.Close disables that watcher before discarding unread packets.
+	if (dialect == "mysql" || dialect == "mariadb") && mainVerb(statement, dialect) == "CALL" {
+		for rows.NextResultSet() {
+			for rows.Next() {
+			}
+			if e = rows.Err(); e != nil {
+				return out, e
+			}
+		}
+		if e = rows.Err(); e != nil {
+			return out, e
+		}
+	}
 	if e = rows.Close(); e != nil {
 		return out, e
 	}

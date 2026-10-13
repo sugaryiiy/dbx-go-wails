@@ -289,6 +289,12 @@ func returnsRows(s string, dialect ...string) bool {
 	switch mainVerb(s, dialect...) {
 	case "SELECT", "VALUES", "SHOW", "EXPLAIN", "PRAGMA", "DESCRIBE", "DESC":
 		return true
+	case "CALL":
+		// MySQL procedures may return a SELECT result. QueryContext also handles
+		// procedures that only return an OK packet as an empty result set.
+		if len(dialect) > 0 && (dialect[0] == "mysql" || dialect[0] == "mariadb") {
+			return true
+		}
 	}
 	return containsSQLWord(s, "RETURNING", dialect...)
 }
