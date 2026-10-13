@@ -61,7 +61,7 @@ export const DATABASE_NAMESPACE_CREATION_MATRIX = {
   exasol: { database: "schema" },
   opengauss: { connection: "database", database: "schema" },
   "oceanbase-oracle": { deferred: "Oracle-mode schemas are users; use a dedicated user workflow" },
-  questdb: { deferred: "single database model in DBX" },
+  questdb: { deferred: "single database model in MagpieDB" },
   gbase: { database: "schema" },
   access: { deferred: "file-backed; create a new connection/file instead" },
   h2: { database: "schema" },

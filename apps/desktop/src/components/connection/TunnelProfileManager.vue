@@ -9,6 +9,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Loader2, Plus, Trash2, FolderOpen } from "@lucide/vue";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isWailsRuntime, openWailsFile } from "@/lib/backend/wailsRuntime";
+import { isGoBackend } from "@/lib/backend/goCapabilities";
+import { validateGoTransportLayers } from "@/lib/connection/goSecureConnections";
+import GoSshHostVerification from "./GoSshHostVerification.vue";
 import { useToast } from "@/composables/useToast";
 import { useTunnelProfileStore } from "@/stores/tunnelProfileStore";
 import { createTunnelProfile, createTunnelProfileTestGuard, tunnelProfileSummary, type TunnelProfileType } from "@/lib/connection/tunnelProfiles";
@@ -20,6 +24,8 @@ import type { SshConfigHostEntry, TunnelProfile } from "@/types/database";
 import { translateBackendError } from "@/i18n/backend-errors";
 
 const { t } = useI18n();
+const goBackend = isGoBackend();
+const nativeFiles = isTauriRuntime() || isWailsRuntime();
 const { toast } = useToast();
 const store = useTunnelProfileStore();
 
@@ -108,6 +114,7 @@ function profileDisplayName(profile: TunnelProfile): string {
 }
 
 function addProfile(type: TunnelProfileType) {
+  if (goBackend && type !== "ssh") return;
   const profile = createTunnelProfile(type);
   draft.value = [...draft.value, profile];
   selectedId.value = profile.id;
@@ -135,6 +142,11 @@ function updateProxyType(value: unknown) {
 }
 
 async function browseSshKeyPath(target?: { key_path?: string } | null) {
+  if (isWailsRuntime()) {
+    const selected = await openWailsFile({ title: "Select SSH Private Key", multiple: false });
+    if (typeof selected === "string" && target) target.key_path = selected;
+    return;
+  }
   if (isTauriRuntime()) {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({
@@ -155,6 +167,7 @@ async function save() {
     // Pasted credentials may carry invisible characters that trim() keeps (#9043).
     const sanitized = cloneProfiles(draft.value);
     sanitized.forEach(stripInvisibleCharactersFromLayer);
+    if (goBackend) sanitized.forEach((profile) => validateGoTransportLayers([profile]));
     await store.saveProfiles(sanitized);
     toast(t("settings.tunnelsSaved"));
   } catch (error) {
@@ -211,11 +224,11 @@ async function testSelected() {
         <Plus class="mr-1.5 h-3.5 w-3.5" />
         {{ t("settings.tunnelsAddSsh") }}
       </Button>
-      <Button type="button" variant="outline" size="sm" @click="addProfile('proxy')">
+      <Button v-if="!goBackend" type="button" variant="outline" size="sm" @click="addProfile('proxy')">
         <Plus class="mr-1.5 h-3.5 w-3.5" />
         {{ t("settings.tunnelsAddProxy") }}
       </Button>
-      <Button type="button" variant="outline" size="sm" @click="addProfile('http_tunnel')">
+      <Button v-if="!goBackend" type="button" variant="outline" size="sm" @click="addProfile('http_tunnel')">
         <Plus class="mr-1.5 h-3.5 w-3.5" />
         {{ t("settings.tunnelsAddHttp") }}
       </Button>
@@ -267,7 +280,7 @@ async function testSelected() {
           <Label class="text-xs">{{ t("connection.sshKeyPath") }}</Label>
           <div class="col-span-3 flex items-center gap-1">
             <Input v-model="selectedSsh.key_path" class="flex-1" placeholder="~/.ssh/id_rsa" />
-            <Tooltip v-if="isTauriRuntime()">
+            <Tooltip v-if="nativeFiles">
               <TooltipTrigger as-child>
                 <Button variant="outline" size="icon" class="h-9 w-9 shrink-0" @click="browseSshKeyPath(selectedSsh)">
                   <FolderOpen class="h-4 w-4" />
@@ -289,7 +302,8 @@ async function testSelected() {
           <Label class="text-xs">{{ t("connection.sshAgentSockPath") }}</Label>
           <Input v-model="selectedSsh.ssh_agent_sock_path" class="col-span-3" :placeholder="t('connection.sshAgentSockPathPlaceholder')" />
         </div>
-        <div class="grid grid-cols-4 items-center gap-4">
+        <GoSshHostVerification v-if="goBackend" :config="selectedSsh" />
+        <div v-if="!goBackend" class="grid grid-cols-4 items-center gap-4">
           <span />
           <label class="col-span-3 flex cursor-pointer items-center gap-2">
             <input v-model="selectedSsh.expose_lan" type="checkbox" class="mr-0" />
@@ -337,7 +351,7 @@ async function testSelected() {
       <template v-else-if="selectedHttp">
         <div class="grid grid-cols-4 items-center gap-4">
           <Label class="text-xs">{{ t("connection.httpTunnelUrl") }}</Label>
-          <Input v-model="selectedHttp.url" class="col-span-3" placeholder="https://dbx.example.com/dbx_tunnel.php" />
+          <Input v-model="selectedHttp.url" class="col-span-3" placeholder="https://database.example.com/dbx_tunnel.php" />
         </div>
         <div class="grid grid-cols-4 items-center gap-4">
           <Label class="text-xs">{{ t("connection.httpTunnelToken") }}</Label>

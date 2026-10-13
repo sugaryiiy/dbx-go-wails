@@ -10,19 +10,25 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/sugaryiiy/dbx-go-wails/internal/agent"
 	_ "modernc.org/sqlite"
 )
 
 var ErrUnsupported = errors.New("not implemented by the Go database engine")
 
 type Config struct {
+	// Raw retains engine-specific connection options for native non-SQL clients.
+	Raw                 map[string]any   `json:"-"`
 	ID                  string           `json:"id"`
 	Name                string           `json:"name"`
 	Type                string           `json:"db_type"`
@@ -53,23 +59,31 @@ type Config struct {
 }
 
 type connection struct {
-	config        Config
-	pools         map[string]*sql.DB
-	unlockedUntil time.Time
+	config            Config
+	pools             map[string]*sql.DB
+	native            nativeDriver
+	life              context.Context
+	cancel            context.CancelFunc
+	unlockedUntil     time.Time
+	maintenanceCancel context.CancelFunc
 }
 type runningQuery struct {
-	cancel       context.CancelFunc
-	connectionID string
+	cancel          context.CancelFunc
+	connectionID    string
+	clientSessionID string
 }
 type Manager struct {
-	mu          sync.RWMutex
-	connections map[string]*connection
-	running     map[string]runningQuery
-	closed      bool
+	mu             sync.RWMutex
+	connections    map[string]*connection
+	sessions       map[string]*querySession
+	resultSessions map[string]*resultSession
+	running        map[string]runningQuery
+	closed         bool
+	agentStore     *agent.Store
 }
 
 func NewManager() *Manager {
-	return &Manager{connections: map[string]*connection{}, running: map[string]runningQuery{}}
+	return &Manager{connections: map[string]*connection{}, running: map[string]runningQuery{}, sessions: map[string]*querySession{}, resultSessions: map[string]*resultSession{}}
 }
 func (m *Manager) Close() error {
 	m.mu.Lock()
@@ -77,11 +91,23 @@ func (m *Manager) Close() error {
 	for _, q := range m.running {
 		q.cancel()
 	}
+	for _, c := range m.connections {
+		if c.maintenanceCancel != nil {
+			c.maintenanceCancel()
+		}
+	}
 	connections := m.connections
 	m.connections = map[string]*connection{}
 	m.mu.Unlock()
+	m.closeQuerySessions("", "", "")
 	var errs []error
 	for _, c := range connections {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		if c.native != nil {
+			errs = append(errs, c.native.Close())
+		}
 		for _, db := range c.pools {
 			errs = append(errs, db.Close())
 		}
@@ -133,20 +159,27 @@ func (c Config) normalized() Config {
 	return c
 }
 func (c Config) validate() error {
+	if usesServiceDriver(c.Type) {
+		return validateServiceConfig(c)
+	}
+	if agent.UsesDatabase(c.Type) {
+		return validateAgentConfig(c)
+	}
 	switch c.Type {
-	case "sqlite", "mysql", "postgres":
+	case "sqlite", "mysql", "postgres", "redis", "mongodb", "clickhouse":
 	default:
 		return unsupported("database type " + c.Type)
 	}
-	for _, t := range c.Transports {
-		if t["enabled"] != false {
-			return unsupported("SSH, proxy, and HTTP transport layers")
-		}
+	if c.Type == "sqlite" && hasEnabledTransports(c) {
+		return unsupported("SSH transport on local SQLite")
 	}
-	if c.SSL || c.CACert != "" || c.ClientCert != "" || c.ClientKey != "" {
-		return unsupported("TLS connection settings")
+	if err := ValidateNetworkTransports(c); err != nil {
+		return err
 	}
-	if c.ConnectionString != "" || c.URLParams != "" {
+	if c.Type == "sqlite" && (c.SSL || c.CACert != "" || c.ClientCert != "" || c.ClientKey != "") {
+		return unsupported("TLS settings on SQLite")
+	}
+	if c.ConnectionString != "" || c.URLParams != "" && c.Type != "mongodb" {
 		return unsupported("custom connection strings and URL parameters")
 	}
 	if c.InitScript != "" {
@@ -174,6 +207,9 @@ func sqlitePath(c Config) string {
 }
 
 func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
+	if usesNativeDriver(c.Type) {
+		return nil, unsupported("database/sql pool for " + c.Type)
+	}
 	if e := c.validate(); e != nil {
 		return nil, e
 	}
@@ -187,6 +223,15 @@ func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 	var driver, dsn string
+	var db *sql.DB
+	var e error
+	var dial func(context.Context, string, string) (net.Conn, error)
+	if c.Type != "sqlite" {
+		dial, e = networkDialer(c)
+		if e != nil {
+			return nil, redact(e, c)
+		}
+	}
 	switch c.Type {
 	case "sqlite":
 		driver = "sqlite"
@@ -197,7 +242,7 @@ func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
 			if e != nil {
 				return nil, e
 			}
-			u := url.URL{Scheme: "file", Path: p}
+			u := sqliteFileURL(p)
 			dsn = u.String()
 		}
 		sep := "?"
@@ -222,7 +267,16 @@ func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
 		cfg.ParseTime = false
 		cfg.InterpolateParams = false
 		cfg.MultiStatements = false
-		dsn = cfg.FormatDSN()
+		cfg.TLS, e = databaseTLSConfig(c)
+		if e != nil {
+			return nil, redact(e, c)
+		}
+		cfg.DialFunc = dial
+		connector, err := mysql.NewConnector(cfg)
+		if err != nil {
+			return nil, redact(err, c)
+		}
+		db = sql.OpenDB(connector)
 	case "postgres":
 		driver = "pgx"
 		port := c.Port
@@ -236,14 +290,36 @@ func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
 		q.Set("connect_timeout", strconv.Itoa(timeout))
 		u.RawQuery = q.Encode()
 		dsn = u.String()
+		pgConfig, err := pgx.ParseConfig(dsn)
+		if err != nil {
+			return nil, redact(err, c)
+		}
+		pgConfig.TLSConfig, e = databaseTLSConfig(c)
+		if e != nil {
+			return nil, redact(e, c)
+		}
+		pgConfig.Fallbacks = nil
+		pgConfig.DialFunc = dial
+		// The last SSH host resolves the database hostname, not the desktop DNS.
+		if hasEnabledTransports(c) {
+			pgConfig.LookupFunc = func(_ context.Context, host string) ([]string, error) { return []string{host}, nil }
+		}
+		db = stdlib.OpenDB(*pgConfig)
 	}
-	db, e := sql.Open(driver, dsn)
+	if db == nil {
+		db, e = sql.Open(driver, dsn)
+	}
 	if e != nil {
 		return nil, redact(e, c)
 	}
 	if c.Type == "sqlite" {
-		db.SetMaxOpenConns(1)
-		db.SetMaxIdleConns(1)
+		if sqlitePath(c) == ":memory:" {
+			db.SetMaxOpenConns(1)
+			db.SetMaxIdleConns(1)
+		} else {
+			db.SetMaxOpenConns(16)
+			db.SetMaxIdleConns(2)
+		}
 	} else {
 		db.SetMaxOpenConns(8)
 		db.SetMaxIdleConns(2)
@@ -263,22 +339,88 @@ type sanitizedError struct {
 
 func (e sanitizedError) Error() string { return e.message }
 func (e sanitizedError) Unwrap() error { return e.cause }
+
+var jaasSecretPattern = regexp.MustCompile(`(?i)(?:password|secret|token)\s*=\s*(?:"((?:\\.|[^"\\])*)"|'([^']*)'|([^\s;]+))`)
+
 func redact(err error, c Config) error {
 	if err == nil {
 		return nil
 	}
-	if c.Password == "" {
+	message := err.Error()
+	secrets := []string{c.Password}
+	var collectSecrets func(any)
+	collectSecrets = func(raw any) {
+		switch value := raw.(type) {
+		case map[string]any:
+			for key, item := range value {
+				name := strings.ToLower(strings.NewReplacer("_", "", "-", "", ".", "").Replace(key))
+				if text, ok := item.(string); ok {
+					if strings.Contains(name, "password") || strings.Contains(name, "secret") || strings.Contains(name, "token") || name == "apikey" || name == "accesskey" || name == "privatekey" || name == "keypassphrase" || name == "value" || name == "key" {
+						secrets = append(secrets, text)
+					}
+					if strings.Contains(name, "jaasconfig") {
+						secrets = append(secrets, text)
+						for _, match := range jaasSecretPattern.FindAllStringSubmatch(text, -1) {
+							for _, secret := range match[1:] {
+								if secret != "" {
+									secrets = append(secrets, secret)
+								}
+								if decoded, decodeErr := strconv.Unquote("\"" + secret + "\""); decodeErr == nil {
+									secrets = append(secrets, decoded)
+								}
+							}
+						}
+					}
+				}
+				collectSecrets(item)
+			}
+		case []any:
+			for _, item := range value {
+				collectSecrets(item)
+			}
+		}
+	}
+	collectSecrets(c.Raw["external_config"])
+	for _, layer := range c.Transports {
+		for _, name := range []string{"password", "key_passphrase", "token", "private_key"} {
+			if value, ok := layer[name].(string); ok {
+				secrets = append(secrets, value)
+			}
+		}
+	}
+	// Replace longer credentials first so one secret cannot partially hide
+	// another and leave a suffix exposed. URLs and forms can encode them.
+	encoded := append([]string{}, secrets...)
+	for _, secret := range secrets {
+		if secret != "" {
+			encoded = append(encoded, url.QueryEscape(secret), url.PathEscape(secret))
+		}
+	}
+	sort.Slice(encoded, func(i, j int) bool { return len(encoded[i]) > len(encoded[j]) })
+	for _, secret := range encoded {
+		if secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		}
+	}
+	if message == err.Error() {
 		return err
 	}
-	if !strings.Contains(err.Error(), c.Password) {
-		return err
-	}
-	return sanitizedError{message: strings.ReplaceAll(err.Error(), c.Password, "[REDACTED]"), cause: err}
+	return sanitizedError{message: message, cause: err}
 }
 func (m *Manager) Connect(ctx context.Context, c Config) error {
 	c = c.normalized()
 	if c.ID == "" {
 		return errors.New("connection id is required")
+	}
+	m.mu.RLock()
+	busy := m.connections[c.ID] != nil && m.connections[c.ID].maintenanceCancel != nil
+	m.mu.RUnlock()
+	if busy {
+		return errors.New("SQLite restore is in progress")
+	}
+	m.closeQuerySessions(c.ID, "", "")
+	if usesNativeDriver(c.Type) {
+		return m.connectNative(ctx, c)
 	}
 	db, e := openDB(ctx, c, c.Database)
 	if e != nil {
@@ -291,6 +433,11 @@ func (m *Manager) Connect(ctx context.Context, c Config) error {
 		return errors.New("database manager is closed")
 	}
 	old := m.connections[c.ID]
+	if old != nil && old.maintenanceCancel != nil {
+		m.mu.Unlock()
+		db.Close()
+		return errors.New("SQLite restore is in progress")
+	}
 	for _, q := range m.running {
 		if q.connectionID == c.ID {
 			q.cancel()
@@ -299,6 +446,12 @@ func (m *Manager) Connect(ctx context.Context, c Config) error {
 	m.connections[c.ID] = &connection{config: c, pools: map[string]*sql.DB{c.Database: db}}
 	m.mu.Unlock()
 	if old != nil {
+		if old.cancel != nil {
+			old.cancel()
+		}
+		if old.native != nil {
+			old.native.Close()
+		}
 		for _, pool := range old.pools {
 			pool.Close()
 		}
@@ -314,6 +467,14 @@ func (m *Manager) pool(ctx context.Context, id, database string) (*sql.DB, Confi
 		return nil, Config{}, false, errors.New("database connection is not open")
 	}
 	cfg := c.config
+	if c.maintenanceCancel != nil {
+		m.mu.RUnlock()
+		return nil, cfg, false, errors.New("SQLite restore is in progress")
+	}
+	if c.native != nil {
+		m.mu.RUnlock()
+		return nil, cfg, false, unsupported("SQL pool operations for " + cfg.Type)
+	}
 	effectiveDatabase := database
 	if cfg.Type == "sqlite" {
 		if database != "" && database != "main" && database != cfg.Database {
@@ -352,6 +513,10 @@ func (m *Manager) pool(ctx context.Context, id, database string) (*sql.DB, Confi
 		db.Close()
 		return nil, cfg, locked, errors.New("connection was closed while connecting")
 	}
+	if c.maintenanceCancel != nil {
+		db.Close()
+		return nil, cfg, locked, errors.New("SQLite restore is in progress")
+	}
 	if existing := c.pools[database]; existing != nil {
 		db.Close()
 		db = existing
@@ -361,11 +526,23 @@ func (m *Manager) pool(ctx context.Context, id, database string) (*sql.DB, Confi
 	return db, cfg, locked, nil
 }
 func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (any, error) {
+	if result, handled, err := m.handleManualTransaction(ctx, path, p); handled {
+		return result, err
+	}
+	if path == "/api/query/execute-script-2pc" || path == "/api/query/execute-schema-diff-deploy" {
+		return m.executeSchemaDeployment(ctx, p)
+	}
+	if result, handled, err := m.handleNative(ctx, path, p); handled {
+		return result, err
+	}
 	switch path {
 	case "/api/connection/test", "/api/connection/test-info":
 		c, e := decodeConfig(p)
 		if e != nil {
 			return nil, e
+		}
+		if usesNativeDriver(c.Type) {
+			return m.testNative(ctx, c, path == "/api/connection/test-info")
 		}
 		db, e := openDB(ctx, c, c.Database)
 		if e != nil {
@@ -394,6 +571,10 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 		id := str(p, "connectionId", "connection_id")
 		m.mu.Lock()
 		c := m.connections[id]
+		if c != nil && c.maintenanceCancel != nil {
+			m.mu.Unlock()
+			return nil, errors.New("SQLite restore is in progress")
+		}
 		delete(m.connections, id)
 		for _, q := range m.running {
 			if q.connectionID == id {
@@ -401,7 +582,14 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 			}
 		}
 		m.mu.Unlock()
+		m.closeQuerySessions(id, "", "")
 		if c != nil {
+			if c.cancel != nil {
+				c.cancel()
+			}
+			if c.native != nil {
+				c.native.Close()
+			}
 			for _, db := range c.pools {
 				db.Close()
 			}
@@ -409,26 +597,30 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 		return nil, nil
 	case "/api/connection/write-unlock", "/api/connection/write-unlock/lock", "/api/connection/write-unlock/state":
 		m.mu.Lock()
-		defer m.mu.Unlock()
 		c := m.connections[str(p, "connectionId", "connection_id")]
 		if c == nil {
+			m.mu.Unlock()
 			return nil, errors.New("database connection is not open")
 		}
 		if path == "/api/connection/write-unlock" {
 			seconds := integer(p, 0, "durationSecs")
 			if seconds < 1 || seconds > 3600 {
+				m.mu.Unlock()
 				return nil, errors.New("unlock duration must be between 1 and 3600 seconds")
 			}
 			c.unlockedUntil = time.Now().Add(time.Duration(seconds) * time.Second)
 		}
 		if strings.HasSuffix(path, "/lock") {
 			c.unlockedUntil = time.Time{}
+			m.mu.Unlock()
+			m.closeQuerySessions(c.config.ID, "", "")
 			return nil, nil
 		}
 		remaining := time.Until(c.unlockedUntil).Milliseconds()
 		if remaining < 0 {
 			remaining = 0
 		}
+		m.mu.Unlock()
 		return map[string]any{"remainingMs": remaining}, nil
 	case "/api/connection/identifier-quote", "/api/connection/database-info", "/api/connection/check-health", "/api/connection/prewarm":
 		db, c, _, e := m.pool(ctx, str(p, "connectionId", "connection_id"), str(p, "database"))
@@ -454,9 +646,13 @@ func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (an
 			q.cancel()
 		}
 		return ok, nil
-	case "/api/query/close-session", "/api/query/close-client-session":
-		// Results are bounded and materialized; this engine never retains a cursor.
-		return false, nil
+	case "/api/query/close-client-session":
+		if str(p, "clientSessionId") == "" {
+			return nil, errors.New("clientSessionId is required")
+		}
+		return m.closeQuerySessions(str(p, "connectionId"), str(p, "database"), str(p, "clientSessionId")), nil
+	case "/api/query/close-session":
+		return m.closeResultSession(str(p, "connectionId"), str(p, "sessionId")), nil
 	case "/api/query/execute", "/api/query/execute-multi", "/api/query/execute-batch", "/api/query/execute-in-transaction", "/api/query/execute-script":
 		return m.execute(ctx, path, p)
 	default:
@@ -488,4 +684,13 @@ func databaseInfo(ctx context.Context, db *sql.DB, c Config) (map[string]any, er
 	}
 	info["productVersion"] = version
 	return info, nil
+}
+
+func hasEnabledTransports(c Config) bool {
+	for _, layer := range c.Transports {
+		if layer["enabled"] != false {
+			return true
+		}
+	}
+	return false
 }

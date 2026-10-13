@@ -4,6 +4,7 @@ import { createApp, defineComponent, h, nextTick, type App } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const backend = vi.hoisted(() => ({
+  go: false,
   documentFindDocuments: vi.fn(),
   documentCountDocuments: vi.fn(),
   cancelQuery: vi.fn(),
@@ -13,6 +14,8 @@ const backend = vi.hoisted(() => ({
   documentDeleteDocument: vi.fn(),
   documentSaveMeilisearchBatch: vi.fn(),
 }));
+
+vi.mock("@/lib/backend/goCapabilities", () => ({ isGoBackend: () => backend.go }));
 
 const dataGrid = vi.hoisted(() => ({
   reload: undefined as (() => Promise<void>) | undefined,
@@ -182,6 +185,7 @@ function documentResult(start: number, count: number, total: number) {
 }
 
 beforeEach(async () => {
+  backend.go = false;
   vi.stubGlobal("localStorage", {
     getItem: () => null,
     setItem: () => undefined,
@@ -214,6 +218,40 @@ afterEach(() => {
 });
 
 describe("DocumentBrowser empty collection refresh entry (issue #8093)", () => {
+  it("rejects unsafe compound ID order before any rekey insert or delete", async () => {
+    backend.go = true;
+    const id = JSON.parse('{"2":"a","1":"b"}');
+    backend.documentFindDocuments.mockResolvedValue({ documents: [{ _id: id, name: "source" }], extended_documents: [{ _id: id, name: "source" }], total: 1, total_is_exact: true });
+    await mountBrowser();
+    const state = (app as any)._instance.setupState;
+    state.selectDoc(0);
+    state.startEdit();
+    state.editJson = JSON.stringify({ _id: "new-id", name: "source" });
+    await state.saveDoc();
+    expect(state.error).toContain("integer-index keys");
+    expect(backend.documentInsertDocument).not.toHaveBeenCalled();
+    expect(backend.documentUpdateDocument).not.toHaveBeenCalled();
+    expect(backend.documentDeleteDocument).not.toHaveBeenCalled();
+  });
+
+  it("Go JSON editing retains numeric BSON IDs and replaces without an unintended rekey", async () => {
+    backend.go = true;
+    const canonical = { _id: { $numberInt: "1" }, amount: { $numberLong: "42" }, ratio: { $numberDouble: "42.0" } };
+    backend.documentFindDocuments.mockResolvedValue({ documents: [{ _id: 1, amount: 42, ratio: 42 }], extended_documents: [canonical], total: 1, total_is_exact: true });
+    backend.documentUpdateDocument.mockResolvedValue(1);
+    await mountBrowser();
+    const state = (app as any)._instance.setupState;
+    state.selectDoc(0);
+    state.startEdit();
+    expect(JSON.parse(state.editJson)).toEqual(canonical);
+    await state.saveDoc();
+    expect(backend.documentUpdateDocument).toHaveBeenCalledOnce();
+    expect(backend.documentUpdateDocument.mock.calls[0]?.[3]).toBe('{"$numberInt":"1"}');
+    expect(JSON.parse(backend.documentUpdateDocument.mock.calls[0]?.[4])).toEqual({ amount: canonical.amount, ratio: canonical.ratio });
+    expect(backend.documentInsertDocument).not.toHaveBeenCalled();
+    expect(backend.documentDeleteDocument).not.toHaveBeenCalled();
+  });
+
   it("still reports non-empty columns for a collection that has never returned any document", async () => {
     backend.documentFindDocuments.mockResolvedValueOnce(documentResult(1, 0, 0));
 

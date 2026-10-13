@@ -330,7 +330,7 @@ defineExpose({ exportMergedRows });
             <td class="border-r px-2 py-1 text-right tabular-nums whitespace-nowrap">{{ affectedRowsText(item) }}</td>
             <td class="border-r px-2 py-1 text-right tabular-nums whitespace-nowrap">{{ durationText(item.durationMs) }}</td>
             <td class="max-w-[360px] border-r px-2 py-1 text-destructive">
-              <span class="line-clamp-3 break-words whitespace-pre-wrap">{{ item.errorMessage ?? "" }}</span>
+              <span class="line-clamp-3 break-words whitespace-pre-wrap">{{ item.errorMessage ? translateBackendError(t, item.errorMessage) : "" }}</span>
             </td>
             <td class="px-2 py-1 text-right whitespace-nowrap">
               <template v-if="isTransactionOpen(item) && item.transaction">

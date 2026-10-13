@@ -1,5 +1,15 @@
 import type { ConnectionConfig } from "@/types/database";
 import { connectionIsEffectivelyReadOnly } from "@/lib/database/readOnlyWriteAccess";
+import { isGoBackend } from "@/lib/backend/goCapabilities";
+
+/** Import/export jobs, GridFS, cloning and administration are still being migrated. */
+export function supportsMongoAdvancedOperations(): boolean {
+  return !isGoBackend();
+}
+
+export function mongoAdvancedUnavailableMessage(locale: string): string {
+  return locale.startsWith("zh") ? "Go 版暂不支持 MongoDB 文件导入、备份恢复、GridFS 和集合克隆。" : "MongoDB file import, backup/restore, GridFS and collection cloning are not available in the Go version yet.";
+}
 
 type MongoConnectionProfile = Pick<ConnectionConfig, "db_type" | "driver_profile" | "read_only"> & Partial<Pick<ConnectionConfig, "id">>;
 

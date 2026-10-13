@@ -19,7 +19,7 @@ pnpm dev:wails      # debug build + native launch (no hot reload)
 pnpm build:wails    # native desktop application
 ```
 
-On macOS the application is generated at `build/wails/bin/DBX Go.app`.
+On macOS the application is generated at `build/wails/bin/DBX Go.app` (macOS 13+).
 The development web UI defaults to `http://127.0.0.1:5174`; its generated local
 login password is in `.dbx-dev/go/login-password`. `DBX_GO_PORT`,
 `DBX_GO_BACKEND_PORT` and `DBX_GO_DATA_DIR` customize the development instance.
@@ -41,6 +41,12 @@ separate from both Rust DBX and any concurrently running Go instance.
 
 - Native SQLite, MySQL/MariaDB and PostgreSQL connections, queries, transactions,
   cancellation, timeouts and basic metadata.
+- Native Redis key browsing and basic type editing, MongoDB documents/aggregation/indexes,
+  and ClickHouse HTTP SQL/metadata, with TLS and SSH. See [engine support](docs/go-native-engines.md).
+- Verified TLS/mTLS, SSH chains of up to four hops and encrypted shared tunnel
+  profiles. See [secure connections](docs/go-secure-connections.md).
+- PostgreSQL table/view/materialized-view structural DDL, ordered index metadata
+  and composite foreign keys, with explicit limits for advanced objects.
 - Connection profiles, saved SQL, query history, settings and layouts persisted
   with encrypted application state and exclusive process locking.
 - A persistent SQLite sample database for trying the workbench.
@@ -48,13 +54,27 @@ separate from both Rust DBX and any concurrently running Go instance.
   query export, progress and cancellation.
 - Primary-key-based data grid edits, copied INSERT/UPDATE SQL and rollback SQL.
 - Native Wails window controls, text clipboard, file dialogs and export saving.
+- Go MCP with 13 database tools, Streamable HTTP/stdio, connection permissions,
+  bearer tokens and query auditing. See [MCP setup](docs/go-mcp.md).
 
-SQLite has real integration and HTTP round-trip coverage. MySQL/PostgreSQL have
-not yet been validated against live servers. Import/export currently caps a job
-at 100,000 rows and 32 MiB; exports execute read-only queries. TLS/SSH, additional
-database engines, advanced schema editing, AI/MCP, plugins and releases remain
-in migration. Unsupported backend operations return an explicit error.
+SQLite has real integration and HTTP round-trip coverage. Live MySQL 8.4 and
+PostgreSQL 17 passed direct TLS and one/two-hop SSH tests for CRUD, rollback,
+read-only enforcement and cancellation, plus MCP TLS checks. PostgreSQL structural
+DDL was rebuilt and verified; mTLS also has protocol integration coverage.
+Redis 7.4, MongoDB 8 and ClickHouse 25.8 passed live TLS/SSH and read-only tests.
+Import/export currently caps a job
+at 100,000 rows and 32 MiB; exports execute read-only queries. Additional database
+engines, advanced schema editing, AI, plugins and releases remain in migration.
+Unsupported backend operations return an explicit error.
 See [MIGRATION.md](MIGRATION.md) for limitations and validation evidence.
+
+## MCP
+
+Open Settings → MCP, apply connection/tool permissions, then enable the service.
+Desktop defaults to `http://127.0.0.1:5225/mcp`; Web uses `/mcp` on its existing
+server. Copy a client template and supply the generated bearer token.
+`pnpm build:mcp` builds the `dbx-mcp-go` stdio CLI; use `--url` while DBX is running.
+See [the MCP guide](docs/go-mcp.md) for configuration and supported SQL limits.
 
 ## Verify
 

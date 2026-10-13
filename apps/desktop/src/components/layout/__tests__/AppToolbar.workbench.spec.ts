@@ -61,7 +61,7 @@ async function mount(overrides: Record<string, unknown> = {}) {
     toolWindowsInRail: false,
     ...overrides,
   });
-  const events = { find: vi.fn(), connection: vi.fn(), query: vi.fn(), transfer: vi.fn(), drivers: vi.fn(), library: vi.fn(), history: vi.fn(), files: vi.fn(), ai: vi.fn() };
+  const events = { find: vi.fn(), connection: vi.fn(), query: vi.fn(), transfer: vi.fn(), drivers: vi.fn(), library: vi.fn(), history: vi.fn(), files: vi.fn(), ai: vi.fn(), sidebar: vi.fn(), expand: vi.fn() };
   const pinia = createPinia();
   const settings = useSettingsStore(pinia);
   settings.editorSettings.shortcuts.findAction = "Mod+Shift+K";
@@ -81,6 +81,8 @@ async function mount(overrides: Record<string, unknown> = {}) {
         onToggleHistory: events.history,
         onToggleSqlFilePanel: events.files,
         onToggleAi: events.ai,
+        onToggleSidebar: events.sidebar,
+        onExpandSidebar: events.expand,
       }),
   });
   app.use(pinia);
@@ -167,6 +169,61 @@ describe("IDE command toolbar", () => {
     props.toolWindowsInRail = false;
     await nextTick();
     expect(host.querySelector("[data-sql-library-trigger]")).toBeTruthy();
+  });
+
+  it("toggles the unified resource navigation in both states while keeping global search available", async () => {
+    const { host, props, events } = await mount({ unifiedNavigation: true });
+    const toggle = host.querySelector<HTMLButtonElement>("[data-workbench-sidebar-toggle]")!;
+    expect(toggle.getAttribute("aria-label")).toBe(en.sidebar.collapse);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    toggle.click();
+    expect(events.sidebar).toHaveBeenCalledOnce();
+    expect(events.expand).not.toHaveBeenCalled();
+    props.showSidebarExpand = true;
+    await nextTick();
+    expect(toggle.getAttribute("aria-label")).toBe(en.sidebar.expand);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.click();
+    expect(events.sidebar).toHaveBeenCalledTimes(2);
+    expect(button(host, en.toolbar.newConnection)).toBeUndefined();
+    expect(button(host, en.toolbar.newQuery)).toBeUndefined();
+    expect(host.querySelector(".workbench-legacy-windows")).toBeNull();
+    button(host, en.actionSearch.title).click();
+    expect(events.find).toHaveBeenCalledOnce();
+  });
+
+  it("keeps AI independently accessible in unified mode and prioritizes confirmations over active task counts", async () => {
+    const { host, props, settings, events } = await mount({ unifiedNavigation: true, activeAiRunCount: 12, awaitingAiRunCount: 2 });
+    settings.editorSettings.toolbarItems.ai = false;
+    settings.editorSettings.toolbarItems.history = false;
+    settings.editorSettings.toolbarItems.sqlLibrary = false;
+    await nextTick();
+    const ai = host.querySelector<HTMLButtonElement>("[data-workbench-ai-toggle]")!;
+    expect(ai.getAttribute("aria-pressed")).toBe("false");
+    const badge = ai.querySelector(".workbench-count")!;
+    expect(badge.textContent).toBe("2");
+    expect(badge.classList.contains("is-awaiting")).toBe(true);
+    expect(badge.getAttribute("title")).toContain("awaiting your confirmation");
+    ai.click();
+    expect(events.ai).toHaveBeenCalledOnce();
+    props.showAiPanel = true;
+    props.awaitingAiRunCount = 0;
+    await nextTick();
+    expect(ai.getAttribute("aria-pressed")).toBe("true");
+    expect(badge.textContent).toBe("9+");
+    expect(badge.classList.contains("is-awaiting")).toBe(false);
+    await openTools(host);
+    expect(menuItem("AI")).toBeUndefined();
+    expect(menuItem(en.history.title)).toBeUndefined();
+    expect(menuItem(en.sqlLibrary.title)).toBeUndefined();
+    expect(menuItem(en.toolbar.driverManager)).toBeTruthy();
+  });
+
+  it("retains the legacy expand-only sidebar action outside unified mode", async () => {
+    const { host, events } = await mount({ showSidebarExpand: true });
+    button(host, en.sidebar.expand).click();
+    expect(events.expand).toHaveBeenCalledOnce();
+    expect(events.sidebar).not.toHaveBeenCalled();
   });
 
   it.each([

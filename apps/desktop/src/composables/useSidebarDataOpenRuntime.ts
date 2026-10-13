@@ -1,3 +1,4 @@
+import { influxTableQueryOptions } from "@/lib/table/influxTableQuery";
 import { nextTick } from "vue";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useQueryStore } from "@/stores/queryStore";
@@ -377,6 +378,7 @@ export function useSidebarDataOpenRuntime() {
         databaseType: effectiveDbType,
         driverProfile: config?.driver_profile,
         serverVersion: connectionStore.getConfig(node.connectionId)?.database_info?.productVersion,
+        ...influxTableQueryOptions(config, columns),
         identifierQuote: connectionStore.connectionIdentifierQuote?.(node.connectionId),
         schema: tableSchema,
         database: node.database,

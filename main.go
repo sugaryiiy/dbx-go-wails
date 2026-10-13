@@ -32,7 +32,7 @@ func main() {
 	defer backend.Close()
 	app := &App{backend: backend}
 	err = wails.Run(&options.App{
-		Title: "DBX · Go", Width: 1440, Height: 900, MinWidth: 960, MinHeight: 640,
+		Title: "喜鹊 · MagpieDB", Width: 1440, Height: 900, MinWidth: 960, MinHeight: 640,
 		// Keep the operating system's native title bar until custom titlebar and
 		// detached-window parity are available on every desktop platform.
 		Frameless:   false,

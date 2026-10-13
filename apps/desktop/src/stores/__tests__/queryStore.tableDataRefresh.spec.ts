@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   closeClientConnectionSession: vi.fn(),
   closeQuerySession: vi.fn(),
   executeMulti: vi.fn(),
+  executeQuery: vi.fn(),
+  buildDataGridCountSql: vi.fn(),
   getConnectionConfig: vi.fn(),
   saveOpenTabsState: vi.fn(),
   loadTableMetadata: vi.fn(),
@@ -17,6 +19,8 @@ vi.mock("@/lib/backend/api", () => ({
   closeClientConnectionSession: mocks.closeClientConnectionSession,
   closeQuerySession: mocks.closeQuerySession,
   executeMulti: mocks.executeMulti,
+  executeQuery: mocks.executeQuery,
+  buildDataGridCountSql: mocks.buildDataGridCountSql,
   saveOpenTabsState: mocks.saveOpenTabsState,
 }));
 
@@ -75,6 +79,21 @@ describe("queryStore table data refresh", () => {
         execution_time_ms: 1,
       },
     ]);
+  });
+
+  it("builds native InfluxDB counts on demand when automatic counting is disabled", async () => {
+    mocks.getConnectionConfig.mockReturnValue({ id: "influx-1", db_type: "influxdb", database: "db", external_config: { version: "2" }, query_timeout_secs: 30 });
+    mocks.buildDataGridCountSql.mockResolvedValue('from(bucket: "db") |> count()');
+    mocks.executeQuery.mockResolvedValue({ columns: ["cnt"], rows: [["42"]], affected_rows: 1, execution_time_ms: 1 });
+    const { useQueryStore } = await import("@/stores/queryStore");
+    const store = useQueryStore();
+    const id = store.createTab("influx-1", "db", "machine_data", "data");
+    store.setTableMeta(id, { database: "db", tableName: "machine_data", columns: [{ name: "dev_name [tag]", data_type: "string", is_nullable: true, column_default: null, is_primary_key: true, extra: "influxdb:tag:dev_name" }], primaryKeys: [] });
+    const tab = store.tabs.find((item) => item.id === id)!;
+    tab.whereInput = "dev_no = '1'";
+    expect(await store.countTabResultRows(id)).toBe(42);
+    expect(mocks.buildDataGridCountSql).toHaveBeenCalledWith({ databaseType: "influxdb", influxDbVersion: "2", influxDbTagRenames: { dev_name: "dev_name [tag]" }, database: "db", tableName: "machine_data", whereInput: "dev_no = '1'", injectDefaultTimeSeriesWhere: true });
+    expect(mocks.executeQuery).toHaveBeenCalledWith("influx-1", "db", 'from(bucket: "db") |> count()', undefined, undefined, expect.objectContaining({ maxRows: 1 }));
   });
 
   it("loads a duplicated data tab with its filter, database sort and page without sharing results", async () => {

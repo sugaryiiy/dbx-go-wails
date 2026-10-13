@@ -26,8 +26,9 @@ const props = withDefaults(
     connectionPolicies: readonly McpConnectionPolicy[];
     disabled?: boolean;
     busy?: boolean;
+    sqliteOnlySelectedScope?: boolean;
   }>(),
-  { disabled: false, busy: false },
+  { disabled: false, busy: false, sqliteOnlySelectedScope: false },
 );
 
 const emit = defineEmits<{
@@ -47,6 +48,8 @@ const databasePage = ref(1);
 
 const scopedConnections = computed(() => (props.allowedConnectionIds === null ? [...props.connections] : props.connections.filter((connection) => props.allowedConnectionIds?.includes(connection.id))));
 const selectedConnection = computed(() => scopedConnections.value.find((connection) => connection.id === selectedConnectionId.value));
+const supportsSelectedScope = computed(() => !props.sqliteOnlySelectedScope || selectedConnection.value?.db_type === "sqlite");
+const availableScopes = computed(() => (supportsSelectedScope.value ? DATABASE_SCOPES : DATABASE_SCOPES.filter((scope) => scope !== "selected")));
 const selectedPolicy = computed(() => props.connectionPolicies.find((policy) => policy.connectionId === selectedConnectionId.value));
 const selectedScope = computed<DatabaseScope>(() => selectedPolicy.value?.databaseScope ?? "all");
 const selectedDatabases = computed(() => selectedPolicy.value?.allowedDatabases ?? []);
@@ -103,6 +106,7 @@ function updateSelectedPolicy(patch: Partial<McpConnectionPolicy>) {
 }
 
 function setScope(scope: DatabaseScope) {
+  if (props.disabled || props.busy || (scope === "selected" && !supportsSelectedScope.value)) return;
   if (scope !== "selected" && selectedDatabasePolicies.value.length > 0 && !window.confirm(t("settings.mcpDatabaseScopeClearsPermissionExceptions"))) return;
   updateSelectedPolicy({
     databaseScope: scope,
@@ -114,9 +118,10 @@ function setScope(scope: DatabaseScope) {
 function onScopeKeydown(event: KeyboardEvent, scope: DatabaseScope) {
   if (props.disabled || props.busy || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
-  const currentIndex = DATABASE_SCOPES.indexOf(scope);
-  const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? DATABASE_SCOPES.length - 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (currentIndex - 1 + DATABASE_SCOPES.length) % DATABASE_SCOPES.length : (currentIndex + 1) % DATABASE_SCOPES.length;
-  const nextScope = DATABASE_SCOPES[nextIndex];
+  const scopes = availableScopes.value;
+  const currentIndex = scopes.indexOf(scope);
+  const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? scopes.length - 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (currentIndex - 1 + scopes.length) % scopes.length : (currentIndex + 1) % scopes.length;
+  const nextScope = scopes[nextIndex];
   const group = event.currentTarget instanceof HTMLElement ? event.currentTarget.closest<HTMLElement>('[role="radiogroup"]') : null;
   group?.querySelector<HTMLElement>(`[data-database-scope="${nextScope}"]`)?.focus();
   setScope(nextScope);
@@ -298,7 +303,7 @@ watch(databasePageCount, () => setDatabasePage(databasePage.value));
             :class="selectedScope === 'selected' ? 'dbx-choice-selected' : ''"
             :aria-checked="selectedScope === 'selected'"
             :tabindex="selectedScope === 'selected' ? 0 : -1"
-            :disabled="disabled || busy"
+            :disabled="disabled || busy || !supportsSelectedScope"
             @click="setScope('selected')"
             @keydown="onScopeKeydown($event, 'selected')"
           >

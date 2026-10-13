@@ -11,6 +11,7 @@ import type { JdbcPluginStatus } from "@/types/database";
 import { pluginSourceChange, type MarketplacePluginListing } from "@/lib/plugins/pluginMarketplace";
 import { mcpUpdateAvailability } from "@/lib/mcp/mcpUpdateStatus";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { UPSTREAM_APP_UPDATES_ENABLED } from "@/lib/app/distribution";
 import { isUpdatePreviewMockEnabled } from "@/lib/updates/updatePreviewMock";
 import { canDownloadAndInstallUpdate, isNewerRemoteVersion, resolveReleaseTagUrl } from "@/composables/useAppUpdater";
 import type { ComponentUpdateCategory } from "@/composables/useComponentUpdates";
@@ -166,7 +167,7 @@ function handleOpenChange(nextOpen: boolean) {
 }
 
 function openExternalUrl(url: string) {
-  if (!url) return;
+  if (!UPSTREAM_APP_UPDATES_ENABLED || !url) return;
   if (isTauriRuntime()) {
     import("@tauri-apps/plugin-shell").then(({ open }) => open(url));
   } else {
@@ -175,6 +176,7 @@ function openExternalUrl(url: string) {
 }
 
 async function loadOlderReleases() {
+  if (!UPSTREAM_APP_UPDATES_ENABLED) return;
   const requestId = historyRequest.begin();
   historyLoading.value = true;
   historyError.value = "";
@@ -362,7 +364,7 @@ watch(
             <p v-if="updateDownloaded && !isInstallingUpdate" class="mt-3">{{ t("updates.downloadedReady", { version: updateInfo?.latest_version }) }}</p>
             <p v-if="updateCheckFailed && updateInfo?.update_available" role="alert" class="mt-3 text-destructive">{{ updateCheckMessage }}</p>
 
-            <div v-if="olderReleases.length || historyError" data-update-history class="mt-4 border-t pt-3">
+            <div v-if="UPSTREAM_APP_UPDATES_ENABLED && (olderReleases.length || historyError)" data-update-history class="mt-4 border-t pt-3">
               <button type="button" class="flex w-full items-center justify-between gap-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground" @click="toggleOlderReleases">
                 <span>{{ t("updates.historyTab") }}</span>
                 <ChevronDown class="h-3.5 w-3.5 shrink-0 transition-transform" :class="olderReleasesExpanded ? 'rotate-180' : ''" />
@@ -463,7 +465,7 @@ watch(
           </template>
         </div>
 
-        <DialogFooter v-if="selectedTab === 'app'" data-update-footer class="mx-0 mb-0 min-w-0 rounded-none border-t px-[22px] pb-2.5 pt-2.5 sm:items-center sm:justify-end">
+        <DialogFooter v-if="selectedTab === 'app' && UPSTREAM_APP_UPDATES_ENABLED" data-update-footer class="mx-0 mb-0 min-w-0 rounded-none border-t px-[22px] pb-2.5 pt-2.5 sm:items-center sm:justify-end">
           <div v-if="!updateReady && !isInstallingUpdate && !updateDownloaded && (updateInfo?.update_available || updateCheckFailed)" class="flex items-center gap-1.5 self-start sm:mr-auto sm:self-center">
             <span class="text-xs text-muted-foreground">{{ t("updates.source") }}</span>
             <Select :model-value="updateDownloadSource" :disabled="checkingUpdates || isIgnoringUpdate" @update:model-value="(value) => value && emit('change-download-source', value as UpdateDownloadSource)">
@@ -508,7 +510,7 @@ watch(
           </template>
         </DialogFooter>
 
-        <DialogFooter v-else data-update-footer class="mx-0 mb-0 min-w-0 rounded-none border-t px-[22px] pb-2.5 pt-2.5 sm:items-center sm:justify-end">
+        <DialogFooter v-else-if="selectedCategory" data-update-footer class="mx-0 mb-0 min-w-0 rounded-none border-t px-[22px] pb-2.5 pt-2.5 sm:items-center sm:justify-end">
           <template v-if="isAnyComponentUpdating">
             <Button variant="ghost" class="shrink-0" @click="handleOpenChange(false)">{{ t("updates.updateInBackground") }}</Button>
             <Button class="shrink-0" disabled>

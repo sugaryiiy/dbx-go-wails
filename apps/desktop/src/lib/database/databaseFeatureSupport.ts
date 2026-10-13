@@ -1,3 +1,4 @@
+import { supportsBackendTableEditing } from "@/lib/backend/goCapabilities";
 import type { CatalogInfo, ConnectionConfig, DatabaseType, TreeNodeType } from "@/types/database";
 import { supportsDatabaseFeature } from "@/lib/database/databaseDriverManifest";
 import { canEditTableStructure } from "@/lib/table/tableStructureCapabilities";
@@ -208,11 +209,11 @@ export function supportsDatabaseSearch(dbType?: DatabaseType): boolean {
 }
 
 export function supportsTableImport(dbType?: DatabaseType): boolean {
-  return supportsDatabaseFeature(dbType, "tableImport");
+  return supportsBackendTableEditing(dbType) && supportsDatabaseFeature(dbType, "tableImport");
 }
 
 export function supportsTableStructureEditing(dbType?: DatabaseType): boolean {
-  return supportsDatabaseFeature(dbType, "tableStructureEdit") && canEditTableStructure(dbType);
+  return supportsBackendTableEditing(dbType) && supportsDatabaseFeature(dbType, "tableStructureEdit") && canEditTableStructure(dbType);
 }
 
 export function supportsDatabaseCreation(dbType?: DatabaseType): boolean {

@@ -1,0 +1,4009 @@
+{
+  "note": "Static interface inventory only. A declaration does not prove implementation, database capability, safety, frontend parity or acceptance. Dynamic families require manual review.",
+  "legacyRouteCount": 671,
+  "declarationFoundCount": 257,
+  "declarationMissingCount": 414,
+  "inventory": [
+    {
+      "route": "/api/agents/cancel-install",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/cancel-upgrade-all",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/download-cache",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/import-driver",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/import-jar",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/agents/import-offline",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/install",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/installed",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/installed-local",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/installed/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/agents/invalidate-registry-cache",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/java-runtime",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/agents/reinstall-jre",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/runtime",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/runtime/restart",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/runtime/stop",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/storage-usage",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/uninstall",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/uninstall-jre",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/update-blockers",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/agents/upgrade-all",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/agents.go"
+      ]
+    },
+    {
+      "route": "/api/ai/agent-stream",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai.go",
+        "internal/server/ai_jobs.go"
+      ]
+    },
+    {
+      "route": "/api/ai/cancel-stream",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai.go"
+      ]
+    },
+    {
+      "route": "/api/ai/chat-selection",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/complete",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai.go"
+      ]
+    },
+    {
+      "route": "/api/ai/config",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/config-item",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/config/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/ai/configs",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/conversation",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/conversation/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/ai/conversations",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/default-config",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/model-effort",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai.go"
+      ]
+    },
+    {
+      "route": "/api/ai/models",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai.go"
+      ]
+    },
+    {
+      "route": "/api/ai/plugin-tools/plugins",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/plugin-tools/preview",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/ai/provider-config",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/provider-configs",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/ai/stream",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai.go",
+        "internal/server/ai_jobs.go"
+      ]
+    },
+    {
+      "route": "/api/ai/test-connection",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai.go"
+      ]
+    },
+    {
+      "route": "/api/ai/tool-approval",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/ai_storage.go"
+      ]
+    },
+    {
+      "route": "/api/app-settings/config/decrypt",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/history-retention-limit",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/max-agent-turns",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/max-retries",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/mcp-history-retention-cleanup",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/mcp-history-retention-limit",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/mcp-http",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/mcp-http-status",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/mcp-http/rotate-token",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/mcp-policy",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/pinned-tree-node-ids",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/app-settings/sql-file-upload-max-bytes",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/auth/change-password",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/auth/check",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/server.go"
+      ]
+    },
+    {
+      "route": "/api/auth/login",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/server.go"
+      ]
+    },
+    {
+      "route": "/api/auth/logout",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/server.go"
+      ]
+    },
+    {
+      "route": "/api/auth/setup",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/changelog",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/catalog/local",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/download",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/forget-token",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/inspect",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/retry-legacy-cleanup",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/save-id",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/save-token",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/settings",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/test",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/token-status",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/snippet/upload",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/download",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/forget-password",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/forget-sync-secrets-passphrase",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/inspect",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/password-status",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/save-password",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/save-sync-secrets-preference",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/sync-secrets-status",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/test",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/cloud-sync/webdav/upload",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/check-health",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse.go",
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/connection/close-database",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/connect",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go",
+        "internal/database/native.go",
+        "internal/server/mcp_tools.go",
+        "internal/server/tunnels.go"
+      ]
+    },
+    {
+      "route": "/api/connection/database-info",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse.go",
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/connection/database-info/save",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/connection/disconnect",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go",
+        "internal/database/native.go",
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/connection/final-proxy-port",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/forget-session-credential",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/connection/identifier-quote",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse.go",
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/connection/is-open",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/connection/list",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go",
+        "internal/server/server.go"
+      ]
+    },
+    {
+      "route": "/api/connection/liveness-events",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/mcp/add",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/mcp/duplicate",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/mcp/remove",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/prewarm",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse.go",
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/connection/replace-nacos-session-credential",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/salesforce-oauth-browser-authorize",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/salesforce-oauth-device-poll",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/salesforce-oauth-device-start",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/salesforce-oauth-password-login",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/salesforce-oauth-refresh",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/connection/save",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/connection/session-credential-status",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/connection/test",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go",
+        "internal/database/native.go",
+        "internal/server/tunnels.go"
+      ]
+    },
+    {
+      "route": "/api/connection/test-info",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go",
+        "internal/database/native.go",
+        "internal/server/tunnels.go"
+      ]
+    },
+    {
+      "route": "/api/connection/test-ssh-tunnel",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/tunnels.go"
+      ]
+    },
+    {
+      "route": "/api/connection/write-unlock",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/connection/write-unlock/lock",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/connection/write-unlock/state",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/consul/acl/apply",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/acl/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/acl/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/acl/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/acl/references",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/acl/token/clone",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/acl/token/self",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/check/deregister",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/check/register",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/check/ttl",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/checks",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/members",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/metrics",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/self",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/service",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/service/deregister",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/service/maintenance",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/service/register",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/agent/services",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/blocking-query",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/cancel-blocking",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/cancel-search",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/capabilities",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/catalog/datacenters",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/catalog/node-services",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/catalog/nodes",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/catalog/service-nodes",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/catalog/services",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/coordinate/nodes",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/delete-prefix-execute",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/delete-prefix-preview",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/domain-watch",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/enterprise/apply",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/enterprise/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/enterprise/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/enterprise/impact",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/enterprise/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/event/fire",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/event/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/export-bundle",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/health/checks",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/health/node",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/health/service",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/health/state",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/import-execute",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/import-preview",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/list-prefix",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/list-recursive",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/lock/acquire",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/lock/release",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/config/apply",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/config/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/config/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/config/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/discovery-chain",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/exported-services/apply",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/exported-services/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/intentions/check",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/intentions/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/intentions/delete-exact",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/intentions/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/intentions/get-exact",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/intentions/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/intentions/match",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/intentions/upsert",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/peerings/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/peerings/establish",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/peerings/generate-token",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/peerings/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/mesh/peerings/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/operator/autopilot/update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/operator/keyring/write",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/operator/license/write",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/operator/raft/remove",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/operator/raft/transfer",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/operator/read",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/operator/snapshot/generate",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/operator/snapshot/restore",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/prepared-query/create",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/prepared-query/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/prepared-query/execute",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/prepared-query/explain",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/prepared-query/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/prepared-query/read",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/prepared-query/update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/put",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/rename-key",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/search",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/search-progress",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/session",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/session/create",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/session/destroy",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/session/destroy-impact",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/session/keys",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/session/renew",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/sessions",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/sessions/node",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/status/leader",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/status/peers",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/consul/txn",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/data-compare/build-sync-plan",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/data_compare.go"
+      ]
+    },
+    {
+      "route": "/api/data-compare/prepare",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/data_compare.go"
+      ]
+    },
+    {
+      "route": "/api/data-compare/prepare-from-tables",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/data_compare.go"
+      ]
+    },
+    {
+      "route": "/api/data-compare/prepare-missing-target",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/data_compare.go"
+      ]
+    },
+    {
+      "route": "/api/database-backups",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/database-backups/{parameter}/files/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/database-backups/{parameter}/files/{parameter}/restore",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/dialect/data-types",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/docs/annotations/apply",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/cache_annotations.go"
+      ]
+    },
+    {
+      "route": "/api/docs/annotations/load",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/cache_annotations.go"
+      ]
+    },
+    {
+      "route": "/api/docs/annotations/save",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/cache_annotations.go"
+      ]
+    },
+    {
+      "route": "/api/docs/export",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/docs.go"
+      ]
+    },
+    {
+      "route": "/api/docs/snapshot",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/docs.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/count-documents",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go",
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/create-gridfs-bucket",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/delete-document",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go",
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/delete-gridfs-bucket",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/delete-gridfs-file",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/download-gridfs-file",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/dynamodb-describe-table",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/elasticsearch-count-documents",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/elasticsearch/documents/delete-all",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/elasticsearch/index-metadata",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/find-documents",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/insert-document",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go",
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/list-collections",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/list-databases",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/list-gridfs-buckets",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/list-gridfs-files",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/documents/delete-all",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/documents/fetch",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/documents/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/index/create",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/index/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/keys/create",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/keys/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/keys/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/keys/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/keys/update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/overview",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/search",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/settings/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/settings/update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/stats",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/system/overview",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/tasks/cancel",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/tasks/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/tasks/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/meilisearch/tasks/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/save-meilisearch-batch",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/document-store/update-document",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go",
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/document-store/upload-gridfs-file",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/auth/call",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/compact",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/defrag",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/history",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/lease/call",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/lease/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/list-prefix",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/preflight",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/put",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/rename",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/status",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/supports-ttl",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/watch/poll",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/watch/start",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/etcd/watch/stop",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/database",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/database/cancel",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/database/download/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/database/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/query-result",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/import_export.go"
+      ]
+    },
+    {
+      "route": "/api/export/query-result-html",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/query-result-json",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/query-result-markdown",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/query-result/cancel",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/import_export.go"
+      ]
+    },
+    {
+      "route": "/api/export/query-result/download/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/query-result/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/table",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/table/cancel",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/table/download/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/export/table/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/hbase/create-table",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/hbase/delete-row",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/hbase/delete-table",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/hbase/get-row",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/hbase/put-row",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/hbase/scan-rows",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/hbase/table-schema",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/history",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go",
+        "internal/server/history.go"
+      ]
+    },
+    {
+      "route": "/api/history/options",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/history.go"
+      ]
+    },
+    {
+      "route": "/api/history/save",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/history.go"
+      ]
+    },
+    {
+      "route": "/api/history/search",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/history.go"
+      ]
+    },
+    {
+      "route": "/api/history/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/import/cancel",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/import_export.go"
+      ]
+    },
+    {
+      "route": "/api/import/execute",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/import_export.go"
+      ]
+    },
+    {
+      "route": "/api/import/preview",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/import_export.go"
+      ]
+    },
+    {
+      "route": "/api/import/preview-source",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/import/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/import/source/release",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/import_export.go"
+      ]
+    },
+    {
+      "route": "/api/jdbc/drivers",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/drivers/local",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/drivers/local/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/drivers/maven",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/drivers/maven/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/drivers/prestosql",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/drivers/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/plugin/install",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/plugin/install-local",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/plugin/status",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/jdbc/plugin/uninstall",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/layout/sidebar",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/layout/table-vgroups",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/layout/table-vgroups/connection/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/migration/cleanup-backups",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/migration/retry",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/migration/start",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/migration/status",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/aggregate-documents",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/bulk-write",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/clone-collection",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/collection-stats",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_indexes.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/count-documents",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/create-database",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/create-index",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_indexes.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/create-user",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/delete-document",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/delete-documents",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/distinct",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/drop-collection",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/drop-database",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/drop-indexes",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_indexes.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/dump/cancel",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/dump/catalog",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/dump/export",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/dump/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/dump/restore",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/dump/source",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/dump/source/release",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/dump/source/upload",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/dump/upload-limit",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/explain-find",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/export",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/export/cancel",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/export/download/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/export/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/find-documents",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/find-one",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/find-one-and-delete",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/find-one-and-replace",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/find-one-and-update",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/import/cancel",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/import/execute",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/import/preview",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/import/preview-source",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/import/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/import/source/release",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/insert-document",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/insert-documents",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/list-collections",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/list-databases",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/list-index-specs",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_indexes.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/parse-shell-command",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/rename-collection",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/replace-document",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go",
+        "internal/database/mongo_documents.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/run-command",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/server-version",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/update-document",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/mongo/update-documents",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/mongo.go"
+      ]
+    },
+    {
+      "route": "/api/mongo/vector-collection-detail",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/access/operations/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/access/operations/retry",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/access/operations/start",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/access/operations/undo",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/access/snapshot",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/copy/apply",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/copy/preview",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/export",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/history/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/history/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/history/rollback",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/import/apply",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/import/preview",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/publish",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/search",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/configs/search/cancel",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/dashboard",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/instances/deregister",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/instances/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/instances/register",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/instances/update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/namespaces/create",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/namespaces/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/namespaces/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/namespaces/update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/raw",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/rnacos-console/captcha",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/rnacos-console/login",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/roles/assign",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/roles/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/roles/remove",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/services/create",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/services/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/services/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/services/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/services/update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/sidebar/snapshot",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/test-connection",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/users/create",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/users/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/users/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/nacos/users/update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/plugin/data/grant",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins_data.go"
+      ]
+    },
+    {
+      "route": "/api/plugin/data/grants",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins_data.go"
+      ]
+    },
+    {
+      "route": "/api/plugin/data/query",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins_data.go"
+      ]
+    },
+    {
+      "route": "/api/plugin/table-metadata",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins_data.go"
+      ]
+    },
+    {
+      "route": "/api/plugins",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/activate",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/active",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/binary",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/connection-action",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/events",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/filesystem/create-directory",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/plugins/filesystem/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/plugins/filesystem/list",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/plugins/filesystem/read",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/plugins/filesystem/rename",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/plugins/filesystem/write",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/plugins/install",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/invoke",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/marketplace/catalogs",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/marketplace/install",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/notify",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/repositories",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/repositories/remove",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/repositories/save",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/rollback",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/stop",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/trusted-keys",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/trusted-keys/remove",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/trusted-keys/save",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/uninstall",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins.go"
+      ]
+    },
+    {
+      "route": "/api/plugins/{parameter}/assets/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/plugins/{parameter}/ui",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/plugins/{parameter}/ui/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/prompt-templates",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/prompt.go"
+      ]
+    },
+    {
+      "route": "/api/prompt-templates/global-instructions",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/prompt.go"
+      ]
+    },
+    {
+      "route": "/api/prompt-templates/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/analyze-editability",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/analyze-sql-references",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/apply-sqlite-table-structure-change",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_sqlite.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-copy-table-data-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-create-database-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-create-partitioned-table-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_sql.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-create-schema-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-create-table-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_sql.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-create-user-sql",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/build-data-grid-column-distinct-values-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_grid.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-data-grid-column-value-filter-condition",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_grid.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-data-grid-column-values-filter-condition",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_grid.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-data-grid-conditional-update-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_grid.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-data-grid-context-filter-condition",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_grid.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-data-grid-copy-insert-statement",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/grid_sql.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-data-grid-copy-update-statements",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/grid_sql.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-data-grid-count-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_grid.go",
+        "internal/server/sql_builders.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-database-search-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_grid.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-database-sql-export",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_export.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-dml-change-preview-sql",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/build-drop-database-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-drop-object-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-drop-schema-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-drop-table-child-object-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-drop-table-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-dropped-file-preview-sql",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/build-duckdb-attach-database-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-duplicate-table-structure-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-editable-object-source",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-empty-table-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-executable-object-source-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-executable-object-source-statements",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-explain-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_explain.go",
+        "internal/server/ai_agent.go",
+        "internal/server/plugins_data.go",
+        "internal/server/sql_builders.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-export-insert-statements",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_export.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-export-sql-insert",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_export.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-hive-table-properties-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_grid.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-mysql-auto-increment-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-rename-database-preflight-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-rename-database-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-rename-object-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-routine-rename-object-source-statements",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-search-result-where",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_grid.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-single-column-alter-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_sql.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-sorted-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/sql_builders.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-sqlite-attach-database-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-table-owner-change-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_sql.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-table-partition-operation-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_sql.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-table-select-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/sql_builders.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-table-structure-change-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_sql.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-truncate-table-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-update-database-properties-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-vacuum-table-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/build-view-ddl-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_admin.go"
+      ]
+    },
+    {
+      "route": "/api/query/cancel",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/query/cancel-conditional-update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/close-client-session",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/agent.go",
+        "internal/database/manager.go",
+        "internal/database/native.go",
+        "internal/server/sql_file.go"
+      ]
+    },
+    {
+      "route": "/api/query/close-session",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/agent.go",
+        "internal/database/manager.go",
+        "internal/database/native.go"
+      ]
+    },
+    {
+      "route": "/api/query/data-grid-extractor-openapi.json",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/execute",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/agent.go",
+        "internal/database/clickhouse.go",
+        "internal/database/deploy.go",
+        "internal/database/manager.go",
+        "internal/database/manual_transactions.go",
+        "internal/database/query.go",
+        "internal/database/service_search.go",
+        "internal/server/ai_agent.go",
+        "internal/server/import_export.go",
+        "internal/server/mcp_tools.go",
+        "internal/server/plugins_data.go",
+        "internal/server/sql_file.go"
+      ]
+    },
+    {
+      "route": "/api/query/execute-batch",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/agent.go",
+        "internal/database/clickhouse.go",
+        "internal/database/manager.go"
+      ]
+    },
+    {
+      "route": "/api/query/execute-conditional-update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/execute-in-transaction",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/agent.go",
+        "internal/database/clickhouse.go",
+        "internal/database/deploy.go",
+        "internal/database/manager.go",
+        "internal/database/query.go"
+      ]
+    },
+    {
+      "route": "/api/query/execute-multi",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/agent.go",
+        "internal/database/clickhouse.go",
+        "internal/database/manager.go",
+        "internal/database/manual_transactions.go",
+        "internal/database/query.go",
+        "internal/server/mcp_tools.go"
+      ]
+    },
+    {
+      "route": "/api/query/execute-script",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/agent.go",
+        "internal/database/clickhouse.go",
+        "internal/database/manager.go"
+      ]
+    },
+    {
+      "route": "/api/query/execute-script-2pc",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/manager.go"
+      ]
+    },
+    {
+      "route": "/api/query/extract-data-grid-selection",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/query/find-statement-at-cursor",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/sql_builders.go"
+      ]
+    },
+    {
+      "route": "/api/query/get-explain-info",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/agent.go",
+        "internal/server/advanced_explain.go"
+      ]
+    },
+    {
+      "route": "/api/query/plugin-estimated-plan",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins_data.go"
+      ]
+    },
+    {
+      "route": "/api/query/plugin-plan-capabilities",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/plugins_data.go"
+      ]
+    },
+    {
+      "route": "/api/query/prepare-data-grid-save",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/grid_sql.go"
+      ]
+    },
+    {
+      "route": "/api/query/prepare-pagination-plan",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/sql_builders.go"
+      ]
+    },
+    {
+      "route": "/api/query/preview-sqlite-table-structure-change",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/advanced_sqlite.go"
+      ]
+    },
+    {
+      "route": "/api/redis/check-json-module",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/cluster-master-nodes",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/delete-key",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/delete-keys",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/delete-keys-by-pattern",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/execute-command",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/flush-db",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/get-raw-value",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/get-stream-consumers",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/get-stream-entries",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/get-stream-groups",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/get-stream-pending",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/get-ttl",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/get-value",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/hash-del",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/hash-field-set-expire-at",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/hash-field-set-ttl",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/hash-field-update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/hash-set",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/json-set",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/list-databases",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/list-push",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/list-remove",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/list-set",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/load-more",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/pubsub/publish",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/pubsub/ws",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/rename-key",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/scan-keys",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/scan-keys-batch",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/scan-values",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/set-add",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/set-expire-at",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/set-keys-expire-at",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/set-keys-ttl",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/set-remove",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/set-string",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/set-ttl",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/slowlog-get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/stream-add",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/zadd",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/redis/zset-update",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/salesforce/current-user",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/saved-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/saved-sql/folders",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/saved-sql/folders/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/saved-sql/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema-diff/generate-sync-plan",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/schema_tools.go"
+      ]
+    },
+    {
+      "route": "/api/schema-diff/generate-sync-sql",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/schema_tools.go"
+      ]
+    },
+    {
+      "route": "/api/schema-diff/prepare",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/schema_tools.go"
+      ]
+    },
+    {
+      "route": "/api/schema/all-columns",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go"
+      ]
+    },
+    {
+      "route": "/api/schema/available-extensions",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/cache",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/cache.go"
+      ]
+    },
+    {
+      "route": "/api/schema/cache-prefix",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/cache.go"
+      ]
+    },
+    {
+      "route": "/api/schema/columns",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/mongo.go",
+        "internal/database/schema.go",
+        "internal/server/ai_agent.go",
+        "internal/server/mcp_tools.go",
+        "internal/server/plugins_data.go"
+      ]
+    },
+    {
+      "route": "/api/schema/completion-assistant",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/completion-objects",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go"
+      ]
+    },
+    {
+      "route": "/api/schema/constraints",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/custom-type-details",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/data-types",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go"
+      ]
+    },
+    {
+      "route": "/api/schema/database-metadata",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go"
+      ]
+    },
+    {
+      "route": "/api/schema/database-storage",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/databases",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/mongo.go",
+        "internal/database/schema.go",
+        "internal/database/service_search.go",
+        "internal/server/mcp_tools.go"
+      ]
+    },
+    {
+      "route": "/api/schema/ddl",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go",
+        "internal/server/ai_agent.go",
+        "internal/server/mcp_tools.go"
+      ]
+    },
+    {
+      "route": "/api/schema/doris/catalog-databases",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/doris/catalogs",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/event-info",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/event-triggers",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/extensions",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/foreign-keys",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go"
+      ]
+    },
+    {
+      "route": "/api/schema/functions",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/indexes",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/mongo.go",
+        "internal/database/mongo_schema.go",
+        "internal/database/schema.go",
+        "internal/server/mcp_tools.go"
+      ]
+    },
+    {
+      "route": "/api/schema/invalid-indexes",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/mysql/auto-increment",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/object-source",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go"
+      ]
+    },
+    {
+      "route": "/api/schema/object-statistics",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/objects",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go",
+        "internal/database/service_search.go"
+      ]
+    },
+    {
+      "route": "/api/schema/owners",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/partitions",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/reference-key-columns",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go"
+      ]
+    },
+    {
+      "route": "/api/schema/reference-keys",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go"
+      ]
+    },
+    {
+      "route": "/api/schema/rules",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/schemas",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go",
+        "internal/database/service_search.go",
+        "internal/server/mcp_tools.go"
+      ]
+    },
+    {
+      "route": "/api/schema/sequences",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/sqlserver/column-metadata",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/sqlserver/completion-context",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/sqlserver/linked-server-catalogs",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/sqlserver/linked-server-schemas",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/sqlserver/linked-server-tables",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/sqlserver/linked-servers",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/schema/subpartitions",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/table-owner",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/table-partition-status",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema.go",
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/table-partitioning",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/schema_advanced.go"
+      ]
+    },
+    {
+      "route": "/api/schema/tables",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go",
+        "internal/database/service_search.go",
+        "internal/server/ai_agent.go",
+        "internal/server/mcp_tools.go"
+      ]
+    },
+    {
+      "route": "/api/schema/triggers",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/database/clickhouse_schema.go",
+        "internal/database/schema.go"
+      ]
+    },
+    {
+      "route": "/api/schema/xugu/tablespaces",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/sql-file/cancel",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/sql_file.go"
+      ]
+    },
+    {
+      "route": "/api/sql-file/execute",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/sql_file.go"
+      ]
+    },
+    {
+      "route": "/api/sql-file/preview",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/sql_file.go"
+      ]
+    },
+    {
+      "route": "/api/sql-file/preview/release",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/sql_file.go"
+      ]
+    },
+    {
+      "route": "/api/sql-file/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/sql-file/tables",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/sql_file.go"
+      ]
+    },
+    {
+      "route": "/api/ssh/config-hosts",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/tunnels.go"
+      ]
+    },
+    {
+      "route": "/api/ssh/prompts",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/ssh/prompts/pending",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/tunnels.go"
+      ]
+    },
+    {
+      "route": "/api/ssh/prompts/resolve",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/system/fonts",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/tab-runtime-cache",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/cache.go"
+      ]
+    },
+    {
+      "route": "/api/tab-runtime-cache/metadata",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/cache.go"
+      ]
+    },
+    {
+      "route": "/api/tab-runtime-cache/owner",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/cache.go"
+      ]
+    },
+    {
+      "route": "/api/tab-runtime-cache/prune",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/cache.go"
+      ]
+    },
+    {
+      "route": "/api/transfer/cancel",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/transfer/ownership-preview",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/transfer/progress/{parameter}",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/transfer/sort-tables-by-fk",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/transfer/start",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/tunnel-profiles/list",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/tunnels.go"
+      ]
+    },
+    {
+      "route": "/api/tunnel-profiles/save",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/tunnels.go"
+      ]
+    },
+    {
+      "route": "/api/tunnel-profiles/test",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/tunnels.go"
+      ]
+    },
+    {
+      "route": "/api/update/check",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/vector/collection-detail",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/vector/drop-collection",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/vector/drop-database",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/vector/rename-collection",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/version",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/workspace/sample",
+      "declarationFound": true,
+      "goFiles": [
+        "internal/server/application.go"
+      ]
+    },
+    {
+      "route": "/api/zookeeper/delete",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/zookeeper/get",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/zookeeper/list-prefix",
+      "declarationFound": false,
+      "goFiles": []
+    },
+    {
+      "route": "/api/zookeeper/put",
+      "declarationFound": false,
+      "goFiles": []
+    }
+  ]
+}

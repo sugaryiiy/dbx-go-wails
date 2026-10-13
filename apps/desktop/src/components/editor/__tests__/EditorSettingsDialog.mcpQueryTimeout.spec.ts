@@ -75,11 +75,29 @@ describe("EditorSettingsDialog MCP query timeout debounce runtime", () => {
     expectStagedTimeout(harness, null);
   });
 
-  it("zero input stages 0 (no limit)", () => {
-    const harness = createMcpQueryTimeoutHarness({ source: dialogSource, input: { value: "" }, policyQueryTimeoutSecs: null });
+  it("legacy Tauri still supports unlimited queries", () => {
+    const harness = createMcpQueryTimeoutHarness({ source: dialogSource, input: { value: "" }, policyQueryTimeoutSecs: null, legacyTauri: true });
     harness.onMcpQueryTimeoutInput(nativeInputEvent("0"));
     harness.stageMcpQueryTimeoutDraft();
     expectStagedTimeout(harness, 0);
+  });
+
+  it.each(["0", "-1", "86401", "1.5"])("Go rejects timeout %s without changing the draft", (value) => {
+    const toast = vi.fn();
+    const input = { value };
+    const harness = createMcpQueryTimeoutHarness({ source: dialogSource, input, policyQueryTimeoutSecs: 300, toast });
+    harness.onMcpQueryTimeoutInput(nativeInputEvent(value));
+    harness.stageMcpQueryTimeoutDraft();
+    expectStagedTimeout(harness, 300);
+    expect(input.value).toBe("300");
+    expect(toast).toHaveBeenCalledWith("Enter 1–86400 seconds", 5000);
+  });
+
+  it.each(["1", "86400"])("Go accepts boundary timeout %s", (value) => {
+    const harness = createMcpQueryTimeoutHarness({ source: dialogSource, input: { value }, policyQueryTimeoutSecs: null });
+    harness.onMcpQueryTimeoutInput(nativeInputEvent(value));
+    harness.stageMcpQueryTimeoutDraft();
+    expectStagedTimeout(harness, Number(value));
   });
 
   it("invalid input cancels the pending stage and reverts the field", () => {

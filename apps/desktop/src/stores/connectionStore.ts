@@ -170,7 +170,7 @@ import { formatMongoIndexKeyPattern, inferMongoCompletionFields, type MongoCompl
 import type { SoqlCompletionField, SoqlCompletionObject } from "@/lib/soql/soqlCompletion";
 import type { SalesforceCurrentUser } from "@/types/salesforce";
 import { flattenElasticsearchMappingFields, type ElasticsearchCompletionField } from "@/lib/elasticsearch/elasticsearchCompletion";
-import { isMongoLegacyDriverProfile } from "@/lib/mongo/mongoCapabilities";
+import { isMongoLegacyDriverProfile, supportsMongoAdvancedOperations } from "@/lib/mongo/mongoCapabilities";
 import { mongoCollectionKindFromNode, toMongoCollectionKind, visibleMongoCollections } from "@/lib/sidebar/mongoCollectionMutation";
 import { completionSchemasFromTree, completionTablesFromTree } from "@/lib/metadata/completionTreeIndex";
 import { kvRootNodeLabel } from "@/lib/kv/kvRootPresentation";
@@ -5032,7 +5032,7 @@ export const useConnectionStore = defineStore("connection", () => {
         await startDisconnectRequest(config.id);
         setConnectionError(config.id, PLUGIN_CONFIG_RECONNECT_PASSWORD_MESSAGE);
       } catch (error) {
-        setConnectionError(config.id, `Plugin settings were saved, but DBX could not disconnect the stale plugin connection: ${connectionErrorMessage(error)}. Reconnect manually to apply the new settings.`);
+        setConnectionError(config.id, `Plugin settings were saved, but MagpieDB could not disconnect the stale plugin connection: ${connectionErrorMessage(error)}. Reconnect manually to apply the new settings.`);
       }
       return;
     }
@@ -6029,14 +6029,18 @@ export const useConnectionStore = defineStore("connection", () => {
           isExpanded: false,
         }));
       const children = [
-        {
-          id: `${nodeId}:__gridfs`,
-          label: i18n.global.t("tree.gridfs"),
-          type: "mongo-gridfs" as const,
-          connectionId,
-          database,
-          isExpanded: false,
-        },
+        ...(supportsMongoAdvancedOperations()
+          ? [
+              {
+                id: `${nodeId}:__gridfs`,
+                label: i18n.global.t("tree.gridfs"),
+                type: "mongo-gridfs" as const,
+                connectionId,
+                database,
+                isExpanded: false,
+              },
+            ]
+          : []),
         ...collectionChildren,
       ];
       const targetNode = treeNodeLoadTarget(load);

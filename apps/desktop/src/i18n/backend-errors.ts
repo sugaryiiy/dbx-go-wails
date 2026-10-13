@@ -1,5 +1,6 @@
 import { GENERIC_TRANSPORT_FAILURE_MESSAGE, LEGACY_BACKEND_ERROR_CODE, normalizeBackendError, sanitizeBackendErrorMessage, type BackendError } from "@/lib/backend/errorUtils";
 import { PHOENIX_DRIVER_NOT_INSTALLED_ERROR, PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR } from "@/lib/database/phoenixConnection";
+import { translateCommonBackendError } from "./common-backend-errors";
 
 /**
  * Minimal shape of a translate function, satisfied by both `useI18n().t` inside
@@ -86,6 +87,7 @@ const exactMessageKeys: Record<string, string> = {
   "Plugin update blocked by active operations. Please wait for them to finish.": "pluginPlatform.updateBlockedByOperations",
   [PHOENIX_DRIVER_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
   [PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
+  "DBX JDBC plugin is not installed. Install Apache Phoenix JDBC from the Driver Manager, then retry.": "connection.phoenixDriverNotInstalled",
 };
 
 const patterns: [RegExp, string][] = [
@@ -212,7 +214,7 @@ function usableFallbackDetail(value: unknown): string | undefined {
  * not one the UI knows how to phrase.
  */
 function translateKnownMessage(t: BackendErrorTranslate, message: string): string | null {
-  const exactKey = exactMessageKeys[message];
+  const exactKey = Object.prototype.hasOwnProperty.call(exactMessageKeys, message) ? exactMessageKeys[message] : undefined;
   if (exactKey) return t(exactKey);
 
   const tagged = message.match(/^\[([A-Za-z][A-Za-z0-9]+)\]\s*([\s\S]*)$/);
@@ -241,7 +243,7 @@ function translateKnownMessage(t: BackendErrorTranslate, message: string): strin
       return t(key);
     }
   }
-  return null;
+  return translateCommonBackendError(t, message);
 }
 
 function translateStructuredBackendError(t: BackendErrorTranslate, error: BackendError, fallbackDetail?: unknown): string {

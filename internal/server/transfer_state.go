@@ -19,9 +19,10 @@ const maxTransferBytes = 32 << 20
 const maxTransferRows = 100000
 
 type importSource struct {
-	columns []string
-	rows    [][]any
-	created time.Time
+	columns   []string
+	rows      [][]any
+	created   time.Time
+	sql, name string
 }
 type transferJob struct {
 	mu                    sync.Mutex

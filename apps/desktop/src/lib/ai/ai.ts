@@ -368,7 +368,7 @@ export function buildSystemPrompt(action: AiAction, context: AiContext, mode: Ai
   if (context.databaseType === "plugin") {
     const isZh = isChineseLocale(currentLocale());
     return [
-      isZh ? "你是 DBX 中连接插件的实时 Agent。" : "You are DBX's live Agent for a connected plugin.",
+      isZh ? "你是 喜鹊 中连接插件的实时 Agent。" : "You are MagpieDB's live Agent for a connected plugin.",
       isZh
         ? "必须优先调用当前插件提供的工具获取实时数据，再基于工具结果回答。不要把历史上下文快照当作当前状态，也不要在没有工具结果时声称已经查询过资源。"
         : "Always call the connected plugin's tools first to obtain live data. Do not treat historical context snapshots as current state or claim that a resource was queried without tool results.",
@@ -443,7 +443,7 @@ function buildRedisSystemPrompt(context: AiContext, mode: AiAssistantMode, custo
   const resultPreview = context.lastResultPreview ? `\nLast result preview:\n${context.lastResultPreview}\n` : "";
   const lastError = context.lastError ? `\nLast error:\n${context.lastError}\n` : "";
   const lines: string[] = [
-    isZh ? "你是 DBX 内置的 Redis 数据库助手。用中文回复。" : "You are DBX's built-in Redis database assistant. Reply in English.",
+    isZh ? "你是 喜鹊 内置的 Redis 数据库助手。用中文回复。" : "You are MagpieDB's built-in Redis database assistant. Reply in English.",
     isZh ? "精确、保守，并严格使用 Redis 命令语义；不要生成 SQL。" : "Be precise and conservative, follow Redis command semantics, and do not generate SQL.",
     ...buildModePromptLines(mode, isZh, context.databaseType, cliProvider),
     ...buildRichContentPromptLines(isZh),
@@ -481,10 +481,10 @@ function buildSolrSystemPrompt(context: AiContext, mode: AiAssistantMode, custom
   const lastError = context.lastError ? `\nLast error:\n${context.lastError}\n` : "";
   const referencedSqlFiles = formatReferencedSqlFiles(context);
   const lines: string[] = [
-    isZh ? "你是 DBX 内置的 Apache Solr 助手。用中文回复。" : "You are DBX's built-in Apache Solr assistant. Reply in English.",
+    isZh ? "你是 喜鹊 内置的 Apache Solr 助手。用中文回复。" : "You are MagpieDB's built-in Apache Solr assistant. Reply in English.",
     isZh
-      ? 'Solr 不使用 SQL。查询一律使用 DBX REST 控制台格式：首行 `METHOD /path`，后续可选 JSON 请求体，例如 `GET /{core}/select?q=*:*&rows=20`、`POST /{core}/query` 加 {"query":"..."} JSON body。路径可以省略开头的 /solr 段，wt=json 会自动补上。'
-      : 'Solr does not use SQL. Always express queries in the DBX REST-console format: `METHOD /path` on the first line plus an optional JSON body, e.g. `GET /{core}/select?q=*:*&rows=20` or `POST /{core}/query` with a body such as {"query":"..."}. A leading /solr path segment may be omitted and wt=json is appended automatically.',
+      ? 'Solr 不使用 SQL。查询一律使用 喜鹊 REST 控制台格式：首行 `METHOD /path`，后续可选 JSON 请求体，例如 `GET /{core}/select?q=*:*&rows=20`、`POST /{core}/query` 加 {"query":"..."} JSON body。路径可以省略开头的 /solr 段，wt=json 会自动补上。'
+      : 'Solr does not use SQL. Always express queries in the MagpieDB REST-console format: `METHOD /path` on the first line plus an optional JSON body, e.g. `GET /{core}/select?q=*:*&rows=20` or `POST /{core}/query` with a body such as {"query":"..."}. A leading /solr path segment may be omitted and wt=json is appended automatically.',
     isZh
       ? "Schema 上下文中每个条目是一个 Solr core（类型标注为 CORE）；其下列出的是 schema fields，标记为 PK 的字段是该 core 的唯一键（uniqueKey）。用真实字段名构造 q/fq 参数，不要编造不存在的字段。"
       : "Each entry in the schema context is a Solr core (marked CORE); the listed items are its schema fields and the PK-flagged field is the core's uniqueKey. Build q/fq parameters from real field names and never invent fields that are not listed.",
@@ -522,7 +522,7 @@ function buildSolrSystemPrompt(context: AiContext, mode: AiAssistantMode, custom
 
 function buildBasePromptLines(isZh: boolean): string[] {
   return [
-    isZh ? "你是 DBX 内置的数据库助手。用中文回复。" : "You are DBX's built-in database assistant. Reply in English.",
+    isZh ? "你是 喜鹊 内置的数据库助手。用中文回复。" : "You are MagpieDB's built-in database assistant. Reply in English.",
     isZh ? "精确、保守，根据当前数据库方言生成 SQL。" : "Be precise, conservative, and adapt SQL to the active database dialect.",
     isZh ? "严格使用当前数据库方言；标识符引用、分页、日期函数、字符串拼接、LIMIT/TOP/OFFSET 语法必须匹配数据库类型。" : "Strictly use the active database dialect; identifier quoting, pagination, date functions, string concatenation, and LIMIT/TOP/OFFSET syntax must match the database type.",
     isZh
@@ -553,7 +553,7 @@ function buildVectorSystemPrompt(context: AiContext, mode: AiAssistantMode, cust
   const lastError = context.lastError ? `\nLast error:\n${context.lastError}\n` : "";
   const referencedSqlFiles = formatReferencedSqlFiles(context);
   const lines: string[] = [
-    isZh ? `你是 DBX 内置的向量数据库助手。当前连接的是 ${dbLabel(context.databaseType)} 数据库。用中文回复。` : `You are DBX's vector database assistant. Connected to ${dbLabel(context.databaseType)}. Reply in English.`,
+    isZh ? `你是 喜鹊 内置的向量数据库助手。当前连接的是 ${dbLabel(context.databaseType)} 数据库。用中文回复。` : `You are MagpieDB's vector database assistant. Connected to ${dbLabel(context.databaseType)}. Reply in English.`,
     isZh ? "数据存储在集合（collections）中，每条记录包含唯一标识及可选的元数据负载（payload/metadata）。" : "Data is stored in collections. Each record has a unique identifier and optional metadata payload.",
     ...buildVectorModePromptLines(context, mode, isZh),
     ...buildRichContentPromptLines(isZh),
@@ -663,13 +663,13 @@ function buildModePromptLines(mode: AiAssistantMode, isZh: boolean, databaseType
           ? "禁止不经确认直接执行 Redis 写命令；如果安全执行条件不满足，先说明原因，再给出只读替代方案。"
           : "Never execute Redis write commands without confirmation. If safe execution requirements are not met, explain why and provide a read-only alternative."
         : isZh
-          ? "execute_redis_command 只放行 DBX 判定为只读的命令；SET、DEL、EXPIRE、EVAL 等写命令一定会被拒绝，不要反复重试。用户要求改动数据时，把完整命令放在一个 ```redis 代码块里输出，并说明需要用户在 Redis 控制台中执行（控制台会先确认）。"
-          : "execute_redis_command runs only commands DBX classifies as read-only; writes such as SET, DEL, EXPIRE or EVAL are always refused, so do not retry them. When the user asks for a change, put the exact command in one ```redis fenced code block and tell them to run it in the Redis console, which asks for confirmation first.";
+          ? "execute_redis_command 只放行 喜鹊 判定为只读的命令；SET、DEL、EXPIRE、EVAL 等写命令一定会被拒绝，不要反复重试。用户要求改动数据时，把完整命令放在一个 ```redis 代码块里输出，并说明需要用户在 Redis 控制台中执行（控制台会先确认）。"
+          : "execute_redis_command runs only commands MagpieDB classifies as read-only; writes such as SET, DEL, EXPIRE or EVAL are always refused, so do not retry them. When the user asks for a change, put the exact command in one ```redis fenced code block and tell them to run it in the Redis console, which asks for confirmation first.";
       return [
         openLine,
         isZh
-          ? "逻辑数据库必须通过工具的 db 参数选择；当前或已选择数据库也会由 DBX 作用域自动限定。禁止执行 SELECT 命令切换数据库。"
-          : "Select the logical database with the tool's db argument; DBX also scopes the current or selected database automatically. Never send the SELECT command to switch databases.",
+          ? "逻辑数据库必须通过工具的 db 参数选择；当前或已选择数据库也会由 喜鹊 作用域自动限定。禁止执行 SELECT 命令切换数据库。"
+          : "Select the logical database with the tool's db argument; MagpieDB also scopes the current or selected database automatically. Never send the SELECT command to switch databases.",
         isZh ? "遍历或匹配键必须使用 SCAN，不要使用 KEYS；需要完整结果时，使用返回的游标继续扫描直到游标为 0。" : "Use SCAN, not KEYS, to enumerate or match keys. For complete results, continue with the returned cursor until it reaches 0.",
         currentTimeGuidance,
         writeLine,
@@ -705,7 +705,7 @@ function buildModePromptLines(mode: AiAssistantMode, isZh: boolean, databaseType
           ? "你处于 Solr Agent 模式。你有以下工具可用：list_tables（列出 Solr cores）、get_columns（返回某个 core 的 schema fields）、execute_query、get_current_time。"
           : "You are in Solr Agent mode. You have the following tools available: list_tables (lists Solr cores), get_columns (returns a core's schema fields), execute_query, get_current_time.",
         isZh
-          ? "execute_query 接受 DBX REST 控制台格式的 Solr 请求而不是 SQL：首行 `METHOD /path`，后续可选 JSON body，例如 `GET /{core}/select?q=*:*&rows=20` 或 `POST /{core}/query` 加 JSON body。用户提出数据查询意图时，必须调用该工具获取真实结果后再回答。"
+          ? "execute_query 接受 MagpieDB REST 控制台格式的 Solr 请求而不是 SQL：首行 `METHOD /path`，后续可选 JSON body，例如 `GET /{core}/select?q=*:*&rows=20` 或 `POST /{core}/query` 加 JSON body。用户提出数据查询意图时，必须调用该工具获取真实结果后再回答。"
           : "execute_query accepts Solr REST-console requests, not SQL: `METHOD /path` on the first line plus an optional JSON body, for example `GET /{core}/select?q=*:*&rows=20` or `POST /{core}/query` with a JSON body. For data queries, call the tool and answer from its actual results.",
         currentTimeGuidance,
         isZh

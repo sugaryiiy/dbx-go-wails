@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { currentLocale } from "@/i18n";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { UPSTREAM_APP_UPDATES_ENABLED } from "@/lib/app/distribution";
 import { formatAiInlineMarkdownFragment, handleAiMarkdownLinkClick } from "@/lib/ai/aiMarkdown";
 import { changelogLangFromLocale, changelogReleaseUrl, changelogWebsiteUrl, createLatestRequestGuard, fetchChangelog, type ChangelogItem, type ChangelogLang, type ChangelogRelease } from "@/lib/app/changelog";
 
@@ -74,6 +75,7 @@ function formatReleaseDate(dateStr: string) {
 }
 
 function openExternalUrl(url: string) {
+  if (!UPSTREAM_APP_UPDATES_ENABLED || !url) return;
   if (isTauriRuntime()) {
     import("@tauri-apps/plugin-shell").then(({ open }) => open(url));
   } else {
@@ -135,7 +137,7 @@ watch(changelogLang, (lang) => {
 </script>
 
 <template>
-  <div class="rounded-lg border p-4">
+  <div v-if="UPSTREAM_APP_UPDATES_ENABLED" class="rounded-lg border p-4">
     <div class="settings-about-section-header flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div class="min-w-0 space-y-1">
         <Label>{{ t("settings.changelogTitle") }}</Label>

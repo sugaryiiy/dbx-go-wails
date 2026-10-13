@@ -33,12 +33,13 @@ describe("user skills transport contract", () => {
     expect(production).not.toContain("OpenOptions");
   });
 
-  it("keeps the Web transport explicitly unsupported without adding HTTP routes", () => {
+  it("uses the internal HTTP transport only inside Wails and keeps Rust Web unsupported", () => {
     for (const operation of ["listUserSkills", "readUserSkills"]) {
       const body = functionBody(http, operation);
       expect(body).toContain("only available in the desktop app");
-      expect(body).not.toContain("post(");
-      expect(body).not.toContain("fetch(");
+      expect(body).toContain("if (!isWailsRuntime()) throw");
+      expect(body.indexOf("if (!isWailsRuntime())")).toBeLessThan(body.indexOf("return post("));
+      expect(body).toContain('return post("/api/ai/skills/');
     }
     expect(webRegistry).not.toContain("user_skills");
     expect(webRegistry).not.toContain("list_user_skills");

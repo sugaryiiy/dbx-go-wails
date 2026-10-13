@@ -113,6 +113,11 @@ export interface DataGridColumnDistinctValuesSqlOptions {
 
 export interface DataGridCountSqlOptions {
   databaseType?: DatabaseType;
+  influxDbVersion?: "1" | "2";
+  influxDbTagRenames?: Record<string, string>;
+  influxDbFieldRenames?: Record<string, string>;
+  serverVersion?: string;
+  injectDefaultTimeSeriesWhere?: boolean;
   identifierQuote?: string;
   catalog?: string;
   database?: string;

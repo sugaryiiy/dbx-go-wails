@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { createApp, defineComponent, h, nextTick, type App } from "vue";
+import { createApp, defineComponent, h, nextTick, ref, type App, type Ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import QueryHistory from "../QueryHistory.vue";
 
@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   guard: vi.fn(),
   toast: vi.fn(),
   close: vi.fn(),
+  setHistoryPanelActive: vi.fn(),
   entry: {
     id: "history-1",
     connection_id: "ob-test",
@@ -39,7 +40,7 @@ vi.mock("@/stores/historyStore", () => ({
     loading: false,
     error: "",
     nextCursor: null,
-    setHistoryPanelActive: vi.fn(),
+    setHistoryPanelActive: mocks.setHistoryPanelActive,
     loadConnectionOptions: vi.fn().mockResolvedValue(undefined),
     search: mocks.search,
     add: mocks.add,
@@ -83,10 +84,10 @@ function button(key: string) {
   if (!found) throw new Error(`Missing button ${key}`);
   return found;
 }
-async function openRollback(manual = true) {
+async function openRollback(manual = true, active?: Ref<boolean>) {
   const root = document.createElement("div");
   document.body.append(root);
-  app = createApp(QueryHistory, { onClose: mocks.close });
+  app = active ? createApp({ render: () => h(QueryHistory, { active: active.value, onClose: mocks.close }) }) : createApp(QueryHistory, { onClose: mocks.close });
   app.mount(root);
   await nextTick();
   const row = [...document.querySelectorAll<HTMLDivElement>("div")].find((item) => item.textContent?.includes(mocks.entry.sql) && item.classList.contains("cursor-pointer"));
@@ -123,6 +124,25 @@ afterEach(async () => {
 });
 
 describe("QueryHistory manual rollback SQL", () => {
+  it("retains pending transactions while hidden and refreshes history when navigation returns", async () => {
+    const active = ref(true);
+    await openRollback(true, active);
+    await vi.waitFor(() => expect(button("toolbar.commit").disabled).toBe(false));
+    const initialSearches = mocks.search.mock.calls.length;
+    active.value = false;
+    await nextTick();
+    expect(mocks.setHistoryPanelActive).toHaveBeenLastCalledWith(false);
+    expect(mocks.rollbackManualTransaction).not.toHaveBeenCalled();
+    expect(button("toolbar.commit").disabled).toBe(false);
+    active.value = true;
+    await nextTick();
+    expect(mocks.setHistoryPanelActive).toHaveBeenLastCalledWith(true);
+    expect(mocks.search.mock.calls.length).toBeGreaterThan(initialSearches);
+    expect(mocks.rollbackManualTransaction).not.toHaveBeenCalled();
+    button("toolbar.commit").click();
+    await vi.waitFor(() => expect(mocks.commitManualTransaction).toHaveBeenCalledWith("history-txn"));
+  });
+
   it("uses the selected history target and records success only after commit", async () => {
     await openRollback();
     await vi.waitFor(() => expect(button("toolbar.commit").disabled).toBe(false));

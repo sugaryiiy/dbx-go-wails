@@ -233,20 +233,20 @@ describe("settings search", () => {
 
     expect(definitions).toHaveLength(TOOLBAR_VISIBILITY_ITEMS.length);
     expect(definitions.map((definition) => definition.id)).toEqual(TOOLBAR_VISIBILITY_ITEMS.map((item) => `appearance-toolbar-${item.key}`));
-    expect(definitions).toContainEqual({ id: "appearance-toolbar-sqlLibrary", category: "appearance", titleKey: "sqlLibrary.title", targetId: "appearance" });
-    expect(definitions).toContainEqual({ id: "appearance-toolbar-ai", category: "appearance", title: "AI", targetId: "appearance" });
+    expect(definitions).toContainEqual({ id: "appearance-toolbar-theme", category: "appearance", titleKey: "toolbar.theme", targetId: "appearance" });
     expect(definitions).toContainEqual({ id: "appearance-toolbar-alwaysOnTop", category: "appearance", titleKey: "toolbar.alwaysOnTop", targetId: "appearance", visible: expect.any(Function) });
   });
 
-  it("does not advertise ineffective visibility switches for fixed Tools menu entries", () => {
-    const retired = ["dataTransfer", "driverManager", "pluginCenter", "sqlFile", "schemaDiff", "dataCompare", "github", "checkUpdates"];
+  it("does not advertise ineffective visibility switches for fixed workbench navigation, AI or Tools entries", () => {
+    const retired = ["dataTransfer", "driverManager", "pluginCenter", "sqlFile", "schemaDiff", "dataCompare", "github", "checkUpdates", "sqlLibrary", "sqlFileTree", "history", "ai"];
     const controls = TOOLBAR_VISIBILITY_ITEMS.map((item) => item.key);
     const entries = resolveSettingsSearchEntries(SETTINGS_SEARCH_DEFINITIONS, { isWeb: false, visibleCategories: allCategories }, translate, categoryLabels);
     for (const key of retired) {
       expect(controls).not.toContain(key);
       expect(entries.map((entry) => entry.id)).not.toContain(`appearance-toolbar-${key}`);
     }
-    expect(controls).toEqual(expect.arrayContaining(["sqlLibrary", "sqlFileTree", "history", "ai"]));
+    expect(controls).toEqual(["theme", "alwaysOnTop"]);
+    expect(entries.map((entry) => entry.id)).not.toContain("appearance-exclusive-sidebar-panels");
   });
 
   it("keeps the desktop-only toolbar switch and its search entry out of the Web build", () => {
@@ -306,8 +306,6 @@ describe("settings search", () => {
       { titleKey: "settings.dataGridToolbarLayout", category: "data", targetId: "data-grid-toolbar-layout" },
       { titleKey: "settings.dataGridFilterView", category: "data", targetId: "data-grid-filter-view" },
       { titleKey: "settings.colorizeDataGridCellTypes", category: "data", targetId: "data" },
-      { titleKey: "sqlLibrary.title", category: "appearance", targetId: "appearance" },
-      { titleKey: "history.title", category: "appearance", targetId: "appearance" },
       { titleKey: "toolbar.theme", category: "appearance", targetId: "appearance" },
       { titleKey: "settings.sidebarObjectInfoMode", category: "navigation", targetId: "navigation" },
       { titleKey: "settings.insertSpaceAfterCompletion", category: "editor", targetId: "editor" },

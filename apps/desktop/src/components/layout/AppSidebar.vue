@@ -21,6 +21,7 @@ import type { QueryTab, TreeNode } from "@/types/database";
 defineProps<{
   sidebarWidth: number;
   classicLayout?: boolean;
+  embedded?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -226,7 +227,7 @@ defineExpose({ focusSearch, locateTabInSidebar });
 </script>
 
 <template>
-  <div data-app-sidebar class="app-sidebar-panel h-full shrink-0 relative select-none" :class="{ 'app-sidebar-panel--floating': !classicLayout }" :style="{ width: sidebarWidth + 'px' }" @keydown="onSidebarKeydown">
+  <div :data-app-sidebar="embedded ? undefined : ''" class="app-sidebar-panel h-full shrink-0 relative select-none" :class="{ 'app-sidebar-panel--floating': !classicLayout }" :style="{ width: embedded ? '100%' : sidebarWidth + 'px' }" @keydown="onSidebarKeydown">
     <div class="h-full flex flex-col overflow-hidden">
       <div class="flex-1 min-h-0" data-sidebar-tree-region>
         <ConnectionTree ref="connectionTreeRef" @open-settings="(initialTab) => emit('open-settings', initialTab)" @add-to-ai="(nodes) => emit('add-to-ai', nodes)">
@@ -237,6 +238,7 @@ defineExpose({ focusSearch, locateTabInSidebar });
               :selected-values="selectedValues"
               :active-options="activeOptions"
               :refreshing="refreshingTree"
+              :embedded="embedded"
               @new-connection="emit('new-connection')"
               @refresh="refreshTree"
               @collapse="emit('collapse')"
@@ -293,7 +295,7 @@ defineExpose({ focusSearch, locateTabInSidebar });
       </div>
       <PluginShortcutBar v-if="settingsStore.editorSettings.pluginShortcuts.enabled && settingsStore.editorSettings.pluginShortcuts.position === 'sidebar-bottom'" position="sidebar-bottom" />
     </div>
-    <div class="panel-resize-handle panel-resize-handle--right" @pointerdown="emit('startResize', $event)" />
+    <div v-if="!embedded" class="panel-resize-handle panel-resize-handle--right" @pointerdown="emit('startResize', $event)" />
     <Dialog v-model:open="showDeleteSelectedConfirm">
       <DialogContent class="sm:max-w-[400px]">
         <DialogHeader>

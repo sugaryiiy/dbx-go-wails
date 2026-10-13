@@ -7,6 +7,7 @@ const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
   callback(0);
   return 0;
 });
+
 const setTheme = vi.fn(async () => {});
 
 function installLocalStorageStub() {
@@ -225,5 +226,65 @@ describe("useTheme on Linux", () => {
     // The superseded timer must not fire a second bump.
     expect(theme.themeRevision.value).toBe(before + 1);
     document.documentElement.style.removeProperty("--dbx-test-token");
+  });
+});
+
+describe("useTheme in Wails", () => {
+  const SetTheme = vi.fn(async () => {});
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.unstubAllGlobals();
+    installLocalStorageStub();
+    document.documentElement.className = "";
+    document.documentElement.style.colorScheme = "";
+    mediaQueryChangeListener = undefined;
+    mediaQueryMatches = false;
+    installBrowserStubs();
+    vi.stubGlobal("go", { main: { App: { GetWindowState: vi.fn(), SetTheme } } });
+    vi.doMock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => false }));
+    vi.doMock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setTheme }) }));
+  });
+
+  afterEach(() => {
+    vi.doUnmock("@/lib/backend/tauriRuntime");
+    vi.doUnmock("@tauri-apps/api/window");
+    vi.unstubAllGlobals();
+  });
+
+  it("restores the saved dark title bar even when macOS prefers light", async () => {
+    const theme = await loadTheme("dark");
+    theme.applyTheme();
+
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(SetTheme).toHaveBeenLastCalledWith("dark");
+    expect(setTheme).not.toHaveBeenCalled();
+  });
+
+  it("keeps the native title bar in sync when switching between light and dark", async () => {
+    const theme = await loadTheme("dark");
+    theme.applyTheme();
+    theme.toggleTheme();
+
+    expect(document.documentElement.style.colorScheme).toBe("light");
+    expect(SetTheme).toHaveBeenLastCalledWith("light");
+
+    theme.toggleTheme();
+    expect(document.documentElement.style.colorScheme).toBe("dark");
+    expect(SetTheme).toHaveBeenLastCalledWith("dark");
+  });
+
+  it("restores live system appearance and follows subsequent system changes", async () => {
+    const theme = await loadTheme("dark");
+    theme.applyTheme();
+    theme.setThemeMode("system");
+
+    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(SetTheme).toHaveBeenLastCalledWith("system");
+
+    mediaQueryChangeListener?.({ matches: true } as MediaQueryListEvent);
+    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(SetTheme).toHaveBeenLastCalledWith("system");
   });
 });

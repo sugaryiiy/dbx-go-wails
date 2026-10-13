@@ -8,6 +8,7 @@ import { calendarDateTimeToUnixSeconds } from "@/components/ui/date-time-picker/
 import type { RedisKeyInfo } from "@/lib/backend/api";
 
 const mocks = vi.hoisted(() => ({
+  goBackend: false,
   redisScanKeysBatch: vi.fn(),
   redisGetValue: vi.fn(),
   redisSetString: vi.fn(),
@@ -48,6 +49,8 @@ const mocks = vi.hoisted(() => ({
   queryResultMaxRows: 5000,
   loadedTtl: -1,
 }));
+
+vi.mock("@/lib/backend/goCapabilities", () => ({ isGoBackend: () => mocks.goBackend }));
 
 vi.mock("@/lib/backend/api", () => ({
   redisScanKeysBatch: mocks.redisScanKeysBatch,
@@ -760,6 +763,7 @@ const writerForType = {
 } as const;
 
 beforeEach(() => {
+  mocks.goBackend = false;
   resetApiMocks();
   setLocalTimeZone("UTC");
 });
@@ -2731,5 +2735,22 @@ describe("RedisKeyBrowser interrupted Fetch All", () => {
     keyPane.dispatchEvent(new KeyboardEvent("keydown", { key: "a", metaKey: true, bubbles: true, cancelable: true }));
     await settle();
     expect(checkboxes.every((checkbox) => !isCheckboxChecked(checkbox as HTMLElement))).toBe(true);
+  });
+});
+
+describe("Go Redis supported controls", () => {
+  it("offers the five supported key types and hides unavailable server features", async () => {
+    mocks.goBackend = true;
+    mountBrowser();
+    await settle();
+    expect(document.querySelector('[value="pubsub"]')).toBeNull();
+    expect(document.querySelector('[value="slowlog"]')).toBeNull();
+    expect(document.querySelector('button[title="redis.deleteGroup"]')).toBeNull();
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.includes("redis.searchByValue"))).toBe(false);
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.includes("redis.searchByAll"))).toBe(false);
+    await openCreateDialog();
+    for (const type of ["string", "hash", "list", "set", "zset"]) expect(document.querySelector(`[data-test-select-value="${type}"]`)).not.toBeNull();
+    expect(document.querySelector('[data-test-select-value="stream"]')).toBeNull();
+    expect(document.querySelector('[data-test-select-value="json"]')).toBeNull();
   });
 });

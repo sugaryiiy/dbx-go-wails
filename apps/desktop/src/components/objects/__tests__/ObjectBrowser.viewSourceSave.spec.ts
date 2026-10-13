@@ -75,7 +75,14 @@ vi.mock("@/components/ui/CustomContextMenu.vue", () => ({
     },
   }),
 }));
-vi.mock("@/components/editor/QueryEditor.vue", () => ({ default: { render: () => null } }));
+vi.mock("@/components/editor/QueryEditor.vue", () => ({
+  default: defineComponent({
+    props: { modelValue: String },
+    setup(props) {
+      return () => h("pre", props.modelValue);
+    },
+  }),
+}));
 vi.mock("@/components/editor/DangerConfirmDialog.vue", () => ({ default: { render: () => null } }));
 vi.mock("@/components/objects/ProcedureExecutionDialog.vue", () => ({ default: { render: () => null } }));
 vi.mock("@/components/objects/CustomTypeInfoPanel.vue", () => ({ default: { render: () => null } }));
@@ -111,6 +118,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.useRealTimers();
   for (const { app, host } of mountedApps.splice(0)) {
     app.unmount();
@@ -119,10 +127,10 @@ afterEach(() => {
   invalidateObjectBrowserRowsCache({});
 });
 
-async function mountBrowser() {
+async function mountBrowser(currentConnection = connection) {
   const host = document.createElement("div");
   document.body.append(host);
-  const app = createApp({ setup: () => () => h(ObjectBrowser, { connection, database: "app" }) });
+  const app = createApp({ setup: () => () => h(ObjectBrowser, { connection: currentConnection, database: "app" }) });
   mountedApps.push({ app, host });
   app.mount(host);
   await vi.waitFor(() => expect(host.textContent).toContain(VIEW_NAME));
@@ -188,4 +196,18 @@ describe("ObjectBrowser view source save", () => {
     expect(reopened!.querySelector(".animate-spin")).toBeNull();
     expect(reopened!.disabled).toBe(false);
   });
+});
+
+it("shows Go ClickHouse view source without offering the unmigrated source editor", async () => {
+  vi.stubEnv("VITE_DBX_BACKEND", "go");
+  const source = "CREATE VIEW app.v_demo AS SELECT 1 AS id";
+  mocks.getObjectSource.mockResolvedValue({ source, editable: true });
+  const host = await mountBrowser({ ...connection, id: "clickhouse-views", db_type: "clickhouse" });
+  vi.useFakeTimers();
+  await clickRow(host, VIEW_NAME);
+  expect(host.textContent).toContain(source);
+  expect(saveButton(host)).toBeUndefined();
+  expect(host.querySelector("[data-object-source-editor]")).toBeNull();
+  expect(mocks.buildEditableObjectSource).not.toHaveBeenCalled();
+  expect(mocks.executeQuery).not.toHaveBeenCalled();
 });

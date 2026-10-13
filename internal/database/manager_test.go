@@ -11,9 +11,15 @@ import (
 
 func testManager(t *testing.T) (*Manager, Config) {
 	t.Helper()
-	m := NewManager()
-	t.Cleanup(func() { m.Close() })
+	// Cleanups run in reverse registration order. Close SQLite before TempDir
+	// removes its files, which cannot be removed while open on Windows.
 	c := Config{ID: "test", Type: "sqlite", Host: filepath.Join(t.TempDir(), "data with spaces.sqlite"), Database: "main"}
+	m := NewManager()
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Errorf("close database manager: %v", err)
+		}
+	})
 	if e := m.Connect(context.Background(), c); e != nil {
 		t.Fatal(e)
 	}
@@ -160,26 +166,21 @@ func TestExportReadOnlyCannotWriteAndResetsConnection(t *testing.T) {
 	handle(t, m, "/api/query/execute", map[string]any{"connectionId": "test", "database": "main", "sql": "SELECT * FROM target", "readOnly": true})
 	run(t, m, "INSERT INTO target VALUES(1)")
 }
+
 func TestQueryCancellationAndTimeout(t *testing.T) {
+	heavy, started := sqliteCancellationQuery(t)
 	m, _ := testManager(t)
-	heavy := "WITH RECURSIVE counter(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM counter WHERE x<1000000000) SELECT sum(x) FROM counter"
 	done := make(chan error, 1)
 	go func() {
 		_, e := m.Handle(context.Background(), "/api/query/execute", map[string]any{"connectionId": "test", "database": "main", "sql": heavy, "executionId": "cancel-me"})
 		done <- e
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		m.mu.RLock()
-		_, running := m.running["cancel-me"]
-		m.mu.RUnlock()
-		if running {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("query never started")
-		}
-		time.Sleep(time.Millisecond)
+	// Registration precedes driver preparation. The function runs inside
+	// sqlite3_step, so cancellation now exercises an active engine query.
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SQLite never started executing the query")
 	}
 	if handle(t, m, "/api/query/cancel", map[string]any{"executionId": "cancel-me"}) != true {
 		t.Fatal("cancel did not find execution")
@@ -367,24 +368,17 @@ func TestMySQLDriverValuesPreserveDecimalUnsignedAndBinary(t *testing.T) {
 	}
 }
 func TestCloseCancelsRunningQueryWithoutManagerLockDeadlock(t *testing.T) {
+	heavy, started := sqliteCancellationQuery(t)
 	m, _ := testManager(t)
 	done := make(chan error, 1)
 	go func() {
-		_, e := m.Handle(context.Background(), "/api/query/execute", map[string]any{"connectionId": "test", "database": "main", "executionId": "closing", "sql": "WITH RECURSIVE r(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM r WHERE n<1000000000) SELECT sum(n) FROM r"})
+		_, e := m.Handle(context.Background(), "/api/query/execute", map[string]any{"connectionId": "test", "database": "main", "executionId": "closing", "sql": heavy})
 		done <- e
 	}()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		m.mu.RLock()
-		_, exists := m.running["closing"]
-		m.mu.RUnlock()
-		if exists {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("query did not start")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SQLite never started executing the query")
 	}
 	closed := make(chan error, 1)
 	go func() { closed <- m.Close() }()
@@ -403,5 +397,11 @@ func TestCloseCancelsRunningQueryWithoutManagerLockDeadlock(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("query failed to release its manager entry")
+	}
+	m.mu.RLock()
+	_, running := m.running["closing"]
+	m.mu.RUnlock()
+	if running {
+		t.Fatal("cancelled query retained its manager entry")
 	}
 }

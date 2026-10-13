@@ -100,6 +100,7 @@ function mount(props: Record<string, unknown> = {}) {
       fallbackWarn: false,
       messages: {
         en: {
+          app: { name: "MagpieDB" },
           toolbar: {
             newConnection: "New Connection",
             newQuery: "New Query",
@@ -130,32 +131,33 @@ describe("AppToolbar web branding (#8703)", () => {
     document.body.innerHTML = "";
   });
 
-  it("renders the DBX brand logo and title on web mode", async () => {
+  it("renders the workbench name and icon without a promotional link in web mode", async () => {
     mockIsTauriRuntime = false;
     const { host, unmount } = mount();
     await nextTick();
 
-    const brandEl = host.querySelector('[data-testid="web-brand-logo"]');
+    const brandEl = host.querySelector('[data-testid="workbench-brand"]');
     expect(brandEl).not.toBeNull();
-    expect(brandEl?.getAttribute("href")).toBe("https://dbxio.com");
-    expect(brandEl?.getAttribute("target")).toBe("_blank");
-    expect(brandEl?.getAttribute("rel")).toBe("noopener noreferrer");
-    expect(brandEl?.textContent).toContain("DBX");
+    expect(brandEl?.querySelector("a")).toBeNull();
+    expect(brandEl?.getAttribute("href")).toBeNull();
+    expect(brandEl?.textContent).toContain("MagpieDB");
 
     const logoImg = brandEl?.querySelector("img");
     expect(logoImg).not.toBeNull();
-    expect(logoImg?.getAttribute("alt")).toBe("DBX");
+    expect(logoImg?.getAttribute("alt")).toBe("MagpieDB");
+    expect(logoImg?.getAttribute("src")).toContain("icons/brand/magpiedb.png");
 
     unmount();
   });
 
-  it("does not render the web DBX brand logo in desktop mode", async () => {
+  it("keeps the workbench name and icon without the upstream website link in desktop mode", async () => {
     mockIsTauriRuntime = true;
     const { host, unmount } = mount();
     await nextTick();
 
     const brandEl = host.querySelector('[data-testid="web-brand-logo"]');
     expect(brandEl).toBeNull();
+    expect(host.querySelector('[data-testid="workbench-brand"]')?.textContent).toContain("MagpieDB");
 
     unmount();
   });

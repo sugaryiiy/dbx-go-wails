@@ -794,11 +794,11 @@ describe("normalizeDesktopSettings", () => {
 });
 
 describe("normalizeMcpGlobalPolicy", () => {
-  it("defaults to all connections with writes allowed", () => {
+  it("defaults to an unconfigured read-only policy", () => {
     expect(normalizeMcpGlobalPolicy(undefined)).toEqual({
-      readOnly: false,
+      readOnly: true,
       allowDangerousSql: false,
-      allowedConnectionIds: null,
+      allowedConnectionIds: [],
       allowedGroupIds: [],
       allowedToolNames: null,
       connectionPolicies: [],
@@ -818,7 +818,7 @@ describe("normalizeMcpGlobalPolicy", () => {
       }),
     ).toEqual({
       readOnly: true,
-      allowDangerousSql: true,
+      allowDangerousSql: false,
       allowedConnectionIds: ["connection-1", "connection-2"],
       allowedGroupIds: [],
       allowedToolNames: null,
@@ -1108,8 +1108,7 @@ describe("settingsStore AI API key normalization", () => {
       provider: "openai-compatible",
       authMethod: "bearer",
       requiresApiKey: true,
-      websiteUrl: "https://www.aicodemirror.ai/register?invitecode=DK44NH",
-      badgeKey: "ai.aicodemirrorSponsored",
+      websiteUrl: "https://www.aicodemirror.ai/",
     });
   });
 

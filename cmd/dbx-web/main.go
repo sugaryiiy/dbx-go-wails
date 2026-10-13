@@ -37,6 +37,7 @@ func run() error {
 	port := flag.String("port", env("DBX_PORT", "4224"), "HTTP port")
 	dir := flag.String("data-dir", env("DBX_DATA_DIR", ".dbx-dev/go"), "Isolated Go application data directory")
 	assets := flag.String("assets", env("DBX_STATIC_DIR", "dist"), "Built Vue assets")
+	basePath := flag.String("base-path", env("DBX_PUBLIC_BASE_PATH", ""), "Web mount path (must match the frontend build base)")
 	flag.Parse()
 	dataDir, err := filepath.Abs(*dir)
 	if err != nil {
@@ -76,7 +77,7 @@ func run() error {
 		}
 		log.Printf("Login password is stored in %s", filename)
 	}
-	app, err := server.New(server.Options{DataDir: dataDir, Password: password, Assets: os.DirFS(*assets)})
+	app, err := server.New(server.Options{DataDir: dataDir, Password: password, Assets: os.DirFS(*assets), BasePath: *basePath})
 	if err != nil {
 		return err
 	}

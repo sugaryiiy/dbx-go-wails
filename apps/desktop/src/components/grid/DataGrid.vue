@@ -387,6 +387,7 @@ import { filterObjectBrowserTableColumns } from "@/lib/table/objectBrowserTableI
 import { gaussdbMTypeDisplayName } from "@/lib/table/postgresDataTypeHelp";
 import { reserveDataGridHeaderLine } from "@/lib/dataGrid/dataGridHeaderLayout";
 import { buildColumnIndexMap, columnIndexColorClass, columnIndexNameKey, type ColumnIndexKind } from "@/lib/dataGrid/dataGridColumnIndexIcon";
+import { isGoBackend, goClickHouseGridExportActions, supportsBackendTableEditing } from "@/lib/backend/goCapabilities";
 import { supportsTableStructureEditing } from "@/lib/database/databaseCapabilities";
 import { rememberDataGridConditionHistory } from "@/lib/dataGrid/dataGridConditionHistory";
 import { restoreDataGridLocalColumnFilters, type DataGridLocalFilterOption } from "@/lib/dataGrid/dataGridLocalColumnFilterState";
@@ -3544,19 +3545,21 @@ type DataGridTableMeta = NonNullable<typeof props.tableMeta>;
 const hiveTableTransactional = ref<boolean | undefined>(undefined);
 const resultSourceColumns = computed(() => props.result.columns.map((column, index) => props.sourceColumns?.[index] ?? column));
 const canEditExistingRows = computed(
-  () => !!props.customSaveHandler || (canEditExistingTableRows(props.databaseType, hiveTableTransactional.value, props.tableMeta?.primaryKeys ?? []) && hasCompleteTdengineRowIdentity(props.databaseType, props.tableMeta?.primaryKeys ?? [], resultSourceColumns.value)),
+  () =>
+    supportsBackendTableEditing(props.databaseType) &&
+    (!!props.customSaveHandler || (canEditExistingTableRows(props.databaseType, hiveTableTransactional.value, props.tableMeta?.primaryKeys ?? []) && hasCompleteTdengineRowIdentity(props.databaseType, props.tableMeta?.primaryKeys ?? [], resultSourceColumns.value))),
 );
 const canUpdateExistingRows = computed(() => canEditExistingRows.value && props.customSaveHandler?.canUpdate !== false);
 const customReadonlyColumns = computed(() => new Set((props.customSaveHandler?.readonlyColumns ?? []).map((column) => column.toLowerCase())));
-const hasDataGridSaveTarget = computed(() => !!props.tableMeta || !!props.customSaveHandler);
+const hasDataGridSaveTarget = computed(() => supportsBackendTableEditing(props.databaseType) && (!!props.tableMeta || !!props.customSaveHandler));
 const hasDataGridInsertTarget = computed(() => {
-  if (props.allowInsertRows === false) return false;
+  if (!supportsBackendTableEditing(props.databaseType) || props.allowInsertRows === false) return false;
   const handler = props.customSaveHandler;
   if (handler) return handler.supportsInsert === true || handler.canInsert === true;
   return !!props.tableMeta && canInsertTableRows(props.databaseType);
 });
 const canInsertRows = computed(() => !!props.editable && hasDataGridInsertTarget.value);
-const canDeleteRows = computed(() => props.allowDeleteRows !== false && (!props.customSaveHandler || props.customSaveHandler.canDelete !== false));
+const canDeleteRows = computed(() => supportsBackendTableEditing(props.databaseType) && props.allowDeleteRows !== false && (!props.customSaveHandler || props.customSaveHandler.canDelete !== false));
 const canDeleteExistingRows = computed(() => !!props.customSaveHandler || canDeleteExistingTdengineRows(props.databaseType, props.tableMeta?.primaryKeys ?? []));
 watch(
   () => [props.databaseType, props.connectionId, props.database, props.tableMeta?.schema, props.tableMeta?.tableName],
@@ -8380,6 +8383,26 @@ const exportMenuItems = computed(() => {
       ]
     : [];
 
+  if (isGoBackend() && props.databaseType === "clickhouse") {
+    const allowed = goClickHouseGridExportActions(props.context, !!props.queryResultExportRequest, hasCompleteLocalResult.value);
+    return [
+      { value: "page-csv", label: t("grid.exportCurrentPageCsv") },
+      { value: "page-xlsx", label: t("grid.exportCurrentPageXlsx") },
+      ...(canIncludeSql ? [{ value: "page-xlsx-with-sql", label: t("grid.exportCurrentPageXlsxWithSql") }] : []),
+      { value: "page-txt", label: t("grid.exportCurrentPageTxt") },
+      ...(props.context === "results"
+        ? [
+            { value: "csv", label: t("grid.exportCurrentResultCsv"), separatorBefore: true },
+            { value: "xlsx", label: t("grid.exportCurrentResultXlsx") },
+            { value: "json", label: t("grid.exportCurrentResultJson") },
+            { value: "txt", label: t("grid.exportCurrentResultTxt") },
+          ]
+        : []),
+      ...allResultItems,
+      ...selectedItems,
+    ].filter((item) => allowed.has(item.value));
+  }
+
   if (!hasFullResultExport) {
     return [
       { value: "csv", label: t("grid.exportCsv") },
@@ -8440,6 +8463,7 @@ function selectPageSizeMenuItem(value: string) {
 }
 
 function selectExportMenuItem(value: string) {
+  if (isGoBackend() && props.databaseType === "clickhouse" && !goClickHouseGridExportActions(props.context, !!props.queryResultExportRequest, hasCompleteLocalResult.value).has(value)) return;
   const actions: Record<string, () => void> = {
     "page-csv": exportCurrentPageCsv,
     "page-xlsx": exportCurrentPageXlsx,

@@ -57,6 +57,10 @@ import { normalizeGlobalConnectTimeoutSecs, normalizeGlobalQueryTimeoutSecs, use
 import { useToast } from "@/composables/useToast";
 import DatabaseIcon from "@/components/icons/DatabaseIcon.vue";
 import PluginConnectionFields from "@/components/plugins/PluginConnectionFields.vue";
+import GoSecureConnectionFields from "./GoSecureConnectionFields.vue";
+import ConnectionDatabaseSelect from "./ConnectionDatabaseSelect.vue";
+import GoSshHostVerification from "./GoSshHostVerification.vue";
+import { isGoTLSDatabase, normalizeGoTLSFields, validateGoTransportLayers } from "@/lib/connection/goSecureConnections";
 import PluginIcon from "@/components/plugins/PluginIcon.vue";
 import * as api from "@/lib/backend/api";
 import {
@@ -72,7 +76,7 @@ import {
 import type { PluginCenterFocus } from "@/lib/plugins/pluginCenterNavigation";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { isWailsRuntime, openWailsFile, saveWailsFile } from "@/lib/backend/wailsRuntime";
-import { GO_CONNECTION_PROFILES, isGoBackend } from "@/lib/backend/goCapabilities";
+import { GO_CONNECTION_PROFILES, isGoBackend, goAgentDriverKey, supportsGoConnectionProfile } from "@/lib/backend/goCapabilities";
 import { isWindows } from "@/lib/backend/platform";
 import { applyMeilisearchBasePathToExternalConfig, applyParsedConnectionUrl, normalizeMongoConnectionString, parseConnectionUrl } from "@/lib/connection/connectionUrl";
 import { hasXuguConnectionDatabase } from "@/lib/connection/xuguDatabase";
@@ -297,6 +301,7 @@ const editGlobalQueryTimeoutSecs = ref(settingsStore.editorSettings.globalQueryT
 const open = defineModel<boolean>("open", { default: false });
 const isDesktop = isTauriRuntime();
 const hasNativeFileDialogs = isDesktop || isWailsRuntime();
+const goBackend = isGoBackend();
 
 const props = defineProps<{
   editConfig?: ConnectionConfig;
@@ -534,6 +539,8 @@ function normalizeSshTunnel(hop: Partial<SshTunnelConfig>): SshTunnelConfig {
     allow_exec_channel_proxy: !!hop.allow_exec_channel_proxy,
     proxy_command: hop.proxy_command || "",
     profile_id: hop.profile_id || undefined,
+    host_key_fingerprint: hop.host_key_fingerprint?.trim() || "",
+    known_hosts_path: hop.known_hosts_path?.trim() || "",
   };
 }
 
@@ -2255,6 +2262,7 @@ function installedAgentDriver(drivers: readonly AgentDriverInstallState[], key: 
 }
 
 async function refreshLocalAgentDrivers(): Promise<AgentDriverInstallState[]> {
+  if (goBackend) return [];
   const drivers = await api.listInstalledAgentsLocal();
   agentDrivers.value = drivers;
   return drivers;
@@ -2353,16 +2361,28 @@ function formatInstallSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function assertGoNativeConnection(config: Pick<ConnectionConfig, "db_type" | "driver_profile">): void {
+  if (!goBackend) return;
+  const profile = config.driver_profile;
+  if (!supportsGoConnectionProfile(config.db_type, profile)) {
+    throw new Error(appLocale.value.startsWith("zh") ? `Go 版暂未迁移此数据库或驱动：${profile || config.db_type}` : `This database or driver has not yet been migrated to Go: ${profile || config.db_type}`);
+  }
+}
+
 async function ensureRequiredAgentDriverInstalled(config: ConnectionConfig): Promise<void> {
-  if (requiresSqlServerLegacyCompatibilityComponent(config)) {
+  if (goBackend) {
+    assertGoNativeConnection(config);
+    if (!goAgentDriverKey(config.db_type, config.driver_profile)) return;
+  }
+  if (!goBackend && requiresSqlServerLegacyCompatibilityComponent(config)) {
     await installSqlServerLegacyCompatibilityComponentIfNeeded();
   }
 
-  const driverKey = agentDriverInstallKey(config.db_type, config.driver_profile, { ssh: connectionUsesSsh(config) });
+  const driverKey = goBackend ? goAgentDriverKey(config.db_type, config.driver_profile) : agentDriverInstallKey(config.db_type, config.driver_profile, { ssh: connectionUsesSsh(config) });
   if (!driverKey) return;
 
   let drivers = agentDrivers.value.length ? agentDrivers.value : await refreshLocalAgentDrivers();
-  if (!showAgentDriverInstallHint(config.db_type, drivers, config.driver_profile, { ssh: connectionUsesSsh(config) })) return;
+  if (!goBackend && !showAgentDriverInstallHint(config.db_type, drivers, config.driver_profile, { ssh: connectionUsesSsh(config) })) return;
   if (installedAgentDriver(drivers, driverKey)?.installed === true) return;
 
   drivers = await refreshLocalAgentDrivers();
@@ -2405,6 +2425,7 @@ async function ensureRequiredAgentDriverInstalled(config: ConnectionConfig): Pro
 }
 
 async function ensureRequiredJdbcxDriverInstalled(config: ConnectionConfig): Promise<void> {
+  if (goBackend) return;
   const result = await ensureJdbcxRuntimeDrivers(config, api, () => {
     testResult.value = { ok: true, message: "Installing JDBC plugin..." };
   });
@@ -2421,6 +2442,7 @@ async function ensureRequiredJdbcxDriverInstalled(config: ConnectionConfig): Pro
 }
 
 async function ensureRequiredJdbcProductRuntimeInstalled(config: ConnectionConfig): Promise<void> {
+  if (goBackend) return;
   const result = await ensureRegisteredJdbcProductRuntimeDrivers(config, api);
   if (!result) return;
   notifyComponentUpdatesChanged();
@@ -2435,6 +2457,7 @@ async function ensureRequiredJdbcProductRuntimeInstalled(config: ConnectionConfi
 }
 
 async function ensureRequiredGaussdbMJdbcRuntime(config: ConnectionConfig): Promise<void> {
+  if (goBackend) return;
   if (gaussdbConnectionMode(config) !== "m-jdbc") return;
   if (!(config.jdbc_driver_paths ?? []).length) {
     throw new Error(t("connection.gaussdbMJdbcDriverRequired"));
@@ -3013,6 +3036,7 @@ function applyPluginProvider(value: string, preserveConnectionFields = false, ex
 }
 
 async function loadInstalledPlugins() {
+  if (goBackend) return;
   pluginLoadError.value = "";
   try {
     installedPlugins.value = await api.listPlugins();
@@ -3323,6 +3347,26 @@ const databasePlaceholder = computed(() => {
   return t("connection.databasePlaceholderWithDefault", { database: fallback });
 });
 
+const canSelectConnectionDatabase = computed(() => goBackend && ["mysql", "postgres", "clickhouse"].includes(form.value.db_type));
+const connectionDatabaseSelectScope = computed(() => connectionConfigFingerprint(connectionConfigSnapshotForVisibleDatabases()));
+
+async function loadConnectionDatabaseOptions(): Promise<string[]> {
+  if (!ensureConnectionHostResolvedFromUrl()) throw new Error(t("connection.host"));
+  const draftId = `__database_select_${uuid()}`;
+  const config = { ...connectionConfigForSubmit(draftId), one_time: true };
+  // MySQL can list accessible databases without selecting one first.
+  // This also allows choosing a database when the typed name does not exist.
+  if (config.db_type === "mysql") config.database = undefined;
+  try {
+    await api.connectDb(config);
+    return (await api.listDatabases(draftId)).map((database) => database.name);
+  } catch (cause) {
+    throw new Error(translateBackendError(t, errorMessage(cause)));
+  } finally {
+    await api.disconnectDb(draftId).catch(() => undefined);
+  }
+}
+
 const transportLayers = computed(() => form.value.transport_layers || []);
 const hasEnabledSshLayer = computed(() => transportLayers.value.some((layer) => layer.enabled !== false && layer.type === "ssh"));
 const selectedTransportLayer = computed(() => {
@@ -3334,7 +3378,7 @@ const selectedProxyLayer = computed(() => (selectedTransportLayer.value?.type ==
 const selectedHttpTunnelLayer = computed(() => (selectedTransportLayer.value?.type === "http_tunnel" ? selectedTransportLayer.value : null));
 
 const tunnelProfiles = computed(() => {
-  const profiles = tunnelProfileStore.profiles;
+  const profiles = goBackend ? tunnelProfileStore.profiles.filter((profile) => profile.type === "ssh") : tunnelProfileStore.profiles;
   if (!sqliteRemoteTransportRestricted.value) return profiles;
   return profiles.filter((profile) => isSqliteRemoteTransportLayerType(profile.type));
 });
@@ -3839,8 +3883,9 @@ const tlsCapableDatabaseTypes = new Set<DatabaseType>([
   "nebula",
   "zookeeper",
 ]);
-const supportsTlsToggle = computed(() => tlsCapableDatabaseTypes.has(form.value.db_type) || supportsMysqlTlsTab(form.value.db_type, selectedType.value));
-const supportsCaCertificatePath = computed(() => form.value.db_type === "clickhouse" || form.value.db_type === "victoriametrics");
+const supportsGoTLSOptions = computed(() => goBackend && isGoTLSDatabase(form.value.db_type));
+const supportsTlsToggle = computed(() => supportsGoTLSOptions.value || tlsCapableDatabaseTypes.has(form.value.db_type) || supportsMysqlTlsTab(form.value.db_type, selectedType.value));
+const supportsCaCertificatePath = computed(() => !goBackend && (form.value.db_type === "clickhouse" || form.value.db_type === "victoriametrics"));
 const supportsGenericUrlParams = computed(() => form.value.db_type !== "manticoresearch" && form.value.db_type !== "hbase" && form.value.db_type !== "nebula");
 const showGenericUrlParamsHint = computed(() => form.value.db_type === "mysql" || form.value.db_type === "doris" || form.value.db_type === "starrocks");
 const bareMysqlProfiles = new Set(["doris", "selectdb", "oceanbase"]);
@@ -3994,6 +4039,7 @@ const zookeeperAuthScheme = computed<ZooKeeperAuthScheme>({
   },
 });
 const canUseTransportLayers = computed(() => {
+  if (goBackend) return isGoTLSDatabase(form.value.db_type);
   if (form.value.db_type === "access" || isCloudflareD1Connection(form.value) || isH2FileMode.value || (form.value.db_type === "oracle" && form.value.oracle_connection_type === "tns")) {
     return false;
   }
@@ -4043,8 +4089,9 @@ const sqliteWorkerPlacementOptions = [
     recommended: false,
   },
 ] as const;
-const shouldShowSqliteSshWorkerInstallHint = computed(() => form.value.db_type === "sqlite" && sqliteUsesSsh.value && showAgentDriverInstallHint("sqlite", agentDrivers.value, form.value.driver_profile, { ssh: true }));
+const shouldShowSqliteSshWorkerInstallHint = computed(() => !goBackend && form.value.db_type === "sqlite" && sqliteUsesSsh.value && showAgentDriverInstallHint("sqlite", agentDrivers.value, form.value.driver_profile, { ssh: true }));
 const shouldShowAgentDriverInstallHint = computed(() => {
+  if (goBackend) return false;
   if (form.value.db_type === "sqlite" && sqliteUsesSsh.value) return false;
   return showAgentDriverInstallHint(form.value.db_type, agentDrivers.value, form.value.driver_profile, { ssh: sqliteUsesSsh.value });
 });
@@ -4776,6 +4823,7 @@ function connectionConfigForSshTunnelTest(id: string): ConnectionConfig {
 }
 
 function connectionConfigForSubmit(id: string, generatedName = "", validatePluginRequired = true): ConnectionConfig {
+  assertGoNativeConnection(form.value);
   let config: LegacyConnectionConfig;
   if (isPluginConnection.value) {
     const entry = selectedPluginProvider.value;
@@ -5121,7 +5169,7 @@ function connectionConfigForSubmit(id: string, generatedName = "", validatePlugi
       config.driver_label = "MongoDB";
     }
   }
-  if (config.db_type === "mongodb") {
+  if (!goBackend && config.db_type === "mongodb") {
     const mongoTls = normalizeMongoTlsFormState(!!config.ssl, config.url_params, config.ca_cert_path);
     config.url_params = mongoTls.urlParams;
     config.ca_cert_path = mongoTls.caCertPath;
@@ -5240,7 +5288,7 @@ function connectionConfigForSubmit(id: string, generatedName = "", validatePlugi
     if ((config.client_cert_path && !config.client_key_path) || (!config.client_cert_path && config.client_key_path)) {
       throw new Error(t("connection.etcdClientCertPairRequired"));
     }
-  } else if (form.value.db_type !== "consul" && config.db_type !== "elasticsearch" && config.db_type !== "easysearch" && config.db_type !== "solr") {
+  } else if (!(goBackend && isGoTLSDatabase(config.db_type)) && form.value.db_type !== "consul" && config.db_type !== "elasticsearch" && config.db_type !== "easysearch" && config.db_type !== "solr") {
     config.etcd_endpoints = undefined;
     config.client_cert_path = undefined;
     config.client_key_path = undefined;
@@ -5253,6 +5301,7 @@ function connectionConfigForSubmit(id: string, generatedName = "", validatePlugi
     }
   }
   if (
+    !(goBackend && isGoTLSDatabase(config.db_type)) &&
     config.db_type !== "mysql" &&
     config.db_type !== "clickhouse" &&
     config.db_type !== "etcd" &&
@@ -5390,6 +5439,7 @@ function connectionConfigForSubmit(id: string, generatedName = "", validatePlugi
   if (config.agent_java_options && config.agent_java_options.length === 0) config.agent_java_options = undefined;
   // Pasted credentials may carry invisible characters that trim() keeps (#9043).
   sanitizeConnectionCredentials(config);
+  if (goBackend && isGoTLSDatabase(config.db_type)) normalizeGoTLSFields(config);
   return config as ConnectionConfig;
 }
 
@@ -6430,6 +6480,7 @@ function ensureSelectedTransportLayer() {
 }
 
 function addSshTunnel() {
+  if (goBackend && transportLayers.value.filter((layer) => layer.enabled !== false).length >= 4) return;
   const next: TransportLayerConfig = { type: "ssh", ...defaultSshTunnel() };
   next.name = t("connection.sshHopDefaultName", { index: transportLayers.value.length + 1 });
   form.value.transport_layers = [...transportLayers.value, next];
@@ -6438,6 +6489,7 @@ function addSshTunnel() {
 }
 
 function addProxyTunnel() {
+  if (goBackend) return;
   const next: TransportLayerConfig = { type: "proxy", ...defaultProxyTunnel() };
   next.name = `Proxy ${transportLayers.value.length + 1}`;
   form.value.transport_layers = sqliteRemoteTransportRestricted.value ? insertSqliteRemoteTransportLayer(transportLayers.value, next) : [...transportLayers.value, next];
@@ -6446,6 +6498,7 @@ function addProxyTunnel() {
 }
 
 function addHttpTunnel() {
+  if (goBackend) return;
   if (sqliteRemoteTransportRestricted.value) return;
   const next: TransportLayerConfig = { type: "http_tunnel", ...defaultHttpTunnel() };
   next.name = t("connection.httpTunnelDefaultName", { index: 1 });
@@ -6455,6 +6508,7 @@ function addHttpTunnel() {
 }
 
 function duplicateTransportLayer(layer: TransportLayerConfig) {
+  if (goBackend && (layer.type !== "ssh" || transportLayers.value.filter((item) => item.enabled !== false).length >= 4)) return;
   if (sqliteRemoteTransportRestricted.value && !isSqliteRemoteTransportLayerType(layer.type)) return;
   const next = normalizeTransportLayer({ ...layer, id: uuid(), name: layer.name ? `${layer.name} copy` : "" });
   form.value.transport_layers = sqliteRemoteTransportRestricted.value ? insertSqliteRemoteTransportLayer(transportLayers.value, next) : [...transportLayers.value, next];
@@ -6518,6 +6572,7 @@ function updateSelectedSshAuthMethod(value: unknown) {
 
 function validateTransportLayers(config: LegacyConnectionConfig) {
   const layers = config.transport_layers || [];
+  if (goBackend) validateGoTransportLayers(layers);
   if (config.db_type === "sqlite" && sqliteRemoteTransportError(layers)) {
     throw new Error(t("connection.sqliteTransportSshOnly"));
   }
@@ -6692,6 +6747,11 @@ function applySshConfigHostAliasPrefill(target: SshTunnelConfig) {
 }
 
 async function browseSshKeyPath(target?: SshTunnelConfig | null) {
+  if (isWailsRuntime()) {
+    const selected = await openWailsFile({ title: "Select SSH Private Key", multiple: false });
+    if (typeof selected === "string" && target) target.key_path = selected;
+    return;
+  }
   if (isTauriRuntime()) {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({
@@ -6993,6 +7053,7 @@ async function browseJdbcDriverPaths() {
 }
 
 async function loadJdbcDrivers() {
+  if (goBackend) return;
   try {
     const [drivers, bundles, localBundles] = await Promise.all([api.listJdbcDrivers(), api.listJdbcMavenBundles(), api.listJdbcLocalBundles()]);
     jdbcDrivers.value = drivers;
@@ -7015,6 +7076,7 @@ async function loadSshConfigHosts() {
 }
 
 async function loadAgentDrivers() {
+  if (goBackend) return;
   try {
     agentDrivers.value = await api.listInstalledAgentsLocal();
     api
@@ -7073,7 +7135,7 @@ function onJdbcDriverSelect(id: any) {
 
 onMounted(async () => {
   void tunnelProfileStore.init();
-  unlistenAgentInstallProgress = await api.listenAgentInstallProgress(handleAgentInstallProgress);
+  if (!goBackend) unlistenAgentInstallProgress = await api.listenAgentInstallProgress(handleAgentInstallProgress);
 });
 
 onUnmounted(() => {
@@ -7246,6 +7308,21 @@ function openExternalUrl(url: string) {
 
             <TabsContent value="connection" class="m-0 flex min-h-0 flex-1 flex-col overflow-hidden">
               <div class="connection-form-body grid min-h-0 flex-1 scroll-pb-6 gap-4 overflow-y-auto pt-4 pr-2 pb-6" :class="{ 'connection-form-body--nacos': form.db_type === 'nacos' }">
+                <p v-if="goBackend && form.db_type === 'redis'" class="text-xs leading-5 text-muted-foreground">
+                  {{ appLocale.startsWith("zh") ? "Redis 当前支持单机模式、键浏览与基础类型编辑；集群、哨兵和订阅功能尚未迁移。" : "Redis currently supports standalone servers, key browsing and basic value editing. Cluster, Sentinel and subscriptions are pending." }}
+                </p>
+                <p v-if="goBackend && form.db_type === 'mongodb'" class="text-xs leading-5 text-muted-foreground">
+                  {{
+                    appLocale.startsWith("zh")
+                      ? "MongoDB 当前连接单个节点，支持 SCRAM 认证、文档与索引操作；暂不支持 SRV、OIDC、集群发现或备份恢复。TLS 请在 TLS/SSL 页配置。"
+                      : "MongoDB connects directly to one node with SCRAM, document and index operations. SRV, OIDC, topology discovery and backup/restore are pending. Configure TLS on the TLS/SSL tab."
+                  }}
+                </p>
+                <p v-if="goBackend && form.db_type === 'clickhouse'" class="text-xs leading-5 text-muted-foreground">
+                  {{
+                    appLocale.startsWith("zh") ? "ClickHouse 使用 HTTP 接口（默认 8123，HTTPS 通常为 8443），支持 SQL 查询与结构查看；不提供事务或表格直接编辑。" : "ClickHouse uses HTTP (normally 8123, or 8443 for HTTPS) for SQL and metadata. Transactions and direct grid editing are unavailable."
+                  }}
+                </p>
                 <div v-if="!isPluginConnection && !isJdbcConnection && form.db_type !== 'nacos' && form.db_type !== 'consul' && form.db_type !== 'mq' && form.db_type !== 'salesforce'" class="grid grid-cols-4 items-center gap-4">
                   <Label :class="connectionLabelClass">{{ t("connection.connectionUrlOptional") }}</Label>
                   <div class="col-span-3 flex items-center gap-1">
@@ -8048,10 +8125,10 @@ function openExternalUrl(url: string) {
                         <Button size="sm" :variant="form.redis_connection_mode === 'standalone' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'standalone'">
                           {{ t("connection.redisStandaloneMode") }}
                         </Button>
-                        <Button size="sm" :variant="form.redis_connection_mode === 'sentinel' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'sentinel'">
+                        <Button v-if="!goBackend" size="sm" :variant="form.redis_connection_mode === 'sentinel' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'sentinel'">
                           {{ t("connection.redisSentinelMode") }}
                         </Button>
-                        <Button size="sm" :variant="form.redis_connection_mode === 'cluster' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'cluster'">
+                        <Button v-if="!goBackend" size="sm" :variant="form.redis_connection_mode === 'cluster' ? 'default' : 'outline'" @click="form.redis_connection_mode = 'cluster'">
                           {{ t("connection.redisClusterMode") }}
                         </Button>
                       </div>
@@ -8326,7 +8403,7 @@ function openExternalUrl(url: string) {
                       <Label :class="connectionLabelSmallClass">{{ t("connection.driverMode") }}</Label>
                       <div class="col-span-3 flex items-center gap-2">
                         <Button size="sm" :variant="mongoDriverMode === 'legacy' ? 'outline' : 'default'" @click="mongoDriverMode = 'auto'">{{ t("connection.mongoDriverAuto") }}</Button>
-                        <Button size="sm" :variant="mongoDriverMode === 'legacy' ? 'default' : 'outline'" :disabled="mongoUsesOidc" @click="mongoDriverMode = 'legacy'">{{ t("connection.mongoDriverLegacy") }}</Button>
+                        <Button v-if="!goBackend" size="sm" :variant="mongoDriverMode === 'legacy' ? 'default' : 'outline'" :disabled="mongoUsesOidc" @click="mongoDriverMode = 'legacy'">{{ t("connection.mongoDriverLegacy") }}</Button>
                         <Tooltip>
                           <TooltipTrigger as-child>
                             <CircleHelp class="h-3.5 w-3.5 cursor-help text-muted-foreground hover:text-foreground" />
@@ -8341,7 +8418,7 @@ function openExternalUrl(url: string) {
                       <Label :class="connectionLabelSmallClass">{{ t("connection.mode") }}</Label>
                       <div class="col-span-3 flex gap-2">
                         <Button size="sm" :variant="mongoUseUrl ? 'outline' : 'default'" @click="mongoUseUrl = false">{{ t("connection.modeForm") }}</Button>
-                        <Button size="sm" :variant="mongoUseUrl ? 'default' : 'outline'" @click="mongoUseUrl = true">URL</Button>
+                        <Button v-if="!goBackend" size="sm" :variant="mongoUseUrl ? 'default' : 'outline'" @click="mongoUseUrl = true">URL</Button>
                       </div>
                     </div>
                     <template v-if="mongoUseUrl">
@@ -8370,7 +8447,7 @@ function openExternalUrl(url: string) {
                           <span>{{ t("connection.sslEnable") }}</span>
                         </label>
                       </div>
-                      <template v-if="form.ssl">
+                      <template v-if="form.ssl && !goBackend">
                         <div class="grid grid-cols-4 items-start gap-4">
                           <Label :class="connectionLabelClass">{{ t("connection.mongoTlsAllowInvalidCertificates") }}</Label>
                           <label class="col-span-3 flex items-start gap-2 cursor-pointer">
@@ -8430,7 +8507,7 @@ function openExternalUrl(url: string) {
                             <SelectItem value="default">{{ t("connection.authMechanismDefault") }}</SelectItem>
                             <SelectItem value="SCRAM-SHA-1">SCRAM-SHA-1</SelectItem>
                             <SelectItem value="SCRAM-SHA-256">SCRAM-SHA-256</SelectItem>
-                            <SelectItem value="MONGODB-OIDC">MONGODB-OIDC</SelectItem>
+                            <SelectItem v-if="!goBackend" value="MONGODB-OIDC">MONGODB-OIDC</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -8442,7 +8519,7 @@ function openExternalUrl(url: string) {
                       </div>
                       <div class="grid grid-cols-4 items-center gap-4">
                         <Label :class="connectionLabelClass">{{ t("connection.urlParams") }}</Label>
-                        <Input v-model="form.url_params" class="col-span-3" placeholder="replicaSet=rs0&authSource=admin" />
+                        <Input v-model="form.url_params" class="col-span-3" :placeholder="goBackend ? 'authSource=admin' : 'replicaSet=rs0&authSource=admin'" />
                       </div>
                     </template>
                   </template>
@@ -9141,7 +9218,16 @@ function openExternalUrl(url: string) {
 
                     <div v-if="form.db_type !== 'hbase' && form.db_type !== 'meilisearch' && form.db_type !== 'solr' && form.db_type !== 'spanner'" class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelClass">{{ databaseLabel }}</Label>
-                      <Input v-model="form.database" class="col-span-3" :placeholder="databasePlaceholder" />
+                      <ConnectionDatabaseSelect
+                        v-if="canSelectConnectionDatabase"
+                        v-model="form.database"
+                        class="col-span-3"
+                        :placeholder="databasePlaceholder"
+                        :scope-key="connectionDatabaseSelectScope"
+                        :load-options="loadConnectionDatabaseOptions"
+                        :disabled="isTesting || isSaving || !hasRequiredConnectionTarget"
+                      />
+                      <Input v-else v-model="form.database" class="col-span-3" :placeholder="databasePlaceholder" />
                     </div>
 
                     <!-- Cloud Spanner: project/instance/database resource path instead of user/password/database -->
@@ -9586,7 +9672,8 @@ function openExternalUrl(url: string) {
 
             <TabsContent v-if="supportsTlsToggle" value="tls" class="m-0 flex min-h-0 flex-1 flex-col overflow-hidden">
               <div class="connection-form-body grid min-h-0 flex-1 scroll-pb-6 gap-4 overflow-y-auto overflow-x-hidden pt-4 pr-2 pb-6">
-                <div v-if="!supportsPostgresTlsOptions && !supportsMysqlTlsOptions && form.db_type !== 'consul'" class="grid grid-cols-4 items-center gap-4">
+                <GoSecureConnectionFields v-if="supportsGoTLSOptions" :config="form" />
+                <div v-if="!supportsGoTLSOptions && !supportsPostgresTlsOptions && !supportsMysqlTlsOptions && form.db_type !== 'consul'" class="grid grid-cols-4 items-center gap-4">
                   <Label :class="connectionLabelSmallClass">SSL/TLS</Label>
                   <label class="col-span-3 flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" v-model="tlsEnabled" class="mr-0" />
@@ -9679,7 +9766,7 @@ function openExternalUrl(url: string) {
                   </div>
                 </template>
 
-                <div v-if="form.db_type === 'redis'" class="grid grid-cols-4 items-start gap-4">
+                <div v-if="!goBackend && form.db_type === 'redis'" class="grid grid-cols-4 items-start gap-4">
                   <Label :class="connectionLabelSmallClass">{{ t("connection.redisTlsInsecure") }}</Label>
                   <label class="col-span-3 flex items-start gap-2 cursor-pointer">
                     <input type="checkbox" v-model="redisTlsInsecure" class="mr-0 mt-0.5" :disabled="!form.ssl" />
@@ -9749,7 +9836,7 @@ function openExternalUrl(url: string) {
                   </div>
                 </template>
 
-                <template v-if="supportsMysqlTlsOptions">
+                <template v-if="!supportsGoTLSOptions && supportsMysqlTlsOptions">
                   <div v-if="supportsMysqlCleartextPasswordAuth" class="grid grid-cols-4 items-start gap-4">
                     <Label :class="[connectionLabelSmallPaddedClass, 'min-w-0 break-words']">{{ t("connection.mysqlCleartextPasswordAuth") }}</Label>
                     <div class="col-span-3 flex min-w-0 items-start justify-between gap-4">
@@ -9838,7 +9925,7 @@ function openExternalUrl(url: string) {
                   </div>
                 </template>
 
-                <template v-if="supportsPostgresTlsOptions">
+                <template v-if="!supportsGoTLSOptions && supportsPostgresTlsOptions">
                   <div class="grid grid-cols-4 items-center gap-4">
                     <Label :class="connectionLabelSmallClass">{{ t("connection.postgresSslMode") }}</Label>
                     <Select v-model="postgresTlsMode">
@@ -10404,19 +10491,19 @@ function openExternalUrl(url: string) {
                       </button>
                     </div>
                     <div class="flex min-w-0 flex-wrap items-center gap-2">
-                      <Button type="button" variant="outline" size="sm" @click="addSshTunnel">
+                      <Button type="button" variant="outline" size="sm" :disabled="goBackend && transportLayers.filter((layer) => layer.enabled !== false).length >= 4" @click="addSshTunnel">
                         <Plus class="mr-1.5 h-3.5 w-3.5" />
                         {{ t("connection.sshHopAdd") }}
                       </Button>
-                      <Button type="button" variant="outline" size="sm" @click="addProxyTunnel">
+                      <Button v-if="!goBackend" type="button" variant="outline" size="sm" @click="addProxyTunnel">
                         <Plus class="mr-1.5 h-3.5 w-3.5" />
                         {{ t("connection.proxy") }}
                       </Button>
-                      <Button v-if="!sqliteRemoteTransportRestricted" type="button" variant="outline" size="sm" @click="addHttpTunnel">
+                      <Button v-if="!goBackend && !sqliteRemoteTransportRestricted" type="button" variant="outline" size="sm" @click="addHttpTunnel">
                         <Plus class="mr-1.5 h-3.5 w-3.5" />
                         {{ t("connection.httpTunnelAdd") }}
                       </Button>
-                      <Button v-if="selectedTransportLayer" type="button" variant="outline" size="sm" @click="duplicateTransportLayer(selectedTransportLayer)">
+                      <Button v-if="selectedTransportLayer" type="button" variant="outline" size="sm" :disabled="goBackend && (selectedTransportLayer.type !== 'ssh' || transportLayers.filter((layer) => layer.enabled !== false).length >= 4)" @click="duplicateTransportLayer(selectedTransportLayer)">
                         <Copy class="mr-1.5 h-3.5 w-3.5" />
                         {{ t("connection.sshHopDuplicate") }}
                       </Button>
@@ -10469,8 +10556,8 @@ function openExternalUrl(url: string) {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="ssh">SSH</SelectItem>
-                        <SelectItem value="proxy">Proxy</SelectItem>
-                        <SelectItem v-if="!sqliteRemoteTransportRestricted" value="http_tunnel">{{ t("connection.httpTunnel") }}</SelectItem>
+                        <SelectItem v-if="!goBackend" value="proxy">Proxy</SelectItem>
+                        <SelectItem v-if="!goBackend && !sqliteRemoteTransportRestricted" value="http_tunnel">{{ t("connection.httpTunnel") }}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -10506,7 +10593,7 @@ function openExternalUrl(url: string) {
                       <Label :class="connectionLabelSmallClass">{{ t("connection.sshKeyPath") }}</Label>
                       <div class="col-span-3 flex items-center gap-1">
                         <Input v-model="selectedSshLayer.key_path" class="flex-1" placeholder="~/.ssh/id_rsa" :disabled="selectedSshLayer.enabled === false" />
-                        <Tooltip v-if="isDesktop">
+                        <Tooltip v-if="hasNativeFileDialogs">
                           <TooltipTrigger as-child>
                             <Button variant="outline" size="icon" class="h-9 w-9 shrink-0" :disabled="selectedSshLayer.enabled === false" @click="browseSshKeyPath(selectedSshLayer)">
                               <FolderOpen class="h-4 w-4" />
@@ -10532,21 +10619,22 @@ function openExternalUrl(url: string) {
                       <Label :class="connectionLabelSmallClass">{{ t("connection.sshAgentSockPath") }}</Label>
                       <Input v-model="selectedSshLayer.ssh_agent_sock_path" class="col-span-3" :placeholder="t('connection.sshAgentSockPathPlaceholder')" :disabled="selectedSshLayer.enabled === false" />
                     </div>
-                    <div class="grid grid-cols-4 items-center gap-4">
+                    <GoSshHostVerification v-if="goBackend" :config="selectedSshLayer" :disabled="selectedSshLayer.enabled === false" />
+                    <div v-if="!goBackend" class="grid grid-cols-4 items-center gap-4">
                       <span />
                       <label class="col-span-3 flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" v-model="selectedSshLayer.expose_lan" class="mr-0" :disabled="selectedSshLayer.enabled === false" />
                         <span class="text-xs text-muted-foreground">{{ t("connection.sshExposeLan") }}</span>
                       </label>
                     </div>
-                    <div class="grid grid-cols-4 items-start gap-4">
+                    <div v-if="!goBackend" class="grid grid-cols-4 items-start gap-4">
                       <span />
                       <label class="col-span-3 flex items-start gap-2 cursor-pointer">
                         <input type="checkbox" v-model="selectedSshLayer.allow_exec_channel_proxy" class="mt-0.5 mr-0" :disabled="selectedSshLayer.enabled === false" />
                         <span class="text-xs text-muted-foreground">{{ t("connection.sshAllowExecChannelProxy") }}</span>
                       </label>
                     </div>
-                    <div class="grid grid-cols-4 items-start gap-4">
+                    <div v-if="!goBackend" class="grid grid-cols-4 items-start gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.sshProxyCommand") }}</Label>
                       <div class="col-span-3 space-y-1">
                         <Input v-model="selectedSshLayer.proxy_command" :placeholder="t('connection.sshProxyCommandPlaceholder')" :disabled="selectedSshLayer.enabled === false" />
@@ -10588,7 +10676,7 @@ function openExternalUrl(url: string) {
                   <template v-else-if="selectedHttpTunnelLayer && !selectedLayerProfileId">
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.httpTunnelUrl") }}</Label>
-                      <Input v-model="selectedHttpTunnelLayer.url" class="col-span-3" placeholder="https://dbx.example.com/dbx_tunnel.php" :disabled="selectedHttpTunnelLayer.enabled === false" />
+                      <Input v-model="selectedHttpTunnelLayer.url" class="col-span-3" placeholder="https://database.example.com/dbx_tunnel.php" :disabled="selectedHttpTunnelLayer.enabled === false" />
                     </div>
                     <div class="grid grid-cols-4 items-center gap-4">
                       <Label :class="connectionLabelSmallClass">{{ t("connection.httpTunnelToken") }}</Label>

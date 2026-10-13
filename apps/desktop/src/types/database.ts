@@ -241,9 +241,13 @@ export interface SshTunnelConfig {
   expose_lan?: boolean;
   use_ssh_agent?: boolean;
   ssh_agent_sock_path?: string;
+  /** Go SSH: verified SHA256 host-key pin. Overrides known_hosts when supplied. */
+  host_key_fingerprint?: string;
+  /** Go SSH: OpenSSH known_hosts path; defaults to ~/.ssh/known_hosts. */
+  known_hosts_path?: string;
   /**
-   * UI-facing choice of login method. Drives which credential inputs the
-   * connection dialog shows; the backend still probes "none" then falls
+   * Choice of login method. Go uses the selected authentication method.
+   * The legacy Rust backend probes "none" then falls
    * back to key > password > agent based on which fields are non-empty,
    * independent of this selector (see `db/ssh_tunnel.rs`).
    *

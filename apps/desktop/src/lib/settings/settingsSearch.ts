@@ -61,14 +61,11 @@ export type ToolbarVisibilityItem = ({ key: ToolbarVisibilityItemKey; titleKey: 
 /**
  * The toolbar visibility controls and their search entries use this same list.
  * Keeping the labels here prevents a newly added toggle from being absent from
- * settings search. Fixed Tools menu entries have no visibility switch; legacy
- * persisted fields remain compatible without advertising ineffective controls.
+ * settings search. Resource navigation, AI and fixed Tools menu entries remain
+ * available in the unified workbench; legacy persisted fields stay compatible
+ * without advertising ineffective controls.
  */
 export const TOOLBAR_VISIBILITY_ITEMS: readonly ToolbarVisibilityItem[] = [
-  { key: "sqlLibrary", titleKey: "sqlLibrary.title" },
-  { key: "sqlFileTree", titleKey: "sqlFileTree.title" },
-  { key: "history", titleKey: "history.title" },
-  { key: "ai", title: "AI" },
   { key: "theme", titleKey: "toolbar.theme" },
   { key: "alwaysOnTop", titleKey: "toolbar.alwaysOnTop", desktopOnly: true },
 ];
@@ -247,7 +244,6 @@ export const SETTINGS_SEARCH_DEFINITIONS: readonly SettingsSearchDefinition[] = 
   { id: "sql-file-editor-max-mb", category: "editor", titleKey: "settings.externalSqlEditorMaxMb", descriptionKey: "settings.externalSqlEditorMaxMbDescription", targetId: "editor-sql-file" },
   { id: "sql-file-web-upload-max-mb", category: "data", titleKey: "settings.webSqlFileUploadMaxMb", descriptionKey: "settings.webSqlFileUploadMaxMbDescription", targetId: "data-sql-file-upload", visible: (context) => context.isWeb },
   { id: "appearance-toolbar", category: "appearance", titleKey: "settings.toolbarTitle", descriptionKey: "settings.toolbarHiddenHint", targetId: "appearance" },
-  { id: "appearance-exclusive-sidebar-panels", category: "appearance", titleKey: "settings.exclusiveRightSidebarPanels", descriptionKey: "settings.exclusiveRightSidebarPanelsDescription", targetId: "appearance" },
   ...createToolbarVisibilitySettingsSearchDefinitions(),
   { id: "data-datetime", category: "data", titleKey: "settings.dateTimeSection", targetId: "data" },
   { id: "data-datetime-display-format", category: "data", titleKey: "settings.globalDateTimeDisplayFormat", descriptionKey: "settings.globalDateTimeDisplayFormatDescription", targetId: "data" },

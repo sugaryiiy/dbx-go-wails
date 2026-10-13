@@ -2,10 +2,10 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/workbench.svg" />
+    <link rel="icon" type="image/png" href="/icons/brand/magpiedb-favicon.png" />
     <link rel="stylesheet" href="/connection-dialog-legacy.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Database Workbench</title>
+    <title>MagpieDB</title>
     <style>
       html,
       body,
@@ -34,6 +34,13 @@
         font:
           14px system-ui,
           sans-serif;
+      }
+
+      #startup-loading .startup-icon {
+        width: 64px;
+        height: 64px;
+        border-radius: 14px;
+        object-fit: cover;
       }
 
       #startup-loading .startup-brand {
@@ -120,7 +127,8 @@
   <body>
     <div id="root">
       <div id="startup-loading" role="status" aria-live="polite" aria-busy="true">
-        <span class="startup-brand" aria-hidden="true">数据库工作台</span>
+        <img class="startup-icon" src="/icons/brand/magpiedb.png" alt="" aria-hidden="true" />
+        <span class="startup-brand" aria-hidden="true">喜鹊 · MagpieDB</span>
         <span class="startup-spinner" aria-hidden="true"></span>
         <span>Loading…</span>
       </div>
@@ -165,27 +173,27 @@
         const TEXT = {
           "zh-CN": {
             listSeparator: "、",
-            macTitle: "当前系统的 WebKit 版本过旧，数据库工作台 界面无法正常显示",
-            macBody: "数据库工作台 的界面由 macOS 内置的 WebKit 渲染，而这台 Mac 上的 WebKit 版本过旧，缺少 数据库工作台 需要的 CSS 特性，界面会显示异常。",
+            macTitle: "当前系统的 WebKit 版本过旧，喜鹊 界面无法正常显示",
+            macBody: "喜鹊 的界面由 macOS 内置的 WebKit 渲染，而这台 Mac 上的 WebKit 版本过旧，缺少 喜鹊 需要的 CSS 特性，界面会显示异常。",
             macSteps: [
               "打开「系统设置 → 通用 → 软件更新」，把 macOS 升级到 Monterey 的最新版本（12.7.6）。",
               "在同一页面把 Safari 升级到最新版（Monterey 最高支持 Safari 17.6）。",
-              "完全退出 数据库工作台，然后重新打开。",
+              "完全退出 喜鹊，然后重新打开。",
             ],
-            macNote: "升级 Safari 会同时更新系统 WebKit，数据库工作台 不需要重新安装。",
-            webTitle: "当前浏览器版本过旧，数据库工作台 界面无法正常显示",
-            webBody: "检测到 {engine}，该版本过旧，缺少 数据库工作台 需要的 CSS 特性，界面会显示异常。",
+            macNote: "升级 Safari 会同时更新系统 WebKit，喜鹊 不需要重新安装。",
+            webTitle: "当前浏览器版本过旧，喜鹊 界面无法正常显示",
+            webBody: "检测到 {engine}，该版本过旧，缺少 喜鹊 需要的 CSS 特性，界面会显示异常。",
             webSteps: [
               "请把浏览器升级到最新版本（Chrome、Edge、Firefox、Safari 均可）。",
-              "升级完成后重新打开 数据库工作台。",
+              "升级完成后重新打开 喜鹊。",
             ],
             desktopSteps: [
               "请把操作系统升级到最新版本，以便同步更新系统内置的 WebView。",
-              "完全退出 数据库工作台，然后重新打开。",
+              "完全退出 喜鹊，然后重新打开。",
             ],
             webNote: "如果浏览器由公司统一分发、无法自行升级，请联系 IT 部门。",
-            macBanner: "检测到 {engine}，部分样式可能显示异常。请在「系统设置 → 通用 → 软件更新」把 Safari 升级到最新版，再重新打开 数据库工作台。",
-            desktopBanner: "检测到 {engine}，部分样式可能显示异常。建议升级操作系统以更新系统内置的 WebView，再重新打开 数据库工作台。",
+            macBanner: "检测到 {engine}，部分样式可能显示异常。请在「系统设置 → 通用 → 软件更新」把 Safari 升级到最新版，再重新打开 喜鹊。",
+            desktopBanner: "检测到 {engine}，部分样式可能显示异常。建议升级操作系统以更新系统内置的 WebView，再重新打开 喜鹊。",
             webBanner: "检测到 {engine}，部分样式可能显示异常。建议把浏览器升级到最新版本，再重新打开。",
             continue: "仍然继续（界面会显示异常）",
             dismiss: "知道了",
@@ -193,27 +201,27 @@
           },
           "zh-TW": {
             listSeparator: "、",
-            macTitle: "目前系統的 WebKit 版本過舊，資料庫工作台 介面無法正常顯示",
-            macBody: "資料庫工作台 的介面由 macOS 內建的 WebKit 算繪，而這台 Mac 上的 WebKit 版本過舊，缺少 資料庫工作台 需要的 CSS 特性，介面會顯示異常。",
+            macTitle: "目前系統的 WebKit 版本過舊，喜鵲 介面無法正常顯示",
+            macBody: "喜鵲 的介面由 macOS 內建的 WebKit 算繪，而這台 Mac 上的 WebKit 版本過舊，缺少 喜鵲 需要的 CSS 特性，介面會顯示異常。",
             macSteps: [
               "打開「系統設定 → 一般 → 軟體更新」，把 macOS 更新到 Monterey 的最新版本（12.7.6）。",
               "在同一頁面把 Safari 更新到最新版（Monterey 最高支援 Safari 17.6）。",
-              "完整結束 資料庫工作台，然後重新打開。",
+              "完整結束 喜鵲，然後重新打開。",
             ],
-            macNote: "更新 Safari 會同時更新系統 WebKit，資料庫工作台 不需要重新安裝。",
-            webTitle: "目前瀏覽器版本過舊，資料庫工作台 介面無法正常顯示",
-            webBody: "偵測到 {engine}，該版本過舊，缺少 資料庫工作台 需要的 CSS 特性，介面會顯示異常。",
+            macNote: "更新 Safari 會同時更新系統 WebKit，喜鵲 不需要重新安裝。",
+            webTitle: "目前瀏覽器版本過舊，喜鵲 介面無法正常顯示",
+            webBody: "偵測到 {engine}，該版本過舊，缺少 喜鵲 需要的 CSS 特性，介面會顯示異常。",
             webSteps: [
               "請把瀏覽器更新到最新版本（Chrome、Edge、Firefox、Safari 皆可）。",
-              "更新完成後重新打開 資料庫工作台。",
+              "更新完成後重新打開 喜鵲。",
             ],
             desktopSteps: [
               "請把作業系統更新到最新版本，以便同步更新系統內建的 WebView。",
-              "完整結束 資料庫工作台，然後重新打開。",
+              "完整結束 喜鵲，然後重新打開。",
             ],
             webNote: "如果瀏覽器由公司統一派送、無法自行更新，請聯絡 IT 部門。",
-            macBanner: "偵測到 {engine}，部分樣式可能顯示異常。請在「系統設定 → 一般 → 軟體更新」把 Safari 更新到最新版，再重新打開 資料庫工作台。",
-            desktopBanner: "偵測到 {engine}，部分樣式可能顯示異常。建議更新作業系統以更新系統內建的 WebView，再重新打開 資料庫工作台。",
+            macBanner: "偵測到 {engine}，部分樣式可能顯示異常。請在「系統設定 → 一般 → 軟體更新」把 Safari 更新到最新版，再重新打開 喜鵲。",
+            desktopBanner: "偵測到 {engine}，部分樣式可能顯示異常。建議更新作業系統以更新系統內建的 WebView，再重新打開 喜鵲。",
             webBanner: "偵測到 {engine}，部分樣式可能顯示異常。建議把瀏覽器更新到最新版本，再重新打開。",
             continue: "仍然繼續（介面會顯示異常）",
             dismiss: "知道了",
@@ -221,27 +229,27 @@
           },
           en: {
             listSeparator: ", ",
-            macTitle: "This Mac's WebKit is too old for Database Workbench to render correctly",
-            macBody: "Database Workbench renders its UI with the WebKit built into macOS, and the WebKit on this Mac is too old: it is missing CSS features Database Workbench relies on, so the UI renders incorrectly.",
+            macTitle: "This Mac's WebKit is too old for MagpieDB to render correctly",
+            macBody: "MagpieDB renders its UI with the WebKit built into macOS, and the WebKit on this Mac is too old: it is missing CSS features MagpieDB relies on, so the UI renders incorrectly.",
             macSteps: [
               "Open System Settings → General → Software Update and update macOS to the latest Monterey release (12.7.6).",
               "Update Safari to the latest version from the same panel (Monterey supports up to Safari 17.6).",
-              "Quit Database Workbench completely, then open it again.",
+              "Quit MagpieDB completely, then open it again.",
             ],
-            macNote: "Updating Safari also updates the system WebKit, so Database Workbench does not need to be reinstalled.",
-            webTitle: "This browser is too old for Database Workbench to render correctly",
-            webBody: "Detected {engine}, which is too old: it is missing CSS features Database Workbench relies on, so the UI renders incorrectly.",
+            macNote: "Updating Safari also updates the system WebKit, so MagpieDB does not need to be reinstalled.",
+            webTitle: "This browser is too old for MagpieDB to render correctly",
+            webBody: "Detected {engine}, which is too old: it is missing CSS features MagpieDB relies on, so the UI renders incorrectly.",
             webSteps: [
               "Update your browser to the latest version (any modern Chrome, Edge, Firefox or Safari works).",
-              "Reopen Database Workbench once the update is done.",
+              "Reopen MagpieDB once the update is done.",
             ],
             desktopSteps: [
               "Update your operating system to the latest version so the built-in WebView is updated too.",
-              "Quit Database Workbench completely, then open it again.",
+              "Quit MagpieDB completely, then open it again.",
             ],
             webNote: "If your browser is managed by your company and cannot be updated, please contact IT.",
-            macBanner: "Detected {engine}. Some styles may render incorrectly - update Safari from System Settings > General > Software Update, then reopen Database Workbench.",
-            desktopBanner: "Detected {engine}. Some styles may render incorrectly - update your operating system so its built-in WebView is updated, then reopen Database Workbench.",
+            macBanner: "Detected {engine}. Some styles may render incorrectly - update Safari from System Settings > General > Software Update, then reopen MagpieDB.",
+            desktopBanner: "Detected {engine}. Some styles may render incorrectly - update your operating system so its built-in WebView is updated, then reopen MagpieDB.",
             webBanner: "Detected {engine}. Some styles may render incorrectly - update your browser to the latest version, then reopen.",
             continue: "Continue anyway (the UI will look wrong)",
             dismiss: "Got it",
@@ -409,7 +417,7 @@
 
           if (!banner) {
             card.appendChild(
-              el("div", "font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:" + color.subtle + ";margin-bottom:10px;", "Database Workbench"),
+              el("div", "font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:" + color.subtle + ";margin-bottom:10px;", "MagpieDB"),
             );
             card.appendChild(el("h1", "margin:0 0 10px;font-size:17px;font-weight:600;line-height:1.4;", mac ? copy.macTitle : copy.webTitle));
           }

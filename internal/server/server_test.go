@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -137,7 +138,11 @@ func TestEncryptedPersistenceMergeAndPasswordPolicy(t *testing.T) {
 	}
 	for _, name := range []string{"state.enc", "credentials.key"} {
 		info, err := os.Stat(filepath.Join(dir, name))
-		if err != nil || info.Mode().Perm() != 0600 {
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Windows represents access through ACLs, not Unix permission bits.
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 			t.Fatalf("unsafe permissions: %s", name)
 		}
 	}

@@ -11,7 +11,7 @@ import (
 
 func quoteSQLName(value, kind string) string {
 	q := "\""
-	if kind == "mysql" || kind == "mariadb" {
+	if kind == "mysql" || kind == "mariadb" || kind == "clickhouse" {
 		q = "`"
 	}
 	return q + strings.ReplaceAll(value, q, q+q) + q
@@ -21,7 +21,7 @@ func tableSQLName(p map[string]any) (string, error) {
 	if kind == "mariadb" {
 		kind = "mysql"
 	}
-	if kind != "" && kind != "sqlite" && kind != "mysql" && kind != "postgres" {
+	if kind != "" && kind != "sqlite" && kind != "mysql" && kind != "postgres" && kind != "clickhouse" {
 		return "", errors.New("SQL generation for this database has not yet been migrated")
 	}
 	table := str(p, "tableName")
@@ -29,7 +29,7 @@ func tableSQLName(p map[string]any) (string, error) {
 		return "", errors.New("Table name is required")
 	}
 	namespace := str(p, "schema")
-	if kind == "mysql" && boolValue(p, "includeDatabaseName") {
+	if (kind == "mysql" || kind == "clickhouse") && boolValue(p, "includeDatabaseName") {
 		namespace = str(p, "database")
 	}
 	if namespace != "" {
@@ -59,6 +59,11 @@ func isSimpleSelect(sql string) bool {
 }
 func buildSQL(path string, p map[string]any) (any, bool, error) {
 	options := mapValue(p, "options")
+	if str(options, "databaseType") == "influxdb" {
+		if result, handled, err := buildInfluxSQL(path, options); handled {
+			return result, true, err
+		}
+	}
 	if str(options, "databaseType") == "mariadb" {
 		options["databaseType"] = "mysql"
 	}
@@ -147,7 +152,7 @@ func buildSQL(path string, p map[string]any) (any, bool, error) {
 			return nil, true, errors.New("Invalid pagination")
 		}
 		kind := str(options, "databaseType")
-		if kind != "" && kind != "sqlite" && kind != "mysql" && kind != "postgres" {
+		if kind != "" && kind != "sqlite" && kind != "mysql" && kind != "postgres" && kind != "clickhouse" {
 			return nil, true, errors.New("Pagination is not implemented for this database")
 		}
 		paged := fmt.Sprintf("SELECT * FROM (\n%s\n) AS dbx_page LIMIT %d OFFSET %d", base, limit, offset)
@@ -192,6 +197,10 @@ func buildSQL(path string, p map[string]any) (any, bool, error) {
 				prefix = "EXPLAIN (ANALYZE, FORMAT JSON) "
 			} else {
 				prefix = "EXPLAIN (FORMAT JSON) "
+			}
+		case "clickhouse":
+			if boolValue(options, "analyze") || (str(options, "format") != "" && str(options, "format") != "text" && str(options, "format") != "standard") {
+				return map[string]any{"ok": false, "reason": "unsupported"}, true, nil
 			}
 		case "mysql":
 			if str(options, "format") == "json" {

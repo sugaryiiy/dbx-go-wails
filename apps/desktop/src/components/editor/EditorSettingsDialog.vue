@@ -39,7 +39,6 @@ import {
   Star,
   SunMoon,
   Table,
-  Terminal,
   Trash2,
   Upload,
   X,
@@ -137,15 +136,6 @@ import { clearDebugLogs as clearStoredDebugLogs, downloadDebugLogs, getDebugLogB
 import {
   aiTestConnection,
   checkMcpServerStatus,
-  uninstallMcpServer,
-  uninstallNpmMcpServer,
-  loadMcpHttpServerSettings,
-  saveMcpHttpServerSettings,
-  mcpHttpServerStatus,
-  rotateMcpHttpServerToken,
-  loadWebMcpHttpStatus,
-  saveWebMcpHttpSettings,
-  rotateWebMcpToken,
   forgetSnippetSavedToken,
   forgetWebdavSyncSecretsPassphrase,
   forgetWebdavSavedPassword,
@@ -182,10 +172,6 @@ import {
   webdavSyncUpload,
   listInstalledAgentsLocal,
   type AppSupportInfo,
-  type McpHttpServerSettings,
-  type McpHttpServerStatus,
-  type WebMcpHttpStatus,
-  type WebMcpHttpSettings,
   type McpServerStatus,
   type SnippetProvider,
   type SnippetSyncConfig,
@@ -220,35 +206,10 @@ import {
   type SqlVariableSyntaxOverrides,
   type SqlVariableSyntaxToggles,
 } from "@/lib/sql/sqlVariableSyntax";
-import {
-  buildMcpCherryStudioConfig,
-  buildMcpCodexConfig,
-  buildMcpDeepSeekHarnessConfig,
-  buildMcpJsonConfig,
-  buildMcpOpenCodeConfig,
-  buildMcpPiConfig,
-  buildMcpQoderConfig,
-  buildMcpTraeConfig,
-  buildMcpVsCodeConfig,
-  buildMcpWorkBuddyConfig,
-  mcpWebBackendUrl,
-  type McpLaunchConfig,
-  preferMcpNativeLaunch,
-} from "@/lib/mcp/mcpConfigTemplates";
+import GoMcpServerPanel from "@/components/settings/GoMcpServerPanel.vue";
+import { GO_MCP_TOOL_NAMES, goMcpToolLabel, toggleGoMcpAllowedToolName } from "@/lib/mcp/goMcpPolicy";
 import { beginMcpStatusRequest, mcpUpdateAvailability } from "@/lib/mcp/mcpUpdateStatus";
-import { notifyComponentUpdatesChanged } from "@/lib/updates/componentUpdateEvents";
-import {
-  addMcpAllowedToolName,
-  customMcpAllowedToolNames,
-  isMcpPolicyMutationBlocked,
-  MCP_CAPABILITY_ROWS,
-  MCP_EXECUTION_MODE_COLUMNS,
-  MCP_TOOL_OPTIONS,
-  mcpExecutionModeFromPolicy,
-  mcpPolicyFieldsForExecutionMode,
-  toggleMcpAllowedToolName,
-  type McpExecutionMode,
-} from "@/lib/mcp/mcpPolicySelection";
+import { isMcpPolicyMutationBlocked, MCP_CAPABILITY_ROWS, MCP_EXECUTION_MODE_COLUMNS, mcpExecutionModeFromPolicy, mcpPolicyFieldsForExecutionMode, type McpExecutionMode } from "@/lib/mcp/mcpPolicySelection";
 import { combineDataTypeForDatabase, dataTypeLengthInputValue, getDataTypeOptions, getDefaultLengthForType, isDataTypeLengthDisabled, splitDataType } from "@/lib/table/tableStructureEditorState";
 import { useToast } from "@/composables/useToast";
 import type { DatabaseType, SqlShortcutAction, SqlSnippet } from "@/types/database";
@@ -865,7 +826,8 @@ const editExportRowLimit = ref(settingsStore.editorSettings.exportRowLimit);
 const editQueryExportKeysetOptimizationEnabled = ref(settingsStore.editorSettings.queryExportKeysetOptimizationEnabled);
 const editUpdateDownloadSource = ref<UpdateDownloadSource>(settingsStore.editorSettings.updateDownloadSource);
 const editToolbarItems = ref({ ...settingsStore.editorSettings.toolbarItems });
-// Desktop-only toolbar buttons (always-on-top) can never render in the Web build, so their switches stay out of the Web settings dialog.
+// Only configurable header controls appear here. Resource navigation and AI
+// remain available in the workbench; legacy visibility fields are still saved.
 const toolbarVisibilityItems = computed(() => visibleToolbarVisibilityItems(TOOLBAR_VISIBILITY_ITEMS, isWeb));
 function getToolbarVisibilityItemLabel(item: ToolbarVisibilityItem): string {
   return toolbarVisibilityItemLabel(item, t);
@@ -3444,48 +3406,16 @@ async function exportDebugLogs() {
 }
 
 // ---------- MCP Server ----------
-type McpConfigTab = "claude" | "cursor" | "codebuddy" | "zcode" | "trae" | "vscode" | "windsurf" | "codex" | "deepseek-harness" | "opencode" | "pi" | "cherry-studio" | "qoder" | "workbuddy";
-type McpCopyKind = "install" | "uninstall" | "http-endpoint" | "http-token" | "http-config" | `${McpConfigTab}-config`;
-type McpTransportTab = "stdio" | "http";
 type McpManagementTab = "access" | "permissions";
-
+const mcpManagementTab = ref<McpManagementTab>("access");
 const mcpStatus = ref<McpServerStatus | null>(null);
 const mcpStatusLoading = ref(false);
 const mcpStatusError = ref("");
-const mcpCopied = ref<"" | McpCopyKind>("");
-const mcpConfigTab = ref<McpConfigTab>("claude");
-const mcpTransportTab = ref<McpTransportTab>("stdio");
-const mcpManagementTab = ref<McpManagementTab>("access");
-const mcpHttpSettings = ref<McpHttpServerSettings>({
-  enabled: false,
-  host: "127.0.0.1",
-  port: 5225,
-  path: "/mcp",
-  allowRemote: false,
-  allowedHosts: [],
-  allowedOrigins: [],
-});
-const mcpHttpStatus = ref<McpHttpServerStatus | null>(null);
-const webMcpHttpStatus = ref<WebMcpHttpStatus | null>(null);
-const webMcpEnabledDraft = ref(false);
-const webMcpAllowedHostsText = ref("");
-const webMcpAllowedOriginsText = ref("");
-const webMcpSaving = ref(false);
-const webMcpError = ref("");
-const mcpHttpLoading = ref(false);
-const mcpHttpSaving = ref(false);
-const mcpHttpError = ref("");
-const mcpHttpAllowedHostsText = ref("");
-const mcpHttpAllowedOriginsText = ref("");
-const mcpHttpPersistedSettings = ref<McpHttpServerSettings | null>(null);
 const MCP_READONLY_STORAGE_KEY = "dbx-mcp-config-readonly";
 const MCP_SCOPE_CONNECTION_STORAGE_KEY = "dbx-mcp-config-scope-connection";
 const mcpPolicyLoading = ref(false);
 const mcpPolicySaving = ref(false);
 const mcpPolicyLoadError = ref("");
-const mcpUninstalling = ref(false);
-const mcpInstallMessage = ref("");
-const mcpInstallError = ref(false);
 const mcpPolicyDraft = ref<McpGlobalPolicy>(normalizeMcpGlobalPolicy(settingsStore.mcpGlobalPolicy));
 const mcpPolicyBaseline = ref<McpGlobalPolicy>(normalizeMcpGlobalPolicy(settingsStore.mcpGlobalPolicy));
 
@@ -3521,6 +3451,14 @@ const mcpExecutionModeOptions: McpExecutionMode[] = ["read_only", "safe_write", 
 const mcpAllowedConnectionIds = computed(() => mcpPolicyDraft.value.allowedConnectionIds);
 const mcpAllowedGroupIds = computed(() => mcpPolicyDraft.value.allowedGroupIds);
 const mcpQueryTimeoutInput = ref<string>(mcpPolicyDraft.value.queryTimeoutSecs === null ? "" : String(mcpPolicyDraft.value.queryTimeoutSecs));
+const mcpQueryTimeoutDescription = computed(() =>
+  isTauriRuntime()
+    ? t("settings.mcpQueryTimeoutDescription")
+    : locale.value.startsWith("zh")
+      ? "留空继承连接的有效查询超时，否则默认 300 秒。可设置 1–86400 秒；Go MCP 不支持不限时查询。"
+      : "Leave blank to inherit a valid connection timeout, otherwise 300 seconds. Enter 1–86400 seconds; Go MCP does not support unlimited queries.",
+);
+const mcpQueryTimeoutInvalidMessage = computed(() => (isTauriRuntime() ? t("settings.mcpQueryTimeoutInvalid") : locale.value.startsWith("zh") ? "请输入 1–86400 的整数秒数，或留空使用默认超时。" : "Enter an integer from 1 to 86400 seconds, or leave blank for the default timeout."));
 
 watch(
   () => mcpPolicyDraft.value.queryTimeoutSecs,
@@ -3548,10 +3486,10 @@ function onMcpQueryTimeoutInput(event: Event) {
     mcpQueryTimeoutPendingValue = null;
   } else {
     const parsed = Number(raw);
-    // Backend stores the value as u64; keep out-of-range integers on the
-    // invalid-value path instead of failing serde later with a generic error.
-    if (!Number.isFinite(parsed) || parsed < 0 || !Number.isInteger(parsed) || parsed > Number("18446744073709551615")) {
-      toast(t("settings.mcpQueryTimeoutInvalid"), 5000);
+    const minimum = isTauriRuntime() ? 0 : 1;
+    const maximum = isTauriRuntime() ? Number("18446744073709551615") : 86400;
+    if (!Number.isFinite(parsed) || parsed < minimum || !Number.isInteger(parsed) || parsed > maximum) {
+      toast(mcpQueryTimeoutInvalidMessage.value, 5000);
       // Revert before Input's bubble-phase v-model handler sees the value, so
       // the proxy and parent ref remain aligned.
       const reverted = mcpPolicyDraft.value.queryTimeoutSecs === null ? "" : String(mcpPolicyDraft.value.queryTimeoutSecs);
@@ -3598,46 +3536,9 @@ const mcpPolicyControlsDisabled = computed(() =>
   }),
 );
 
-const mcpHttpClientConfig = computed(() => {
-  if (!mcpHttpStatus.value?.endpoint || !mcpHttpStatus.value.accessToken) return "";
-  return JSON.stringify(
-    {
-      type: "http",
-      url: mcpHttpStatus.value.endpoint,
-      headers: { Authorization: `Bearer ${mcpHttpStatus.value.accessToken}` },
-    },
-    null,
-    2,
-  );
-});
-
-const mcpHttpDraftValidationError = computed(() => {
-  const host = mcpHttpSettings.value.host.trim();
-  const port = Number(mcpHttpSettings.value.port);
-  const path = mcpHttpSettings.value.path.trim();
-  if (!mcpHttpSettings.value.enabled) return "";
-  if (!host) return t("settings.mcpHttpValidationHostRequired");
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return t("settings.mcpHttpValidationPortRange");
-  if (!path.startsWith("/")) return t("settings.mcpHttpValidationPathPrefix");
-
-  const isLoopback = host === "127.0.0.1" || host === "::1";
-  if (isLoopback) return "";
-  if (!mcpHttpSettings.value.allowRemote) return t("settings.mcpHttpValidationRemoteRequired");
-  if (!mcpHttpList(mcpHttpAllowedHostsText.value).length) return t("settings.mcpHttpValidationHostsRequired");
-  if (!mcpHttpList(mcpHttpAllowedOriginsText.value).length) return t("settings.mcpHttpValidationOriginsRequired");
-  return "";
-});
-
-const mcpHttpHasUnsavedChanges = computed(() => {
-  if (!mcpHttpPersistedSettings.value) return false;
-  return JSON.stringify(mcpHttpDraftSettings()) !== JSON.stringify(mcpHttpPersistedSettings.value);
-});
-
-const webMcpEndpoint = computed(() => (webMcpHttpStatus.value ? `${window.location.origin}${webMcpHttpStatus.value.endpointPath}` : ""));
-
-async function commitMcpPolicyDraft(): Promise<void> {
+async function commitMcpPolicyDraft(force = false): Promise<void> {
   stageMcpQueryTimeoutDraft();
-  if (mcpPolicySaving.value || mcpPoliciesEqual(mcpPolicyDraft.value, mcpPolicyBaseline.value)) return;
+  if (mcpPolicySaving.value || (!force && mcpPoliciesEqual(mcpPolicyDraft.value, mcpPolicyBaseline.value))) return;
   const snapshot = normalizeMcpGlobalPolicy(mcpPolicyDraft.value);
   mcpPolicySaving.value = true;
   try {
@@ -3657,9 +3558,23 @@ async function commitMcpPolicyDraft(): Promise<void> {
   }
 }
 
+async function applyInitialMcpPolicy() {
+  if (mcpPolicyControlsDisabled.value) return;
+  try {
+    await commitMcpPolicyDraft(true);
+  } catch (error) {
+    applySettingsErrorToast(error);
+  }
+}
+
 function onMcpExecutionModeChange(mode: McpExecutionMode) {
   if (mode === mcpExecutionMode.value) return;
-  if (mode === "high_risk_write" && !window.confirm(t("settings.mcpExecutionModeHighRiskConfirm"))) {
+  const highRiskConfirmation = isTauriRuntime()
+    ? t("settings.mcpExecutionModeHighRiskConfirm")
+    : locale.value.startsWith("zh")
+      ? "高风险 SQL 权限允许全表修改、删除和支持的表 / 索引 DDL。确定要启用吗？"
+      : "High-risk SQL permission allows unscoped updates, deletes and supported table / index DDL. Enable it?";
+  if (mode === "high_risk_write" && !window.confirm(highRiskConfirmation)) {
     return;
   }
   stageMcpPolicy(mcpPolicyFieldsForExecutionMode(mode));
@@ -3691,7 +3606,19 @@ function onMcpResourceScopeChange(scope: { allowedGroupIds: string[]; allowedCon
 
 type McpConnectionExecutionMode = "read_only" | "safe_write" | "high_risk_write";
 
-const mcpToolOptions = MCP_TOOL_OPTIONS;
+const mcpToolOptions = computed(() => GO_MCP_TOOL_NAMES.map((name) => ({ name, label: goMcpToolLabel(name, locale.value.startsWith("zh")) })));
+const mcpCapabilityDescription = computed(() =>
+  isTauriRuntime()
+    ? t("settings.mcpCapabilityDescription")
+    : locale.value.startsWith("zh")
+      ? "Go MCP 可只读查看存储过程、函数、触发器和 MySQL 定时事件。SQL 执行仅支持可可靠分类的子集；高风险权限也不开放例程调用、例程或事件修改、数据库管理命令、自定义函数执行或外部文件访问。"
+      : "Go MCP can read procedure, function, trigger and MySQL scheduled event metadata. SQL execution accepts only reliably classified statements. High-risk permission does not enable routine calls, routine or event changes, database administration, user-defined function execution or external file access.",
+);
+function mcpCapabilityLabel(labelKey: string): string {
+  if (!isTauriRuntime() && labelKey === "settings.mcpCapabilitySchemaAdmin") return locale.value.startsWith("zh") ? "支持的表 / 索引 DDL" : "Supported table / index DDL";
+  return t(labelKey);
+}
+const mcpCapabilityRows = MCP_CAPABILITY_ROWS.filter((row) => row.labelKey !== "settings.mcpCapabilityConnectionManagement");
 
 const mcpAllowedToolNames = computed(() => mcpPolicyDraft.value.allowedToolNames);
 
@@ -3700,25 +3627,7 @@ function mcpToolAllowed(name: string): boolean {
 }
 
 function onMcpToolAllowedChange(name: string, allowed: boolean) {
-  stageMcpPolicy({ allowedToolNames: toggleMcpAllowedToolName(mcpAllowedToolNames.value, name, allowed) });
-}
-
-// Entries beyond the static options: discovered plugin tool names and the
-// `dbx_<prefix>__*` / `dbx_*__*` wildcards the backend matcher expands. They
-// are invisible in the checkbox grid, so they render as removable chips.
-const mcpCustomToolEntries = computed(() => customMcpAllowedToolNames(mcpAllowedToolNames.value));
-const mcpCustomToolInput = ref("");
-
-function onMcpCustomToolAdd() {
-  const rawName = mcpCustomToolInput.value;
-  if (!rawName.trim()) return;
-  const { names, added } = addMcpAllowedToolName(mcpAllowedToolNames.value, rawName);
-  mcpCustomToolInput.value = "";
-  if (added) stageMcpPolicy({ allowedToolNames: names });
-}
-
-function onMcpCustomToolRemove(name: string) {
-  stageMcpPolicy({ allowedToolNames: toggleMcpAllowedToolName(mcpAllowedToolNames.value, name, false) });
+  stageMcpPolicy({ allowedToolNames: toggleGoMcpAllowedToolName(mcpAllowedToolNames.value, name, allowed) });
 }
 
 const mcpConnectionPolicyConnections = computed(() => {
@@ -3931,193 +3840,6 @@ function onMcpConnectionPoliciesChange(connectionPolicies: typeof mcpPolicyDraft
   stageMcpPolicy({ connectionPolicies });
 }
 
-function mcpHttpList(value: string): string[] {
-  return [
-    ...new Set(
-      value
-        .split(/[,\n]/)
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  ];
-}
-
-function normalizeMcpHttpSettings(settings: McpHttpServerSettings): McpHttpServerSettings {
-  return {
-    ...settings,
-    host: settings.host.trim(),
-    path: settings.path.trim(),
-    allowedHosts: mcpHttpList(settings.allowedHosts.join("\n")),
-    allowedOrigins: mcpHttpList(settings.allowedOrigins.join("\n")),
-  };
-}
-
-function mcpHttpDraftSettings(): McpHttpServerSettings {
-  return normalizeMcpHttpSettings({
-    ...mcpHttpSettings.value,
-    allowedHosts: mcpHttpList(mcpHttpAllowedHostsText.value),
-    allowedOrigins: mcpHttpList(mcpHttpAllowedOriginsText.value),
-  });
-}
-
-function formatMcpHttpError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("remote MCP HTTP binding requires allowed hosts and allowed origins")) {
-    return t("settings.mcpHttpErrorRemoteHostsAndOrigins");
-  }
-  if (message.includes("remote MCP HTTP binding requires")) {
-    return t("settings.mcpHttpErrorRemoteBinding");
-  }
-  if (message.includes("Address already in use")) {
-    return t("settings.mcpHttpErrorPortInUse");
-  }
-  return message;
-}
-
-async function loadMcpHttpSettings() {
-  if (mcpHttpLoading.value) return;
-  mcpHttpLoading.value = true;
-  mcpHttpError.value = "";
-  try {
-    if (isWeb) {
-      const status = await loadWebMcpHttpStatus();
-      webMcpHttpStatus.value = status;
-      webMcpEnabledDraft.value = status.enabled;
-      webMcpAllowedHostsText.value = status.allowedHosts.join("\n");
-      webMcpAllowedOriginsText.value = status.allowedOrigins.join("\n");
-      webMcpError.value = "";
-      return;
-    }
-    const [settings, status] = await Promise.all([loadMcpHttpServerSettings(), mcpHttpServerStatus()]);
-    mcpHttpSettings.value = normalizeMcpHttpSettings(settings);
-    mcpHttpPersistedSettings.value = normalizeMcpHttpSettings(settings);
-    mcpHttpStatus.value = status;
-    mcpHttpAllowedHostsText.value = settings.allowedHosts.join("\n");
-    mcpHttpAllowedOriginsText.value = settings.allowedOrigins.join("\n");
-  } catch (error: unknown) {
-    mcpHttpError.value = formatMcpHttpError(error);
-  } finally {
-    mcpHttpLoading.value = false;
-  }
-}
-
-async function saveWebMcpSettings() {
-  if (webMcpSaving.value || webMcpHttpStatus.value?.deploymentManaged) return;
-  webMcpSaving.value = true;
-  webMcpError.value = "";
-  const settings: WebMcpHttpSettings = {
-    enabled: webMcpEnabledDraft.value,
-    allowedHosts: mcpHttpList(webMcpAllowedHostsText.value),
-    allowedOrigins: mcpHttpList(webMcpAllowedOriginsText.value),
-  };
-  try {
-    const status = await saveWebMcpHttpSettings(settings);
-    webMcpHttpStatus.value = status;
-    webMcpEnabledDraft.value = status.enabled;
-    webMcpAllowedHostsText.value = status.allowedHosts.join("\n");
-    webMcpAllowedOriginsText.value = status.allowedOrigins.join("\n");
-  } catch (error: unknown) {
-    webMcpError.value = formatMcpHttpError(error);
-  } finally {
-    webMcpSaving.value = false;
-  }
-}
-
-async function rotateWebMcpAccessToken() {
-  if (webMcpSaving.value || webMcpHttpStatus.value?.deploymentManaged) return;
-  webMcpSaving.value = true;
-  webMcpError.value = "";
-  try {
-    webMcpHttpStatus.value = await rotateWebMcpToken();
-  } catch (error: unknown) {
-    webMcpError.value = formatMcpHttpError(error);
-  } finally {
-    webMcpSaving.value = false;
-  }
-}
-
-async function saveMcpHttpSettings() {
-  if (mcpHttpSaving.value) return;
-  mcpHttpSaving.value = true;
-  mcpHttpError.value = "";
-  const settings = mcpHttpDraftSettings();
-  try {
-    const status = await saveMcpHttpServerSettings(settings);
-    mcpHttpSettings.value = settings;
-    mcpHttpPersistedSettings.value = normalizeMcpHttpSettings(settings);
-    mcpHttpStatus.value = status;
-    mcpHttpAllowedHostsText.value = settings.allowedHosts.join("\n");
-    mcpHttpAllowedOriginsText.value = settings.allowedOrigins.join("\n");
-  } catch (error: unknown) {
-    mcpHttpError.value = formatMcpHttpError(error);
-  } finally {
-    mcpHttpSaving.value = false;
-  }
-}
-
-async function rotateMcpHttpToken() {
-  if (mcpHttpSaving.value || !window.confirm(t("settings.mcpHttpRotateTokenConfirm"))) return;
-  mcpHttpSaving.value = true;
-  mcpHttpError.value = "";
-  try {
-    mcpHttpStatus.value = await rotateMcpHttpServerToken();
-  } catch (error: unknown) {
-    mcpHttpError.value = formatMcpHttpError(error);
-  } finally {
-    mcpHttpSaving.value = false;
-  }
-}
-
-const mcpLaunchConfig = computed<McpLaunchConfig | undefined>(() => {
-  if (isWeb) {
-    return {
-      command: "dbx-mcp-server",
-      env: {
-        DBX_WEB_URL: mcpWebBackendUrl(window.location.origin, apiUrl("/api")),
-        DBX_WEB_PASSWORD: "your-web-login-password",
-      },
-    };
-  }
-  const env = mcpStatus.value?.data_dir ? { DBX_DATA_DIR: mcpStatus.value.data_dir } : undefined;
-  if (mcpStatus.value?.native_bin_path) {
-    return preferMcpNativeLaunch({ command: "dbx-mcp-server", env }, mcpStatus.value.native_bin_path);
-  }
-  if (mcpStatus.value?.node_path && mcpStatus.value.script_path) {
-    return {
-      command: mcpStatus.value.node_path,
-      args: [mcpStatus.value.script_path],
-      env,
-    };
-  }
-  if (mcpStatus.value?.bin_path) {
-    return { command: mcpStatus.value.bin_path, env };
-  }
-  return env ? { command: "dbx-mcp-server", env } : undefined;
-});
-
-const mcpJsonRecommendedConfig = computed(() => buildMcpJsonConfig(mcpLaunchConfig.value));
-
-const mcpTraeRecommendedConfig = computed(() => buildMcpTraeConfig(mcpLaunchConfig.value));
-
-const mcpQoderRecommendedConfig = computed(() => buildMcpQoderConfig(mcpLaunchConfig.value));
-
-const mcpVsCodeRecommendedConfig = computed(() => buildMcpVsCodeConfig(mcpLaunchConfig.value));
-
-const mcpCherryStudioRecommendedConfig = computed(() => buildMcpCherryStudioConfig(mcpLaunchConfig.value));
-
-const mcpCodexRecommendedConfig = computed(() => buildMcpCodexConfig(mcpLaunchConfig.value));
-const mcpDeepSeekHarnessRecommendedConfig = computed(() => buildMcpDeepSeekHarnessConfig(mcpLaunchConfig.value));
-
-const mcpOpenCodeRecommendedConfig = computed(() => buildMcpOpenCodeConfig(mcpLaunchConfig.value));
-const mcpPiRecommendedConfig = computed(() => buildMcpPiConfig(mcpLaunchConfig.value));
-const mcpWorkBuddyRecommendedConfig = computed(() => buildMcpWorkBuddyConfig(mcpLaunchConfig.value));
-
-const mcpStatusTone = computed<"ok" | "warning" | "muted">(() => {
-  if (!mcpStatus.value) return "muted";
-  if (!mcpStatus.value.installed || mcpStatus.value.error) return "warning";
-  return "ok";
-});
-
 const mcpStatusLabel = computed(() => {
   if (mcpStatusLoading.value) return t("settings.mcpChecking");
   if (mcpStatusError.value) return t("settings.mcpStatusError");
@@ -4126,7 +3848,6 @@ const mcpStatusLabel = computed(() => {
   return t("settings.mcpReady");
 });
 
-const mcpUninstallCommand = computed(() => mcpStatus.value?.uninstall_command || "npm uninstall -g @dbx-app/mcp-server");
 async function refreshMcpStatus() {
   if (mcpStatusLoading.value) return;
   mcpStatusLoading.value = true;
@@ -4144,63 +3865,6 @@ async function refreshMcpStatus() {
     mcpStatusError.value = e?.message || String(e);
   } finally {
     mcpStatusLoading.value = false;
-  }
-}
-
-async function copyMcpText(kind: McpCopyKind, value: string) {
-  mcpCopied.value = kind;
-  try {
-    await copyToClipboard(value);
-  } catch {
-    mcpCopied.value = "";
-    return;
-  }
-  window.setTimeout(() => {
-    if (mcpCopied.value === kind) mcpCopied.value = "";
-  }, 1500);
-}
-
-async function uninstallMcp() {
-  if (mcpUninstalling.value || !mcpStatus.value?.installed) return;
-  if (!window.confirm(t("settings.mcpUninstallConfirm"))) return;
-  mcpUninstalling.value = true;
-  mcpInstallMessage.value = "";
-  mcpInstallError.value = false;
-  try {
-    mcpInstallMessage.value = await uninstallMcpServer();
-    await refreshMcpStatus();
-    notifyComponentUpdatesChanged();
-  } catch (e: any) {
-    mcpInstallMessage.value = t("settings.mcpUninstallFailed", { error: e?.message || String(e) });
-    mcpInstallError.value = true;
-  } finally {
-    mcpUninstalling.value = false;
-    window.setTimeout(() => {
-      mcpInstallMessage.value = "";
-      mcpInstallError.value = false;
-    }, 3000);
-  }
-}
-
-async function uninstallNpmMcpFallback() {
-  if (mcpUninstalling.value || !mcpStatus.value?.npm_installed) return;
-  if (!window.confirm(t("settings.mcpRemoveNpmFallbackConfirm"))) return;
-  mcpUninstalling.value = true;
-  mcpInstallMessage.value = "";
-  mcpInstallError.value = false;
-  try {
-    mcpInstallMessage.value = await uninstallNpmMcpServer();
-    await refreshMcpStatus();
-    notifyComponentUpdatesChanged();
-  } catch (e: any) {
-    mcpInstallMessage.value = t("settings.mcpRemoveNpmFallbackFailed", { error: e?.message || String(e) });
-    mcpInstallError.value = true;
-  } finally {
-    mcpUninstalling.value = false;
-    window.setTimeout(() => {
-      mcpInstallMessage.value = "";
-      mcpInstallError.value = false;
-    }, 3000);
   }
 }
 
@@ -4782,13 +4446,9 @@ watch(
       confirmNewPassword.value = "";
       try {
         await settingsStore.initMcpGlobalPolicy(true);
-        if (!settingsStore.mcpGlobalPolicy.configured && localStorage.getItem(MCP_READONLY_STORAGE_KEY) === "true") {
-          await settingsStore.updateMcpGlobalPolicy({ readOnly: true });
-        }
         if (settingsStore.mcpGlobalPolicy.configured) localStorage.removeItem(MCP_READONLY_STORAGE_KEY);
         localStorage.removeItem(MCP_SCOPE_CONNECTION_STORAGE_KEY);
         syncMcpPolicyBaseline(settingsStore.mcpGlobalPolicy);
-        await loadMcpHttpSettings();
       } catch (e: any) {
         mcpPolicyLoadError.value = e?.message || String(e);
         toast(
@@ -7441,15 +7101,6 @@ onUnmounted(() => {
                   <HelpTooltip :label="t('settings.toolbarTitle')" content-class="max-w-64">
                     <p>{{ t("settings.toolbarHiddenHint") }}</p>
                   </HelpTooltip>
-                </div>
-                <div class="settings-item flex items-center justify-between gap-4 rounded-md border border-border/60 p-3">
-                  <div class="space-y-1">
-                    <Label for="exclusive-right-sidebar-panels" class="text-sm cursor-pointer">{{ t("settings.exclusiveRightSidebarPanels") }}</Label>
-                    <p class="text-xs text-muted-foreground">
-                      {{ t("settings.exclusiveRightSidebarPanelsDescription") }}
-                    </p>
-                  </div>
-                  <Switch id="exclusive-right-sidebar-panels" v-model="editToolbarItems.exclusiveRightSidebarPanels" />
                 </div>
                 <div class="grid grid-cols-3 gap-2 mt-2">
                   <div v-for="item in toolbarVisibilityItems" :key="item.key" class="flex items-center gap-2">
@@ -10273,17 +9924,6 @@ LIMIT 100;</pre
                       </HelpTooltip>
                     </div>
                   </div>
-                  <Badge
-                    v-if="!isWeb && mcpManagementTab === 'access' && mcpTransportTab === 'stdio'"
-                    variant="outline"
-                    class="shrink-0 rounded-md"
-                    :class="mcpStatusTone === 'ok' ? 'border-green-500/40 text-green-600 dark:text-green-400' : mcpStatusTone === 'warning' ? 'border-amber-500/40 text-amber-600 dark:text-amber-400' : 'text-muted-foreground'"
-                  >
-                    <Loader2 v-if="mcpStatusLoading" class="mr-1 h-3 w-3 animate-spin" />
-                    <CheckCircle2 v-else-if="mcpStatusTone === 'ok'" class="mr-1 h-3 w-3" />
-                    <AlertTriangle v-else-if="mcpStatusTone === 'warning'" class="mr-1 h-3 w-3" />
-                    {{ mcpStatusLabel }}
-                  </Badge>
                 </div>
               </div>
 
@@ -10294,305 +9934,14 @@ LIMIT 100;</pre
                 </TabsList>
 
                 <TabsContent value="access" class="m-0 space-y-6">
-                  <div class="border-b border-border/60 pb-2 sm:ml-1">
-                    <div class="mb-2 flex items-center gap-2">
-                      <div class="min-w-0">
-                        <p class="text-sm font-semibold text-foreground">{{ t("settings.mcpTransportLabel") }}</p>
-                      </div>
-                    </div>
-                    <Tabs v-model="mcpTransportTab" class="space-y-3">
-                      <TabsList variant="line" class="h-8 w-fit justify-start gap-1 border-b border-border/60 bg-transparent p-0">
-                        <TabsTrigger value="stdio" class="flex-none px-3">{{ t("settings.mcpTransportLocalStdio") }}</TabsTrigger>
-                        <TabsTrigger value="http" class="flex-none px-3">{{ t("settings.mcpTransportHttpService") }}</TabsTrigger>
-                      </TabsList>
-                      <TabsContent value="http" class="m-0 space-y-4">
-                        <div v-if="isWeb" class="space-y-4">
-                          <div class="space-y-3 border-t border-border/60 pt-3">
-                            <div class="flex items-center justify-between gap-3">
-                              <Label class="text-base">{{ t("settings.mcpHttpWebServiceTitle") }}</Label>
-                              <Badge :variant="webMcpHttpStatus?.enabled ? 'default' : 'outline'">{{ webMcpHttpStatus?.enabled ? t("settings.mcpHttpStatusLabelEnabled") : t("settings.mcpHttpStatusLabelDisabled") }}</Badge>
-                            </div>
-                            <p class="text-xs text-muted-foreground">{{ t("settings.mcpHttpWebServiceDescription") }}</p>
-                            <p v-if="mcpHttpError" class="text-xs text-destructive">{{ mcpHttpError }}</p>
-                            <template v-if="webMcpHttpStatus">
-                              <p v-if="!webMcpHttpStatus.enabled" class="text-xs text-muted-foreground">{{ t("settings.mcpHttpWebDisabledHint") }}</p>
-                              <code v-else class="block overflow-x-auto rounded border bg-background px-2 py-1.5 text-xs">{{ webMcpEndpoint }}</code>
-                              <p class="text-[11px] text-muted-foreground">
-                                {{
-                                  t("settings.mcpHttpWebTokenSourceAndHosts", {
-                                    tokenSource: webMcpHttpStatus.tokenSource === "managed" ? t("settings.mcpHttpWebManagedTokenSource") : webMcpHttpStatus.tokenSource || t("settings.mcpHttpNotConfigured"),
-                                    hosts: webMcpHttpStatus.allowedHosts.join(", ") || t("settings.mcpHttpNotConfigured"),
-                                  })
-                                }}
-                              </p>
-                              <p v-if="webMcpHttpStatus.allowedOrigins.length" class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpWebAllowedOrigins", { origins: webMcpHttpStatus.allowedOrigins.join(", ") }) }}</p>
-                              <p v-if="webMcpHttpStatus.deploymentManaged" class="text-xs text-muted-foreground">{{ t("settings.mcpHttpWebDeploymentManaged") }}</p>
-                              <p v-else-if="!webMcpHttpStatus.managementAvailable" class="text-xs text-muted-foreground">{{ t("settings.mcpHttpWebPasswordRequired") }}</p>
-                              <template v-else>
-                                <div class="flex items-center justify-between gap-3 border-t border-border/60 pt-3">
-                                  <Label for="web-mcp-enabled" class="text-sm">{{ t("settings.mcpHttpWebEnableLabel") }}</Label>
-                                  <Switch id="web-mcp-enabled" v-model="webMcpEnabledDraft" :disabled="webMcpSaving" />
-                                </div>
-                                <div class="space-y-1.5">
-                                  <Label for="web-mcp-hosts">{{ t("settings.mcpHttpAllowedHostsLabel") }}</Label>
-                                  <textarea id="web-mcp-hosts" v-model="webMcpAllowedHostsText" rows="2" :disabled="webMcpSaving" class="min-h-16 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs" placeholder="192.168.0.77:4224" />
-                                  <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpHostsHint") }}</p>
-                                </div>
-                                <div class="space-y-1.5">
-                                  <Label for="web-mcp-origins">{{ t("settings.mcpHttpAllowedOriginsLabel") }}</Label>
-                                  <textarea id="web-mcp-origins" v-model="webMcpAllowedOriginsText" rows="2" :disabled="webMcpSaving" class="min-h-16 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs" placeholder="https://mcp-client.example.com" />
-                                  <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpWebOriginsHint") }}</p>
-                                </div>
-                                <div v-if="webMcpHttpStatus.enabled && webMcpHttpStatus.accessToken" class="space-y-1.5">
-                                  <div class="flex items-center justify-between gap-2">
-                                    <Label>Bearer Token</Label>
-                                    <Button type="button" variant="outline" size="sm" :disabled="webMcpSaving" @click="rotateWebMcpAccessToken">{{ t("settings.mcpHttpRotateToken") }}</Button>
-                                  </div>
-                                  <div class="flex min-w-0 items-center gap-2">
-                                    <code class="min-w-0 flex-1 overflow-x-auto rounded border bg-background px-2 py-1.5 text-xs">{{ webMcpHttpStatus.accessToken }}</code>
-                                    <Button type="button" variant="outline" size="icon" :title="t('common.copy')" @click="copyMcpText('http-token', webMcpHttpStatus.accessToken || '')">
-                                      <CheckCircle2 v-if="mcpCopied === 'http-token'" class="h-3.5 w-3.5 text-green-500" />
-                                      <Copy v-else class="h-3.5 w-3.5" />
-                                    </Button>
-                                  </div>
-                                </div>
-                                <p v-if="webMcpError" class="text-xs text-destructive">{{ webMcpError }}</p>
-                                <div class="flex flex-wrap justify-end gap-2">
-                                  <Button type="button" variant="outline" size="sm" :disabled="mcpHttpLoading || webMcpSaving" @click="loadMcpHttpSettings">{{ t("settings.mcpHttpReloadStatus") }}</Button>
-                                  <Button type="button" size="sm" :disabled="webMcpSaving || (webMcpEnabledDraft && !mcpHttpList(webMcpAllowedHostsText).length)" @click="saveWebMcpSettings">{{ t("settings.mcpHttpWebSave") }}</Button>
-                                </div>
-                              </template>
-                            </template>
-                            <Button v-if="!webMcpHttpStatus || webMcpHttpStatus.deploymentManaged" type="button" variant="outline" size="sm" :disabled="mcpHttpLoading" @click="loadMcpHttpSettings">{{ t("settings.mcpHttpReloadStatus") }}</Button>
-                          </div>
-                        </div>
-
-                        <div v-if="!isWeb" class="space-y-4">
-                          <div class="settings-item rounded-md border bg-muted/20 p-4" :class="{ 'settings-item-disabled': mcpHttpLoading || mcpHttpSaving }">
-                            <div class="flex items-start justify-between gap-4">
-                              <div class="space-y-1">
-                                <div class="flex items-center gap-2">
-                                  <Label class="text-base">{{ t("settings.mcpHttpServiceTitle") }}</Label>
-                                  <Badge :variant="mcpHttpStatus?.running ? 'default' : 'outline'">
-                                    {{ mcpHttpStatus?.running ? t("settings.mcpHttpStatusLabelRunning") : mcpHttpSettings.enabled ? t("settings.mcpHttpStatusLabelNotRunning") : t("settings.mcpHttpStatusLabelDisabled") }}
-                                  </Badge>
-                                </div>
-                                <p class="text-xs leading-relaxed text-muted-foreground">{{ t("settings.mcpHttpServiceDescription") }}</p>
-                              </div>
-                              <Switch id="mcp-http-enabled" v-model="mcpHttpSettings.enabled" :disabled="mcpHttpLoading || mcpHttpSaving" />
-                            </div>
-                          </div>
-
-                          <template v-if="mcpHttpSettings.enabled">
-                            <section class="space-y-3 rounded-md border p-4">
-                              <div>
-                                <h4 class="text-sm font-medium">{{ t("settings.mcpHttpListenerTitle") }}</h4>
-                                <p class="mt-1 text-xs text-muted-foreground">{{ t("settings.mcpHttpListenerHintPrefix") }}<code>127.0.0.1</code>{{ t("settings.mcpHttpListenerHintSuffix") }}</p>
-                              </div>
-                              <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(9rem,0.42fr)]">
-                                <div class="space-y-1.5">
-                                  <Label for="mcp-http-host">{{ t("settings.mcpHttpHostLabel") }}</Label>
-                                  <Input id="mcp-http-host" v-model="mcpHttpSettings.host" :disabled="mcpHttpSaving" placeholder="127.0.0.1" />
-                                </div>
-                                <div class="space-y-1.5">
-                                  <Label for="mcp-http-port">{{ t("settings.mcpHttpPortLabel") }}</Label>
-                                  <Input id="mcp-http-port" v-model.number="mcpHttpSettings.port" :disabled="mcpHttpSaving" type="number" min="1" max="65535" />
-                                </div>
-                                <div class="space-y-1.5 sm:col-span-2">
-                                  <Label for="mcp-http-path">{{ t("settings.mcpHttpPathLabel") }}</Label>
-                                  <Input id="mcp-http-path" v-model="mcpHttpSettings.path" :disabled="mcpHttpSaving" placeholder="/mcp" />
-                                </div>
-                              </div>
-                            </section>
-
-                            <section class="space-y-3 rounded-md border p-4">
-                              <div class="flex items-start justify-between gap-4">
-                                <div>
-                                  <h4 class="text-sm font-medium">{{ t("settings.mcpHttpRemoteTitle") }}</h4>
-                                  <p class="mt-1 text-xs leading-relaxed text-muted-foreground">{{ t("settings.mcpHttpRemoteHintPrefix") }}<code>127.0.0.1</code>{{ t("settings.mcpHttpRemoteHintMiddle") }}<code>::1</code>{{ t("settings.mcpHttpRemoteHintSuffix") }}</p>
-                                </div>
-                                <Switch id="mcp-http-remote" v-model="mcpHttpSettings.allowRemote" :disabled="mcpHttpSaving" />
-                              </div>
-                              <div v-if="mcpHttpSettings.allowRemote" class="grid gap-3 sm:grid-cols-2">
-                                <div class="space-y-1.5">
-                                  <Label for="mcp-http-hosts">{{ t("settings.mcpHttpAllowedHostsLabel") }}</Label>
-                                  <textarea id="mcp-http-hosts" v-model="mcpHttpAllowedHostsText" :disabled="mcpHttpSaving" class="min-h-20 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs" placeholder="mcp.example.com&#10;10.0.0.10" />
-                                  <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpHostsHint") }}</p>
-                                </div>
-                                <div class="space-y-1.5">
-                                  <Label for="mcp-http-origins">{{ t("settings.mcpHttpAllowedOriginsLabel") }}</Label>
-                                  <textarea id="mcp-http-origins" v-model="mcpHttpAllowedOriginsText" :disabled="mcpHttpSaving" class="min-h-20 w-full rounded-md border bg-background px-3 py-2 font-mono text-xs" placeholder="https://mcp.example.com" />
-                                  <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpOriginsHintPrefix") }}<code>https://</code>{{ t("settings.mcpHttpOriginsHintSuffix") }}</p>
-                                </div>
-                              </div>
-                              <p v-else class="rounded bg-muted px-3 py-2 text-xs text-muted-foreground">{{ t("settings.mcpHttpRemoteDisabledHint") }}</p>
-                            </section>
-
-                            <div v-if="mcpHttpDraftValidationError" class="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                              {{ mcpHttpDraftValidationError }}
-                            </div>
-                            <div v-if="mcpHttpError" class="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-                              {{ mcpHttpError }}
-                            </div>
-
-                            <div class="flex flex-col gap-3 rounded-md border bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between">
-                              <p class="text-xs text-muted-foreground">
-                                {{ mcpHttpHasUnsavedChanges ? t("settings.mcpHttpUnsavedChangesHint") : t("settings.mcpHttpSaveHint") }}
-                              </p>
-                              <div class="flex shrink-0 justify-end gap-2">
-                                <Button type="button" :disabled="mcpHttpLoading || mcpHttpSaving || Boolean(mcpHttpDraftValidationError)" @click="saveMcpHttpSettings">
-                                  <Loader2 v-if="mcpHttpSaving" class="mr-2 h-4 w-4 animate-spin" />
-                                  {{ t("settings.mcpHttpApply") }}
-                                </Button>
-                              </div>
-                            </div>
-                          </template>
-
-                          <div v-else class="flex flex-col gap-3 rounded-md border border-dashed px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-                            <p>{{ t("settings.mcpHttpDisabledHint") }}</p>
-                            <div class="flex shrink-0 justify-end gap-2">
-                              <Button type="button" :disabled="mcpHttpLoading || mcpHttpSaving" @click="saveMcpHttpSettings">
-                                <Loader2 v-if="mcpHttpSaving" class="mr-2 h-4 w-4 animate-spin" />
-                                {{ t("settings.mcpHttpApply") }}
-                              </Button>
-                            </div>
-                          </div>
-
-                          <div v-if="mcpHttpStatus?.lastError" class="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                            {{ mcpHttpStatus.lastError }}
-                          </div>
-
-                          <section v-if="mcpHttpStatus?.enabled" class="space-y-3 rounded-md border p-4">
-                            <div class="flex flex-wrap items-center justify-between gap-2">
-                              <div class="flex items-center gap-2 text-sm font-medium">
-                                <span class="h-2 w-2 rounded-full" :class="mcpHttpStatus.running ? 'bg-green-500' : 'bg-amber-500'" />
-                                {{ mcpHttpStatus.running ? t("settings.mcpHttpConnectionInfoTitle") : t("settings.mcpHttpServiceNotRunning") }}
-                              </div>
-                              <Badge variant="outline" class="font-normal">{{ mcpHttpStatus.running ? t("settings.mcpHttpRunningConfigBadge") : t("settings.mcpHttpLastStatusBadge") }}</Badge>
-                            </div>
-                            <p v-if="mcpHttpHasUnsavedChanges" class="rounded bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">{{ t("settings.mcpHttpRunningDraftDiffersHint") }}</p>
-                            <div v-if="mcpHttpStatus.endpoint" class="space-y-1">
-                              <Label>{{ t("settings.mcpHttpEndpointLabel") }}</Label>
-                              <div class="flex min-w-0 items-center gap-2">
-                                <code class="min-w-0 flex-1 overflow-x-auto rounded border bg-background px-2 py-1.5 text-xs">{{ mcpHttpStatus.endpoint }}</code>
-                                <Button type="button" variant="outline" size="icon" :title="t('common.copy')" @click="copyMcpText('http-endpoint', mcpHttpStatus.endpoint || '')">
-                                  <CheckCircle2 v-if="mcpCopied === 'http-endpoint'" class="h-3.5 w-3.5 text-green-500" />
-                                  <Copy v-else class="h-3.5 w-3.5" />
-                                </Button>
-                              </div>
-                            </div>
-                            <div v-if="mcpHttpStatus.accessToken" class="space-y-1">
-                              <div class="flex items-center justify-between gap-3">
-                                <Label>Bearer Token</Label>
-                                <Button type="button" variant="outline" size="sm" :disabled="mcpHttpSaving" @click="rotateMcpHttpToken">{{ t("settings.mcpHttpRotateToken") }}</Button>
-                              </div>
-                              <div class="flex min-w-0 items-center gap-2">
-                                <code class="min-w-0 flex-1 overflow-x-auto rounded border bg-background px-2 py-1.5 text-xs">{{ mcpHttpStatus.accessToken }}</code>
-                                <Button type="button" variant="outline" size="icon" :title="t('common.copy')" @click="copyMcpText('http-token', mcpHttpStatus.accessToken || '')">
-                                  <CheckCircle2 v-if="mcpCopied === 'http-token'" class="h-3.5 w-3.5 text-green-500" />
-                                  <Copy v-else class="h-3.5 w-3.5" />
-                                </Button>
-                              </div>
-                              <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpTokenHintPrefix") }}<code>Authorization: Bearer</code>{{ t("settings.mcpHttpTokenHintSuffix") }}</p>
-                            </div>
-                            <details v-if="mcpHttpClientConfig" class="rounded border bg-muted/20 p-3 text-xs">
-                              <summary class="cursor-pointer font-medium">{{ t("settings.mcpHttpClientConfigTitle") }}</summary>
-                              <div class="mt-3 space-y-2">
-                                <div class="flex justify-end">
-                                  <Button type="button" variant="outline" size="sm" :title="t('common.copy')" @click="copyMcpText('http-config', mcpHttpClientConfig)">
-                                    <CheckCircle2 v-if="mcpCopied === 'http-config'" class="mr-1 h-3.5 w-3.5 text-green-500" />
-                                    <Copy v-else class="mr-1 h-3.5 w-3.5" />
-                                    {{ t("common.copy") }}
-                                  </Button>
-                                </div>
-                                <pre class="max-h-48 overflow-auto rounded border bg-background p-2 text-[11px] whitespace-pre-wrap">{{ mcpHttpClientConfig }}</pre>
-                                <p class="text-[11px] text-muted-foreground">{{ t("settings.mcpHttpClientConfigHint") }}</p>
-                              </div>
-                            </details>
-                            <details v-if="mcpHttpStatus.recentLogs.length" class="text-xs">
-                              <summary class="cursor-pointer text-muted-foreground">{{ t("settings.mcpHttpLogsTitle") }}</summary>
-                              <pre class="mt-2 max-h-40 overflow-auto rounded border bg-background p-2 text-[11px] whitespace-pre-wrap">{{ mcpHttpStatus.recentLogs.join("\n") }}</pre>
-                            </details>
-                          </section>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="stdio" class="m-0 space-y-4">
-                        <div v-if="!isWeb" class="grid gap-3 sm:grid-cols-2">
-                          <div class="rounded-md border p-3">
-                            <div class="text-xs font-medium uppercase text-muted-foreground">
-                              {{ t("settings.mcpCurrent") }}
-                            </div>
-                            <div class="mt-2 font-mono text-sm">
-                              {{ mcpStatus?.current_version ? `v${mcpStatus.current_version}` : t("settings.mcpVersionMissing") }}
-                            </div>
-                          </div>
-                          <div class="rounded-md border p-3">
-                            <div class="text-xs font-medium uppercase text-muted-foreground">Node.js</div>
-                            <div class="mt-2 font-mono text-sm">
-                              {{ mcpStatus?.node_version || t("settings.mcpVersionUnknown") }}
-                            </div>
-                          </div>
-                          <div class="rounded-md border p-3">
-                            <div class="text-xs font-medium uppercase text-muted-foreground">npm</div>
-                            <div class="mt-2 font-mono text-sm">
-                              {{ mcpStatus?.npm_available ? t("settings.mcpAvailable") : t("settings.mcpUnavailable") }}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div v-if="mcpStatus?.bin_path" class="space-y-2">
-                          <Label>{{ t("settings.mcpBinPath") }}</Label>
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 font-mono text-xs text-muted-foreground">
-                            {{ mcpStatus.bin_path }}
-                          </div>
-                        </div>
-
-                        <div
-                          v-if="mcpInstallMessage"
-                          :class="[
-                            'text-xs px-3 py-2 rounded-md border',
-                            mcpInstallError ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300 dark:border-red-800' : 'bg-green-50 text-green-700 border-green-200 dark:bg-green-950/30 dark:text-green-300 dark:border-green-800',
-                          ]"
-                        >
-                          {{ mcpInstallMessage }}
-                        </div>
-                        <div v-if="!isWeb && mcpStatus?.installed" class="space-y-2">
-                          <Label>{{ t("settings.mcpUninstallCommand") }}</Label>
-                          <div class="flex min-w-0 items-center gap-2">
-                            <div class="min-w-0 flex-1 overflow-x-auto rounded-md border bg-background px-3 py-2 font-mono text-xs whitespace-nowrap">
-                              {{ mcpUninstallCommand }}
-                            </div>
-                            <Button type="button" variant="outline" size="icon" :title="t('common.copy')" @click="copyMcpText('uninstall', mcpUninstallCommand)">
-                              <CheckCircle2 v-if="mcpCopied === 'uninstall'" class="h-4 w-4 text-green-500" />
-                              <Copy v-else class="h-4 w-4" />
-                            </Button>
-                            <Button type="button" variant="outline" class="text-destructive hover:text-destructive" :disabled="mcpUninstalling" @click="uninstallMcp">
-                              <Loader2 v-if="mcpUninstalling" class="mr-2 h-4 w-4 animate-spin" />
-                              <Trash2 v-else class="mr-2 h-4 w-4" />
-                              {{ mcpUninstalling ? t("settings.mcpUninstalling") : t("settings.mcpUninstallButton") }}
-                            </Button>
-                          </div>
-                        </div>
-
-                        <div v-if="!isWeb && mcpStatus?.installation_source !== 'npm' && mcpStatus?.npm_installed" class="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
-                          <div class="flex flex-wrap items-center justify-between gap-3">
-                            <p class="min-w-0 flex-1 text-xs text-amber-800 dark:text-amber-200">
-                              {{ t("settings.mcpNpmFallbackHint") }}
-                            </p>
-                            <Button type="button" variant="outline" size="sm" :disabled="mcpUninstalling" @click="uninstallNpmMcpFallback">
-                              <Loader2 v-if="mcpUninstalling" class="mr-2 h-4 w-4 animate-spin" />
-                              <Trash2 v-else class="mr-2 h-4 w-4" />
-                              {{ t("settings.mcpRemoveNpmFallbackButton") }}
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-                    </Tabs>
-                  </div>
+                  <GoMcpServerPanel :policy-configured="mcpPolicyBaseline.configured" @open-permissions="mcpManagementTab = 'permissions'" />
                 </TabsContent>
 
                 <TabsContent value="permissions" class="m-0 space-y-4">
+                  <div v-if="!mcpPolicyBaseline.configured" class="rounded-md border bg-muted/20 p-3 text-xs space-y-2">
+                    <p>{{ locale.startsWith("zh") ? "检查下方权限范围，然后应用。服务仍需在接入页单独开启。" : "Review the permissions below and apply them. Enable the service separately on the Access tab." }}</p>
+                    <Button size="sm" :disabled="mcpPolicyControlsDisabled" @click="applyInitialMcpPolicy">{{ t("settings.apply") }}</Button>
+                  </div>
                   <McpAuthorizationStepper>
                     <template #connections>
                       <div class="space-y-3">
@@ -10620,7 +9969,15 @@ LIMIT 100;</pre
                       </div>
                     </template>
                     <template #databases>
+                      <p class="mb-3 text-xs text-muted-foreground">
+                        {{
+                          locale.startsWith("zh")
+                            ? "Go 版本仅 SQLite 支持指定 main 数据库；MySQL / PostgreSQL 当前请选择「所有数据库」或「不允许」。使用数据库账号自身权限限制跨库访问。"
+                            : "Go supports selected database scope only for SQLite main. For MySQL / PostgreSQL, choose All or None. Use database account permissions to restrict cross-database access."
+                        }}
+                      </p>
                       <McpDatabaseScopePicker
+                        sqlite-only-selected-scope
                         :connections="mcpSelectableConnections"
                         :allowed-connection-ids="mcpEffectiveAllowedConnectionIds"
                         :connection-policies="mcpPolicyDraft.connectionPolicies"
@@ -10660,7 +10017,7 @@ LIMIT 100;</pre
                           <div class="space-y-2 border-t border-border/60 pt-3">
                             <div>
                               <p class="text-xs font-medium">{{ t("settings.mcpCapabilityTitle") }}</p>
-                              <p class="mt-1 text-[11px] text-muted-foreground">{{ t("settings.mcpCapabilityDescription") }}</p>
+                              <p class="mt-1 text-[11px] text-muted-foreground">{{ mcpCapabilityDescription }}</p>
                             </div>
                             <div class="overflow-x-auto rounded border bg-background">
                               <table class="w-full min-w-[34rem] table-fixed text-xs">
@@ -10671,8 +10028,8 @@ LIMIT 100;</pre
                                   </tr>
                                 </thead>
                                 <tbody class="divide-y">
-                                  <tr v-for="row in MCP_CAPABILITY_ROWS" :key="row.labelKey">
-                                    <th scope="row" class="px-3 py-2 text-left font-normal leading-relaxed">{{ t(row.labelKey) }}</th>
+                                  <tr v-for="row in mcpCapabilityRows" :key="row.labelKey">
+                                    <th scope="row" class="px-3 py-2 text-left font-normal leading-relaxed">{{ mcpCapabilityLabel(row.labelKey) }}</th>
                                     <td v-for="column in MCP_EXECUTION_MODE_COLUMNS" :key="column.mode" class="px-2 py-2 text-center">
                                       <span class="inline-flex items-center justify-center" :class="row[column.mode] ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground/60'">
                                         <Check v-if="row[column.mode]" class="h-4 w-4" aria-hidden="true" />
@@ -10736,24 +10093,16 @@ LIMIT 100;</pre
                           <div class="grid gap-2 sm:grid-cols-2">
                             <label v-for="tool in mcpToolOptions" :key="tool.name" class="flex items-center gap-2 rounded border bg-background px-2.5 py-2 text-xs">
                               <input type="checkbox" :checked="mcpToolAllowed(tool.name)" :disabled="mcpPolicyControlsDisabled" @change="onMcpToolAllowedChange(tool.name, ($event.target as HTMLInputElement).checked)" />
-                              <span>{{ t(tool.labelKey) }}</span>
+                              <span>{{ tool.label }}</span>
                             </label>
                           </div>
-                          <div class="space-y-2">
-                            <div class="flex gap-2">
-                              <Input v-model="mcpCustomToolInput" class="h-8 flex-1 font-mono text-xs" :placeholder="t('settings.mcpToolCustomPlaceholder')" :disabled="mcpPolicyControlsDisabled" spellcheck="false" @keydown.enter.prevent="onMcpCustomToolAdd" />
-                              <Button variant="outline" size="sm" class="h-8 shrink-0" :disabled="mcpPolicyControlsDisabled || !mcpCustomToolInput.trim()" @click="onMcpCustomToolAdd">{{ t("settings.mcpToolCustomAdd") }}</Button>
-                            </div>
-                            <p class="text-xs text-muted-foreground">{{ t("settings.mcpToolCustomHint") }}</p>
-                            <div v-if="mcpCustomToolEntries.length" class="flex flex-wrap gap-1.5">
-                              <span v-for="name in mcpCustomToolEntries" :key="name" class="flex items-center gap-1 rounded border bg-background px-2 py-1 font-mono text-xs">
-                                {{ name }}
-                                <button type="button" class="text-muted-foreground transition-colors hover:text-destructive" :disabled="mcpPolicyControlsDisabled" :aria-label="t('settings.mcpToolCustomRemove')" @click="onMcpCustomToolRemove(name)">
-                                  <X class="size-3" />
-                                </button>
-                              </span>
-                            </div>
-                          </div>
+                          <p class="text-xs text-muted-foreground">
+                            {{
+                              locale.startsWith("zh")
+                                ? `Go MCP 提供上方 ${mcpToolOptions.length} 项工具；对象与事件工具只读。已有的显式工具授权列表不会自动勾选新增工具，批量执行为原子事务。会话、插件和连接管理工具尚未实现。`
+                                : `Go MCP provides the ${mcpToolOptions.length} tools above. Object and event tools are read-only. Existing explicit tool allowlists do not automatically select new tools. Batch execution is atomic. Session, plugin and connection management tools are not implemented.`
+                            }}
+                          </p>
                         </section>
                       </div>
                     </template>
@@ -10763,252 +10112,25 @@ LIMIT 100;</pre
                   <div class="space-y-3">
                     <div>
                       <p class="text-sm font-semibold text-foreground">{{ t("settings.mcpRuntimeSettings") }}</p>
-                      <p class="mt-1 text-xs text-muted-foreground">{{ t("settings.mcpQueryTimeoutDescription") }}</p>
+                      <p class="mt-1 text-xs text-muted-foreground">{{ mcpQueryTimeoutDescription }}</p>
                     </div>
                     <div class="grid items-center gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,18rem)]">
                       <Label id="mcp-query-timeout-label">{{ t("settings.mcpQueryTimeout") }}</Label>
                       <div class="space-y-1">
-                        <Input id="mcp-query-timeout" v-model="mcpQueryTimeoutInput" type="number" min="0" step="1" inputmode="numeric" placeholder="0" :disabled="mcpPolicyControlsDisabled" @input.capture="onMcpQueryTimeoutInput" />
+                        <Input
+                          id="mcp-query-timeout"
+                          v-model="mcpQueryTimeoutInput"
+                          type="number"
+                          :min="isTauriRuntime() ? 0 : 1"
+                          :max="isTauriRuntime() ? undefined : 86400"
+                          step="1"
+                          inputmode="numeric"
+                          :placeholder="isTauriRuntime() ? '0' : '300'"
+                          :disabled="mcpPolicyControlsDisabled"
+                          @input.capture="onMcpQueryTimeoutInput"
+                        />
                       </div>
                     </div>
-                  </div>
-                  <div v-if="mcpTransportTab === 'stdio'" class="space-y-3">
-                    <div>
-                      <Label>{{ t("settings.mcpConfig") }}</Label>
-                      <p class="mt-1 text-xs text-muted-foreground">{{ t("settings.mcpConfigOptionsHint") }}</p>
-                    </div>
-                    <Tabs v-model="mcpConfigTab" class="space-y-3">
-                      <TabsList class="settings-mcp-config-tabs h-auto min-h-8 w-full min-w-0 max-w-full justify-start gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain group-data-horizontal/tabs:h-auto">
-                        <TabsTrigger value="claude" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">Claude Code</TabsTrigger>
-                        <TabsTrigger value="cursor" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">Cursor</TabsTrigger>
-                        <TabsTrigger value="codebuddy" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">CodeBuddy Code</TabsTrigger>
-                        <TabsTrigger value="zcode" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">ZCode</TabsTrigger>
-                        <TabsTrigger value="trae" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">TRAE</TabsTrigger>
-                        <TabsTrigger value="vscode" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">VS Code</TabsTrigger>
-                        <TabsTrigger value="windsurf" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">Windsurf</TabsTrigger>
-                        <TabsTrigger value="codex" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">Codex</TabsTrigger>
-                        <TabsTrigger value="deepseek-harness" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">DeepSeek Harness</TabsTrigger>
-                        <TabsTrigger value="opencode" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">OpenCode</TabsTrigger>
-                        <TabsTrigger value="pi" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">Pi</TabsTrigger>
-                        <TabsTrigger value="cherry-studio" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">Cherry Studio</TabsTrigger>
-                        <TabsTrigger value="qoder" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">Qoder</TabsTrigger>
-                        <TabsTrigger value="workbuddy" class="settings-mcp-config-tab h-7 flex-none shrink-0 px-2.5">WorkBuddy</TabsTrigger>
-                      </TabsList>
-
-                      <TabsContent value="claude" class="m-0">
-                        <div class="relative rounded-md border bg-background p-3">
-                          <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpJsonRecommendedConfig }}</code></pre>
-                          <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('claude-config', mcpJsonRecommendedConfig)">
-                            <CheckCircle2 v-if="mcpCopied === 'claude-config'" class="h-3.5 w-3.5 text-green-500" />
-                            <Copy v-else class="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="cursor" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpCursorConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpJsonRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('cursor-config', mcpJsonRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'cursor-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="codebuddy" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpCodeBuddyConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpJsonRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('codebuddy-config', mcpJsonRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'codebuddy-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="zcode" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpZCodeConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpJsonRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('zcode-config', mcpJsonRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'zcode-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="trae" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpTraeConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpTraeRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('trae-config', mcpTraeRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'trae-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="vscode" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpVsCodeConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpVsCodeRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('vscode-config', mcpVsCodeRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'vscode-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="windsurf" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpWindsurfConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpJsonRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('windsurf-config', mcpJsonRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'windsurf-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="codex" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpCodexConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpCodexRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('codex-config', mcpCodexRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'codex-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="deepseek-harness" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpDeepSeekHarnessConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpDeepSeekHarnessRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('deepseek-harness-config', mcpDeepSeekHarnessRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'deepseek-harness-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="opencode" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpOpenCodeConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpOpenCodeRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('opencode-config', mcpOpenCodeRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'opencode-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="pi" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpPiConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpPiRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('pi-config', mcpPiRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'pi-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="cherry-studio" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpCherryStudioConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpCherryStudioRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('cherry-studio-config', mcpCherryStudioRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'cherry-studio-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="qoder" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpQoderConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpQoderRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('qoder-config', mcpQoderRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'qoder-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="workbuddy" class="m-0">
-                        <div class="space-y-2">
-                          <div class="rounded-md border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                            {{ t("settings.mcpWorkBuddyConfigPath") }}
-                          </div>
-                          <div class="relative rounded-md border bg-background p-3">
-                            <pre class="overflow-x-auto whitespace-pre text-xs leading-relaxed"><code>{{ mcpWorkBuddyRecommendedConfig }}</code></pre>
-                            <Button type="button" variant="outline" size="icon" class="absolute right-2 top-2 h-7 w-7" :title="t('common.copy')" @click="copyMcpText('workbuddy-config', mcpWorkBuddyRecommendedConfig)">
-                              <CheckCircle2 v-if="mcpCopied === 'workbuddy-config'" class="h-3.5 w-3.5 text-green-500" />
-                              <Copy v-else class="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        </div>
-                      </TabsContent>
-                    </Tabs>
-                  </div>
-
-                  <div v-if="mcpTransportTab === 'stdio' && (mcpStatus?.error || mcpStatusError)" class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-                    {{ mcpStatusError || mcpStatus?.error }}
-                  </div>
-
-                  <div v-if="mcpTransportTab === 'stdio'" class="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Terminal class="h-3.5 w-3.5" />
-                    <span>{{ t("settings.mcpDetectionTiming") }} {{ t("settings.mcpNativeManagementBoundary") }}</span>
                   </div>
                 </div>
               </Tabs>

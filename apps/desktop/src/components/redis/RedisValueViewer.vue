@@ -73,7 +73,10 @@ import { applyRedisExpiryPolicy, type RedisExpiryMode, redisExpiryModeForTtl, va
 import { redisKeyRawToText, redisKeyTextToDisplay, redisKeyTextToRaw } from "@/lib/redis/redisCommandSession";
 import { formatBytes } from "@/lib/database/serverMetrics";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isGoBackend } from "@/lib/backend/goCapabilities";
+import { isWailsRuntime, saveWailsBytes } from "@/lib/backend/wailsRuntime";
 
+const goBackend = isGoBackend();
 const { t, locale } = useI18n();
 const { toast } = useToast();
 const { isDark } = useTheme();
@@ -730,7 +733,10 @@ async function downloadLargeValue() {
     const blob = await api.redisGetRawValue(props.connectionId, props.db, props.keyRaw);
     const bytes = decodeRedisBlob(blob);
     const filename = redisDownloadFileName(props.keyDisplay, blob.encoding);
-    if (isTauriRuntime()) {
+    if (isWailsRuntime()) {
+      await saveWailsBytes(filename, bytes);
+      toast(t("redis.downloadValueSuccess"), 2500);
+    } else if (isTauriRuntime()) {
       const [{ save }, { writeFile }] = await Promise.all([import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-fs")]);
       const extension = blob.encoding === "utf8" ? "txt" : "bin";
       const path = await save({ defaultPath: filename, filters: [{ name: t(blob.encoding === "utf8" ? "redis.downloadValueTextFileType" : "redis.downloadValueFileType"), extensions: [extension] }] });
@@ -1217,7 +1223,7 @@ function onCollectionSearchKeydown(event: KeyboardEvent) {
 async function onCollectionSearch() {
   const query = collectionSearchQuery.value.trim();
   const keyType = redisKind.value;
-  if (!collectionSearchSupported.value) return;
+  if (!collectionSearchSupported.value || (goBackend && query)) return;
   const requestId = ++collectionSearchRequestId;
   searchLoading.value = true;
   try {
@@ -3096,7 +3102,7 @@ useUpdateBlocker(() => (hasUnsavedRedisDraft.value || editingTtl.value || saving
       <div v-else-if="redisKind === 'list'" class="flex-1 flex flex-col overflow-hidden">
         <div class="flex items-center gap-2 px-4 py-1.5 border-b shrink-0">
           <span class="text-xs text-muted-foreground shrink-0">{{ collectionCountLabel("items", listRows.length, activeCollectionSearchQuery ? null : collectionTotal) }}</span>
-          <div class="relative flex-1 max-w-60">
+          <div v-if="!goBackend" class="relative flex-1 max-w-60">
             <Search class="pointer-events-none absolute left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/80" />
             <Input v-model="collectionSearchQuery" class="h-6 w-full pl-5 pr-2 text-xs" :placeholder="t('redis.searchItems')" @input="onCollectionSearchInput" @keydown="onCollectionSearchKeydown" />
           </div>
@@ -3144,7 +3150,7 @@ useUpdateBlocker(() => (hasUnsavedRedisDraft.value || editingTtl.value || saving
       <div v-else-if="redisKind === 'set'" class="flex-1 flex flex-col overflow-hidden">
         <div class="flex items-center gap-2 px-4 py-1.5 border-b shrink-0">
           <span class="text-xs text-muted-foreground shrink-0">{{ collectionCountLabel("items", setRows.length, activeCollectionSearchQuery ? null : collectionTotal) }}</span>
-          <div class="relative flex-1 max-w-60">
+          <div v-if="!goBackend" class="relative flex-1 max-w-60">
             <Search class="pointer-events-none absolute left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/80" />
             <Input v-model="collectionSearchQuery" class="h-6 w-full pl-5 pr-2 text-xs" :placeholder="t('redis.searchMembers')" @input="onCollectionSearchInput" @keydown="onCollectionSearchKeydown" />
           </div>
@@ -3195,7 +3201,7 @@ useUpdateBlocker(() => (hasUnsavedRedisDraft.value || editingTtl.value || saving
       <div v-else-if="redisKind === 'hash'" ref="hashTableRef" class="flex-1 flex flex-col overflow-hidden">
         <div class="flex items-center gap-2 px-4 py-1.5 border-b shrink-0">
           <span class="text-xs text-muted-foreground shrink-0">{{ collectionCountLabel("fields", hashCollectionRows.length, activeCollectionSearchQuery ? null : collectionTotal) }}</span>
-          <div class="relative flex-1 max-w-60">
+          <div v-if="!goBackend" class="relative flex-1 max-w-60">
             <Search class="pointer-events-none absolute left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/80" />
             <Input v-model="collectionSearchQuery" class="h-6 w-full pl-5 pr-2 text-xs" :placeholder="t('redis.searchFields')" @input="onCollectionSearchInput" @keydown="onCollectionSearchKeydown" />
           </div>
@@ -3288,7 +3294,7 @@ useUpdateBlocker(() => (hasUnsavedRedisDraft.value || editingTtl.value || saving
       <div v-else-if="redisKind === 'zset'" ref="zsetTableRef" class="flex-1 flex flex-col overflow-hidden">
         <div class="flex items-center gap-2 px-4 py-1.5 border-b shrink-0">
           <span class="text-xs text-muted-foreground shrink-0">{{ collectionCountLabel("members", zsetRows.length, activeCollectionSearchQuery ? null : collectionTotal) }}</span>
-          <div class="relative flex-1 max-w-60">
+          <div v-if="!goBackend" class="relative flex-1 max-w-60">
             <Search class="pointer-events-none absolute left-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground/80" />
             <Input v-model="collectionSearchQuery" class="h-6 w-full pl-5 pr-2 text-xs" :placeholder="t('redis.searchMembers')" @input="onCollectionSearchInput" @keydown="onCollectionSearchKeydown" />
           </div>

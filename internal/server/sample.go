@@ -139,7 +139,7 @@ func (s *Server) sampleWorkspace() (any, error) {
 		return nil, errors.New("Cannot verify sample database")
 	}
 	if appID != sampleApplicationID || version != 1 {
-		return nil, errors.New("The existing sample file is not a recognized DBX sample; it will not be overwritten")
+		return nil, errors.New("The existing sample file is not a recognized Database Workbench sample; it will not be overwritten")
 	}
 	if err = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('customers','products','orders','order_items')").Scan(&count); err != nil || count != 4 {
 		return nil, errors.New("Sample schema is incomplete; the existing file will not be overwritten")

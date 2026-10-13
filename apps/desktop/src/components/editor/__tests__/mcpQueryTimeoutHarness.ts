@@ -17,13 +17,13 @@ export function extractMcpQueryTimeoutDebounceBlock(source: string): string {
   return source.slice(start, end);
 }
 
-export function createMcpQueryTimeoutHarness(options: { source: string; input: { value: string }; policyQueryTimeoutSecs: number | null; toast?: (message: string, duration: number) => void; t?: (key: string) => string }): McpQueryTimeoutHarness {
+export function createMcpQueryTimeoutHarness(options: { source: string; input: { value: string }; policyQueryTimeoutSecs: number | null; toast?: (message: string, duration: number) => void; t?: (key: string) => string; legacyTauri?: boolean }): McpQueryTimeoutHarness {
   const block = extractMcpQueryTimeoutDebounceBlock(options.source);
   const javascript = ts.transpileModule(block, {
     compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const draft = { value: { queryTimeoutSecs: options.policyQueryTimeoutSecs } };
-  const factory = new Function("mcpQueryTimeoutInput", "mcpPolicyDraft", "toast", "t", `${javascript}\nreturn { onMcpQueryTimeoutInput, stageMcpQueryTimeoutDraft };`);
-  const harness = factory(options.input, draft, options.toast ?? (() => {}), options.t ?? ((key: string) => key)) as Omit<McpQueryTimeoutHarness, "draft">;
+  const factory = new Function("mcpQueryTimeoutInput", "mcpPolicyDraft", "toast", "t", "isTauriRuntime", "mcpQueryTimeoutInvalidMessage", `${javascript}\nreturn { onMcpQueryTimeoutInput, stageMcpQueryTimeoutDraft };`);
+  const harness = factory(options.input, draft, options.toast ?? (() => {}), options.t ?? ((key: string) => key), () => options.legacyTauri === true, { value: "Enter 1–86400 seconds" }) as Omit<McpQueryTimeoutHarness, "draft">;
   return { ...harness, draft };
 }

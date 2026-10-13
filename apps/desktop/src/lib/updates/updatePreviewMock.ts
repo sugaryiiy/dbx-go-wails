@@ -16,13 +16,13 @@ export function previewAppUpdateInfo(currentVersion: string): UpdateInfo {
     update_available: showAppUpdate,
     portable_mode: false,
     manual_update_only: false,
-    release_name: showAppUpdate ? "Database Workbench v0.6.16 Preview" : `Database Workbench v${current}`,
+    release_name: showAppUpdate ? "MagpieDB v0.6.16 Preview" : `MagpieDB v${current}`,
     release_url: "",
     release_notes: showAppUpdate
       ? `## 更新预览
 
 ### 新功能
-- 更新中心集中展示 Database Workbench、驱动、JDBC、MCP 与插件更新
+- 更新中心集中展示 MagpieDB、驱动、JDBC、MCP 与插件更新
 - 支持按更新类别查看版本信息和更新内容
 
 ### 修复
@@ -104,12 +104,12 @@ export function previewPluginUpdates(): MarketplacePluginListing[] {
   return [
     {
       key: "official:io.dbx.ssh",
-      repository: { id: "official", name: "Database Workbench Official", kind: "official", enabled: true, managed: true },
+      repository: { id: "official", name: "MagpieDB Official", kind: "official", enabled: true, managed: true },
       plugin: {
         id: "io.dbx.ssh",
         name: "SSH Tunnel",
         description: "通过 SSH 隧道安全访问数据库。",
-        publisher: "Database Workbench",
+        publisher: "MagpieDB",
         verified: true,
         tags: ["ssh", "tunnel"],
         permissions: ["network"],
@@ -126,12 +126,12 @@ export function previewPluginUpdates(): MarketplacePluginListing[] {
     },
     {
       key: "official:io.dbx.data-tools",
-      repository: { id: "official", name: "Database Workbench Official", kind: "official", enabled: true, managed: true },
+      repository: { id: "official", name: "MagpieDB Official", kind: "official", enabled: true, managed: true },
       plugin: {
         id: "io.dbx.data-tools",
         name: "Data Tools",
         description: "数据生成、转换和校验工具集。",
-        publisher: "Database Workbench",
+        publisher: "MagpieDB",
         verified: true,
         tags: ["data", "tools"],
         permissions: ["database"],

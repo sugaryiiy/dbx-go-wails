@@ -114,10 +114,10 @@ afterEach(() => {
   invalidateObjectBrowserRowsCache({});
 });
 
-async function mountBrowser() {
+async function mountBrowser(databaseConnection: ConnectionConfig = connection) {
   const host = document.createElement("div");
   document.body.append(host);
-  const app = createApp({ setup: () => () => h(ObjectBrowser, { connection, database: "app" }) });
+  const app = createApp({ setup: () => () => h(ObjectBrowser, { connection: databaseConnection, database: "app" }) });
   mountedApps.push({ app, host });
   app.mount(host);
   await vi.waitFor(() => expect(host.textContent).toContain("sp_daily_report"));
@@ -196,5 +196,24 @@ describe("ObjectBrowser routine double click", () => {
 
     expect(mocks.openObjectSourceTabPending).not.toHaveBeenCalled();
     expect(mocks.getObjectSource).toHaveBeenCalledWith("mysql-routines", "app", "app", "seq_invoice", "SEQUENCE", undefined);
+  });
+
+  it("loads the selected table's source for same-named PostgreSQL triggers", async () => {
+    mocks.listSchemas.mockResolvedValue(["app"]);
+    mocks.listObjects.mockResolvedValue([
+      { name: "sp_daily_report", schema: "app", object_type: "PROCEDURE" },
+      { name: "row_changed", schema: "app", object_type: "TRIGGER", parent_schema: "app", parent_name: "items" },
+      { name: "row_changed", schema: "app", object_type: "TRIGGER", parent_schema: "app", parent_name: "other_items" },
+    ]);
+    mocks.getObjectSource.mockResolvedValue({ source: "CREATE TRIGGER row_changed BEFORE INSERT ON app.other_items", editable: false });
+    const host = await mountBrowser({ ...connection, id: "pg-triggers", db_type: "postgres" });
+    vi.useFakeTimers();
+    const triggers = [...host.querySelectorAll<HTMLElement>(".grid.h-\\[34px\\]")].filter((element) => element.textContent?.includes("row_changed"));
+    expect(triggers).toHaveLength(2);
+
+    click(triggers[1]!, 1);
+    await vi.advanceTimersByTimeAsync(SINGLE_CLICK_DELAY);
+
+    expect(mocks.getObjectSource).toHaveBeenCalledWith("pg-triggers", "app", "app", "row_changed", "TRIGGER", undefined, "other_items");
   });
 });

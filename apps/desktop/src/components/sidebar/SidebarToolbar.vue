@@ -11,6 +11,7 @@ withDefaults(
     selectedValues?: string[];
     activeOptions?: boolean;
     refreshing?: boolean;
+    embedded?: boolean;
   }>(),
   { selectedValues: () => [], activeOptions: false, refreshing: false },
 );
@@ -29,7 +30,7 @@ const { t } = useI18n();
     <span class="sidebar-tool-window-title">{{ t("connection.database") }}</span>
     <span class="sidebar-tool-window-count" :title="t('sidebar.connections')" data-sidebar-connection-count>{{ connectionCount }}</span>
     <div class="sidebar-tool-window-actions" role="toolbar" :aria-label="t('connection.database')">
-      <LightTooltip :text="t('toolbar.newConnection')" side="bottom" :delay="300" nowrap>
+      <LightTooltip v-if="!embedded" :text="t('toolbar.newConnection')" side="bottom" :delay="300" nowrap>
         <button type="button" class="sidebar-tool-window-button" data-sidebar-new-connection :title="t('toolbar.newConnection')" :aria-label="t('toolbar.newConnection')" @click="emit('newConnection')"><Plus /></button>
       </LightTooltip>
       <LightTooltip :text="t('contextMenu.refreshChildren')" side="bottom" :delay="300" nowrap>
@@ -61,7 +62,7 @@ const { t } = useI18n();
           @update:model-value="emit('action', $event)"
         />
       </span>
-      <LightTooltip :text="t('sidebar.collapse')" side="bottom" :delay="300" nowrap>
+      <LightTooltip v-if="!embedded" :text="t('sidebar.collapse')" side="bottom" :delay="300" nowrap>
         <button type="button" class="sidebar-tool-window-button" data-sidebar-collapse :title="t('sidebar.collapse')" :aria-label="t('sidebar.collapse')" @click="emit('collapse')"><ChevronsLeft /></button>
       </LightTooltip>
     </div>

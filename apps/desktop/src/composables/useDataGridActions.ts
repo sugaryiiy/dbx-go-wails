@@ -1,3 +1,4 @@
+import { influxTableQueryOptions } from "@/lib/table/influxTableQuery";
 import { invalidateObjectMetadataCache } from "@/lib/metadata/objectMetadataCache";
 import { type ComputedRef } from "vue";
 import { useI18n } from "vue-i18n";
@@ -126,6 +127,7 @@ export function useDataGridActions(activeTab: ComputedRef<QueryTab | undefined>)
       databaseType: effectiveDbType,
       driverProfile: config?.driver_profile,
       serverVersion: config?.database_info?.productVersion,
+      ...influxTableQueryOptions(config, realColumns),
       identifierQuote: connectionStore.connectionIdentifierQuote?.(tab.connectionId),
       database: tableMeta?.database,
       schema: tableMeta?.schema,

@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { uuid } from "@/lib/common/utils";
 import { useI18n } from "vue-i18n";
+import { supportsMongoAdvancedOperations, mongoAdvancedUnavailableMessage } from "@/lib/mongo/mongoCapabilities";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { Dialog, DialogFooter, DialogHeader, DialogScrollContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,9 @@ import { useToast } from "@/composables/useToast";
 import { translateBackendError } from "@/i18n/backend-errors";
 import * as api from "@/lib/backend/api";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
+const mongoAdvancedAvailable = supportsMongoAdvancedOperations();
+const mongoAdvancedMessage = computed(() => mongoAdvancedUnavailableMessage(locale.value));
 const store = useConnectionStore();
 const { toast } = useToast();
 const open = defineModel<boolean>("open", { default: false });
@@ -131,6 +134,7 @@ function handleFileInputChange(event: Event) {
 }
 
 function queuePreview() {
+  if (!mongoAdvancedAvailable) return;
   if (!selectedSource.value) return;
   if (previewReloadTimer) clearTimeout(previewReloadTimer);
   const requestId = ++previewRequestId;
@@ -345,7 +349,12 @@ function requestClose() {
       }
     "
   >
-    <DialogScrollContent class="flex max-h-[calc(var(--dbx-viewport-height)-6rem)] min-h-0 flex-col overflow-hidden sm:max-w-[980px]" aria-labelledby="mongo-import-title">
+    <DialogScrollContent v-if="!mongoAdvancedAvailable">
+      <DialogHeader><DialogTitle>MongoDB</DialogTitle></DialogHeader>
+      <p role="note" class="text-sm text-muted-foreground">{{ mongoAdvancedMessage }}</p>
+      <Button variant="outline" @click="open = false">{{ t("common.close") }}</Button>
+    </DialogScrollContent>
+    <DialogScrollContent v-else class="flex max-h-[calc(var(--dbx-viewport-height)-6rem)] min-h-0 flex-col overflow-hidden sm:max-w-[980px]" aria-labelledby="mongo-import-title">
       <DialogHeader class="shrink-0 pr-8">
         <DialogTitle id="mongo-import-title" class="flex items-center gap-2 text-base">
           <FileUp class="h-4 w-4" />

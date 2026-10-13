@@ -5,6 +5,7 @@ import { useI18n } from "vue-i18n";
 import { Button } from "@/components/ui/button";
 import { copyToClipboard } from "@/lib/common/clipboard";
 import { useToast } from "@/composables/useToast";
+import { translateBackendError } from "@/i18n/backend-errors";
 
 const { t } = useI18n();
 const { toast } = useToast();
@@ -29,13 +30,14 @@ const emit = defineEmits<{
 }>();
 
 const displayTitle = computed(() => props.title ?? t("grid.queryError"));
+const displayMessage = computed(() => translateBackendError(t, props.message));
 
 async function copy() {
   try {
-    await copyToClipboard(props.message);
+    await copyToClipboard(displayMessage.value);
     toast(t("grid.copied"));
   } catch (e: any) {
-    toast(t("grid.copyFailed", { message: e?.message || String(e) }), 5000);
+    toast(t("grid.copyFailed", { message: translateBackendError(t, e) }), 5000);
   }
 }
 </script>
@@ -59,13 +61,13 @@ async function copy() {
       </div>
     </div>
     <div data-native-clipboard class="max-h-40 overflow-y-auto text-xs font-mono leading-relaxed text-destructive/80 break-words whitespace-pre-wrap select-text cursor-text" @mousedown.stop @click.stop>
-      {{ message }}
+      {{ displayMessage }}
     </div>
   </div>
 
   <!-- banner: 紧凑内联横幅 -->
   <div v-else-if="variant === 'banner'" class="flex items-center gap-2 px-3 py-1.5 border-t bg-destructive/10 text-destructive text-xs shrink-0">
-    <span data-native-clipboard class="flex-1 min-w-0 break-all">{{ message }}</span>
+    <span data-native-clipboard class="flex-1 min-w-0 break-all">{{ displayMessage }}</span>
     <button v-if="copyMode === 'label'" type="button" class="shrink-0 hover:underline" :aria-label="t('grid.copy')" @click.stop="copy">
       {{ t("grid.copy") }}
     </button>
@@ -90,7 +92,7 @@ async function copy() {
     -->
     <div data-native-clipboard class="min-h-0 min-w-0 max-w-lg overflow-y-auto space-y-1 select-text text-destructive" @mousedown.stop @click.stop>
       <div class="text-sm font-medium">{{ displayTitle }}</div>
-      <div class="text-xs whitespace-pre-wrap break-words text-left cursor-text text-destructive/80 select-text">{{ message }}</div>
+      <div class="text-xs whitespace-pre-wrap break-words text-left cursor-text text-destructive/80 select-text">{{ displayMessage }}</div>
     </div>
     <div class="shrink-0 flex flex-wrap items-center justify-center gap-2 text-foreground">
       <Button variant="outline" size="sm" class="h-7 gap-1.5 px-2 text-xs" @click.stop="copy">

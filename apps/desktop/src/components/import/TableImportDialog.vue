@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import { uuid } from "@/lib/common/utils";
 import { useI18n } from "vue-i18n";
+import { supportsBackendTableEditing } from "@/lib/backend/goCapabilities";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import { Dialog, DialogHeader, DialogTitle, DialogFooter, DialogScrollContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -234,6 +235,7 @@ const batchTargetNamesValid = computed(() => {
   return tableNames.length > 0 && tableNames.every(Boolean) && new Set(tableNames).size === tableNames.length;
 });
 const canImport = computed(() => {
+  if (!supportsBackendTableEditing(structureDatabaseType.value)) return false;
   if (running.value || !props.prefillConnectionId || !existingTargetMetadataReady.value || conflictPolicyError.value) return false;
   if (!isBatchImport.value) return !!preview.value && !!targetTableName.value && mappingValidation.value.valid;
   if (!batchTargetNamesValid.value) return false;

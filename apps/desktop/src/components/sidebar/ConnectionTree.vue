@@ -2455,6 +2455,9 @@ function focusSearchAtEnd() {
 
 function onWindowKeydown(event: KeyboardEvent) {
   if (event.defaultPrevented) return;
+  // The workbench keeps the tree mounted across resource switches and collapse.
+  // A stale pointer/focus target must not route shortcuts into that hidden tree.
+  if (!rootRef.value?.getClientRects().length) return;
   if (localTableSearchFocusPending) return;
   if (sidebarShortcutTargetIsActive(event.target)) {
     if (sidebarShortcutTargetAllowsAppShortcut(event.target) && isEditConnectionShortcut(event)) {

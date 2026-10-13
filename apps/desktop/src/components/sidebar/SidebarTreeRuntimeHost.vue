@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { supportsMongoAdvancedOperations } from "@/lib/mongo/mongoCapabilities";
+
+import { supportsBackendTableEditing, supportsBackendTableExport } from "@/lib/backend/goCapabilities";
 import { computed, nextTick, watch, onBeforeUnmount, onScopeDispose, inject, reactive, ref, shallowRef } from "vue";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import PluginWorkbenchHost from "@/components/plugins/PluginWorkbenchHost.vue";
@@ -2685,6 +2688,7 @@ async function refreshDropTableChildObjectPreviewSql() {
 }
 
 function openObjectSourceDialog(initialEditing: boolean, viewPackageBody = false) {
+  initialEditing = initialEditing && supportsBackendTableEditing(currentDatabaseType());
   const node = activeNode.value;
   if (!node.connectionId || !node.database) return;
   if (viewPackageBody && (node.type !== "package" || node.xuguPackageBodyAvailable !== true || currentDatabaseType() !== "xugu")) return;
@@ -5603,6 +5607,7 @@ function exportDataSubmenu(includeSqlInsert = true): ContextMenuItem {
   return {
     label: count > 1 ? t("contextMenu.exportDataMultiple", { count }) : t("contextMenu.exportData"),
     icon: Upload,
+    disabled: !supportsBackendTableExport(currentDatabaseType()),
     children,
   };
 }
@@ -6051,7 +6056,7 @@ function buildDatabaseSidebarMenu(context: SidebarMenuFactoryContext): boolean {
     items.push({ label: t("transfer.dataTransfer"), action: openTransfer, icon: ArrowRightLeft });
     items.push({ label: t("diff.title"), action: openSchemaDiff, icon: ArrowRightLeft });
     items.push({ label: t("dataCompare.title"), action: openDataCompare, icon: ArrowRightLeft });
-    items.push({ label: t("contextMenu.exportDatabase"), action: openDatabaseExport, icon: Upload });
+    items.push({ label: t("contextMenu.exportDatabase"), action: openDatabaseExport, icon: Upload, disabled: !supportsBackendTableExport(currentDatabaseType()) });
     if (canOpenDataDictionary.value) {
       items.push({ label: t("dataDictionary.title"), action: openDataDictionary, icon: FileText });
     }
@@ -6199,7 +6204,7 @@ function buildSpecialSidebarMenu(context: SidebarMenuFactoryContext): boolean {
     } else {
       items.push({ label: t("contextMenu.clearDefaultDatabase"), action: clearNodeDefaultDatabase, icon: Database });
     }
-    if (node.type === "mongo-db") {
+    if (node.type === "mongo-db" && supportsMongoAdvancedOperations()) {
       items.push({ label: "", separator: true });
       items.push({ label: t("transfer.dataTransfer"), action: openTransfer, icon: ArrowRightLeft });
       items.push({ label: t("mongoDump.menuDump"), action: () => openMongoDatabaseDump("dump"), icon: Upload });
@@ -6277,17 +6282,19 @@ function buildSpecialSidebarMenu(context: SidebarMenuFactoryContext): boolean {
     if (canCloneMongoCollection.value) {
       items.push({ label: t("contextMenu.cloneCollection"), action: openCloneMongoCollectionDialog, icon: CopyPlus });
     }
-    items.push({ label: t("contextMenu.importData"), action: openMongoImport, icon: Download });
-    items.push({
-      label: t("contextMenu.exportData"),
-      icon: Upload,
-      children: [
-        { label: "CSV", action: () => void exportMongoCollection("csv") },
-        { label: "NDJSON", action: () => void exportMongoCollection("ndjson") },
-        { label: "BSON dump", action: () => void exportMongoCollection("bson") },
-        { label: "BSON dump (gzip)", action: () => void exportMongoCollection("bsonGzip") },
-      ],
-    });
+    if (supportsMongoAdvancedOperations()) {
+      items.push({ label: t("contextMenu.importData"), action: openMongoImport, icon: Download });
+      items.push({
+        label: t("contextMenu.exportData"),
+        icon: Upload,
+        children: [
+          { label: "CSV", action: () => void exportMongoCollection("csv") },
+          { label: "NDJSON", action: () => void exportMongoCollection("ndjson") },
+          { label: "BSON dump", action: () => void exportMongoCollection("bson") },
+          { label: "BSON dump (gzip)", action: () => void exportMongoCollection("bsonGzip") },
+        ],
+      });
+    }
     if (canDropMongoCollection.value) {
       items.push({ label: "", separator: true });
       items.push({ label: t("contextMenu.dropCollection"), action: dropMongoCollection, icon: Trash2, shortcut: shortcutDelete, variant: "destructive" as const });
@@ -6411,7 +6418,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
       items.push({ label: t("contextMenu.viewDependencies"), action: openDatabaseObjectDependencies, icon: Network });
     }
     if (node.type === "view" || node.type === "materialized_view") {
-      items.push({ label: t("contextMenu.editView"), action: () => openObjectSourceDialog(true), icon: Pencil });
+      if (supportsBackendTableEditing(currentDatabaseType())) items.push({ label: t("contextMenu.editView"), action: () => openObjectSourceDialog(true), icon: Pencil });
       items.push({ label: t("contextMenu.viewSource"), action: () => openObjectSourceDialog(false), icon: Code2 });
       if (node.type === "view" && currentDatabaseType() === "dameng" && buildDamengCompileViewSql({ schema: node.schema, name: node.objectName || node.label })) {
         items.push({ label: t("contextMenu.compileObject"), action: compileDamengView, icon: Wrench });
@@ -6472,7 +6479,7 @@ function buildObjectSidebarMenu(context: SidebarMenuFactoryContext): boolean {
     }
     items.push({ label: "", separator: true });
     items.push(exportDataSubmenu());
-    items.push({ label: t("contextMenu.exportDatabase"), action: openDatabaseExport, icon: Upload });
+    items.push({ label: t("contextMenu.exportDatabase"), action: openDatabaseExport, icon: Upload, disabled: !supportsBackendTableExport(currentDatabaseType()) });
     items.push({ label: t("contextMenu.exportStructure"), action: exportStructure, icon: FileCode });
     if (canOpenDataDictionary.value) {
       items.push({ label: t("dataDictionary.title"), action: openDataDictionary, icon: FileText });

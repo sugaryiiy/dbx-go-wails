@@ -1,5 +1,6 @@
 import type { DatabaseType, QueryResult } from "@/types/database";
 import * as api from "@/lib/backend/api";
+import { isGoBackend } from "@/lib/backend/goCapabilities";
 import { supportsDatabaseFeature } from "@/lib/database/databaseDriverManifest";
 import { isQueryExecutionErrorResult } from "@/lib/query/queryResultError";
 
@@ -17,7 +18,7 @@ export interface ExplainPlanNode {
   children: ExplainPlanNode[];
 }
 
-export type ExplainPlanDatabaseType = "mysql" | "postgres" | "dameng" | "questdb" | "doris" | "oracle" | "oceanbase-oracle" | "sqlserver";
+export type ExplainPlanDatabaseType = "clickhouse" | "mysql" | "postgres" | "dameng" | "questdb" | "doris" | "oracle" | "oceanbase-oracle" | "sqlserver";
 
 export interface ParsedExplainPlan {
   databaseType: ExplainPlanDatabaseType;
@@ -34,15 +35,21 @@ export function formatExplainPlanDetails(node: ExplainPlanNode | undefined, esti
 
 const SUPPORTED_EXPLAIN_TYPES = new Set<DatabaseType>(["mysql", "postgres", "dameng", "questdb", "doris", "oracle", "oceanbase-oracle", "sqlserver"]);
 export function supportsExplainPlan(databaseType?: DatabaseType): databaseType is ExplainPlanDatabaseType {
+  if (isGoBackend() && databaseType === "clickhouse") return true;
   return !!databaseType && supportsDatabaseFeature(databaseType, "sqlExplain") && SUPPORTED_EXPLAIN_TYPES.has(databaseType);
 }
 
-/** `analyze` is honored by PostgreSQL only; every other engine ignores it server-side. */
-export function buildExplainSql(databaseType: DatabaseType | undefined, sql: string, format: "json" | "standard" = "json", analyze?: boolean): Promise<BuildExplainSqlResult> {
-  return api.buildExplainSql({ databaseType, sql, format, analyze }) as Promise<BuildExplainSqlResult>;
+/** Go ClickHouse exposes the native text plan; explicit JSON and ANALYZE stay unsupported. */
+export function buildExplainSql(databaseType: DatabaseType | undefined, sql: string, format?: "json" | "standard", analyze?: boolean): Promise<BuildExplainSqlResult> {
+  if (isGoBackend() && databaseType === "clickhouse") {
+    if (analyze || format === "json") return Promise.resolve({ ok: false, reason: "unsupported" });
+    return api.buildExplainSql({ databaseType, sql, format: "standard" }) as Promise<BuildExplainSqlResult>;
+  }
+  return api.buildExplainSql({ databaseType, sql, format: format ?? "json", analyze }) as Promise<BuildExplainSqlResult>;
 }
 
 export function parseExplainResult(databaseType: ExplainPlanDatabaseType, result: QueryResult): ParsedExplainPlan {
+  if (databaseType === "clickhouse") return parseClickHouseExplain(result);
   if (databaseType === "dameng") {
     return parseDamengExplain(result);
   } else if (databaseType === "questdb") {
@@ -57,6 +64,28 @@ export function parseExplainResult(databaseType: ExplainPlanDatabaseType, result
   const raw = parseExplainCell(result.rows[0]?.[0]);
   const nodes = databaseType === "postgres" ? parsePostgresExplain(raw) : parseMysqlExplain(raw);
   return { databaseType, raw, nodes };
+}
+
+
+// Native ClickHouse EXPLAIN returns one indented plan line per row. Preserve
+// the server text and hierarchy without inventing costs or row estimates.
+function parseClickHouseExplain(result: QueryResult): ParsedExplainPlan {
+  const lines = result.rows.flatMap((row) => typeof row[0] === "string" ? row[0].split(/\r?\n/) : []);
+  const nodes: ExplainPlanNode[] = [];
+  const parents: Array<{ indent: number; node: ExplainPlanNode }> = [];
+  for (const line of lines) {
+    const title = line.trim();
+    if (!title) continue;
+    const indent = line.search(/\S/);
+    while (parents.length && parents[parents.length - 1].indent >= indent) parents.pop();
+    const siblings = parents.length ? parents[parents.length - 1].node.children : nodes;
+    const id = parents.length ? `${parents[parents.length - 1].node.id}.${siblings.length}` : String(siblings.length);
+    const node: ExplainPlanNode = { id, title, nodeType: title, details: [], children: [] };
+    siblings.push(node);
+    parents.push({ indent, node });
+  }
+  if (!nodes.length) throw new Error("ClickHouse did not return a text execution plan");
+  return { databaseType: "clickhouse", raw: lines.join("\n"), nodes };
 }
 
 /**

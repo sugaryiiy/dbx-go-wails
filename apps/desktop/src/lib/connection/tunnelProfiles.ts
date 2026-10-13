@@ -64,6 +64,8 @@ export function createTunnelProfile(type: TunnelProfileType): TunnelProfile {
     key_passphrase: "",
     connect_timeout_secs: 5,
     expose_lan: false,
+    allow_exec_channel_proxy: false,
+    proxy_command: "",
     use_ssh_agent: false,
     ssh_agent_sock_path: "",
     auth_method: "password",

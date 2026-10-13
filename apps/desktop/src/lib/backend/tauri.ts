@@ -912,11 +912,11 @@ export async function loadWebMcpHttpStatus(): Promise<WebMcpHttpStatus> {
 }
 
 export async function saveWebMcpHttpSettings(_settings: WebMcpHttpSettings): Promise<WebMcpHttpStatus> {
-  throw new Error("Web MCP settings are available only in DBX Web");
+  throw new Error("Web MCP settings are available only in MagpieDB Web");
 }
 
 export async function rotateWebMcpToken(): Promise<WebMcpHttpStatus> {
-  throw new Error("Web MCP settings are available only in DBX Web");
+  throw new Error("Web MCP settings are available only in MagpieDB Web");
 }
 
 export async function loadMaxAgentTurns(): Promise<number> {

@@ -120,8 +120,8 @@ describe("MCP tool permission selection", () => {
     expect(toggleMcpAllowedToolName(["dbx_execute_query"], "dbx_execute_batch", true)).toEqual(["dbx_execute_query", "dbx_execute_batch"]);
     expect(toggleMcpAllowedToolName(["dbx_execute_query", "dbx_execute_batch"], "dbx_execute_batch", false)).toEqual(["dbx_execute_query"]);
     expect(MCP_TOOL_OPTIONS.find((tool) => tool.name === "dbx_execute_batch")?.labelKey).toBe("settings.mcpToolExecuteBatch");
-    expect(settingsDialogSource).toContain("const mcpToolOptions = MCP_TOOL_OPTIONS;");
-    expect(settingsDialogSource).toContain("toggleMcpAllowedToolName(mcpAllowedToolNames.value, name, allowed)");
+    expect(settingsDialogSource.includes("GO_MCP_TOOL_NAMES.map")).toBe(true);
+    expect(settingsDialogSource.includes("toggleGoMcpAllowedToolName(mcpAllowedToolNames.value, name, allowed)")).toBe(true);
   });
 });
 

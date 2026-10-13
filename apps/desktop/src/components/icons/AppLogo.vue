@@ -6,5 +6,5 @@ const { t } = useI18n();
 </script>
 
 <template>
-  <img :src="webPath('/workbench.svg')" :alt="t('app.name')" />
+  <img :src="webPath('/icons/brand/magpiedb.png')" :alt="t('app.name')" />
 </template>
