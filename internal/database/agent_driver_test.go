@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -61,6 +62,9 @@ func runDatabaseAgentFixture() {
 				}
 				respond(request.ID, map[string]any{"protocolVersion": 2, "capabilities": []string{"multi_session", "metadata", "query", "paged_query", "transaction"}})
 			case "open_session":
+				if os.Getenv("DBX_DATABASE_AGENT_BLOCK_OPEN_SESSION") == "1" {
+					select {}
+				}
 				mu.Lock()
 				database, _ = request.Params["database"].(string)
 				sessionID, _ = request.Params["agentSessionId"].(string)
@@ -207,8 +211,42 @@ func TestAgentManagerRoutesSessionsCursorsAndWriteLocks(t *testing.T) {
 	}
 }
 func bytesReader(data []byte) io.Reader { return strings.NewReader(string(data)) }
+
+func waitForAgentFixtureRequest(t *testing.T, ctx context.Context, requests, method, sql string) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		data, err := os.ReadFile(requests)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		scanner := bufio.NewScanner(bytesReader(data))
+		for scanner.Scan() {
+			var request struct {
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
+			}
+			// A writer may still be completing the last line while we read it.
+			if json.Unmarshal(scanner.Bytes(), &request) == nil && request.Method == method && (sql == "" || request.Params["sql"] == sql) {
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("agent fixture never received %s (%s): %v", method, sql, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 func TestAgentManagerCancelRequiresReconnectAndPreservesOtherEditor(t *testing.T) {
 	store := installFixtureAgent(t)
+	requests := filepath.Join(t.TempDir(), "requests.jsonl")
+	t.Setenv("DBX_DATABASE_AGENT_REQUESTS", requests)
 	manager := NewManager()
 	manager.SetAgentStore(store)
 	defer manager.Close()
@@ -222,14 +260,16 @@ func TestAgentManagerCancelRequiresReconnectAndPreservesOtherEditor(t *testing.T
 		_, err := manager.Handle(ctx, "/api/query/execute", map[string]any{"connectionId": "fixture", "sql": "SELECT block", "clientSessionId": "blocked", "executionId": "cancel-test"})
 		active <- err
 	}()
-	time.Sleep(100 * time.Millisecond)
-	if _, err := manager.Handle(ctx, "/api/query/cancel", map[string]any{"executionId": "cancel-test"}); err != nil {
-		t.Fatal(err)
+	// Registration precedes editor initialization, so wait for the SQL itself
+	// to reach the driver before asserting that cancellation quarantines it.
+	waitForAgentFixtureRequest(t, ctx, requests, "execute_query", "SELECT block")
+	if found, err := manager.Handle(ctx, "/api/query/cancel", map[string]any{"executionId": "cancel-test"}); err != nil || found != true {
+		t.Fatalf("cancel did not find the running query: %v %v", found, err)
 	}
 	select {
 	case err := <-active:
-		if err == nil {
-			t.Fatal("cancelled query succeeded")
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected query cancellation, got %v", err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("cancel leaked")
@@ -239,6 +279,53 @@ func TestAgentManagerCancelRequiresReconnectAndPreservesOtherEditor(t *testing.T
 	}
 	if _, err := manager.Handle(ctx, "/api/query/execute", map[string]any{"connectionId": "fixture", "sql": "SELECT 1", "clientSessionId": "other"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAgentManagerCancelDuringSessionInitializationDoesNotExecuteQuery(t *testing.T) {
+	store := installFixtureAgent(t)
+	manager := NewManager()
+	manager.SetAgentStore(store)
+	defer manager.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := manager.Connect(ctx, Config{ID: "fixture", Type: "h2", Database: "db-a"}); err != nil {
+		t.Fatal(err)
+	}
+	requests := filepath.Join(t.TempDir(), "requests.jsonl")
+	t.Setenv("DBX_DATABASE_AGENT_REQUESTS", requests)
+	t.Setenv("DBX_DATABASE_AGENT_BLOCK_OPEN_SESSION", "1")
+	active := make(chan error, 1)
+	go func() {
+		_, err := manager.Handle(ctx, "/api/query/execute", map[string]any{"connectionId": "fixture", "sql": "SELECT block", "clientSessionId": "opening", "executionId": "cancel-opening"})
+		active <- err
+	}()
+	waitForAgentFixtureRequest(t, ctx, requests, "open_session", "")
+	if found, err := manager.Handle(ctx, "/api/query/cancel", map[string]any{"executionId": "cancel-opening"}); err != nil || found != true {
+		t.Fatalf("cancel did not find the initializing query: %v %v", found, err)
+	}
+	select {
+	case err := <-active:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected initialization cancellation, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled initialization leaked")
+	}
+	t.Setenv("DBX_DATABASE_AGENT_BLOCK_OPEN_SESSION", "")
+	// No SQL reached the initializing session; a later explicit query may
+	// safely create a new editor session, and other editors remain available.
+	for _, client := range []string{"opening", "other"} {
+		if _, err := manager.Handle(ctx, "/api/query/execute", map[string]any{"connectionId": "fixture", "sql": "SELECT 1", "clientSessionId": client}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := os.ReadFile(requests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"sql":"SELECT block"`) {
+		t.Fatal("cancelled initialization executed or replayed its query")
 	}
 }
 
