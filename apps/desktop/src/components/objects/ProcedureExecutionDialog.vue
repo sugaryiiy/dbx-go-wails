@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { CircleHelp, Loader2 } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +33,7 @@ const loadError = ref("");
 const parameters = ref<RoutineParameterValue[]>([]);
 const sqlDraft = ref("");
 const manualSqlDirty = ref(false);
+const dialogActive = ref(false);
 let loadToken = 0;
 
 const generatedSql = computed(() => {
@@ -52,32 +53,59 @@ const generatedSql = computed(() => {
 });
 
 const inputParameterCount = computed(() => parameters.value.filter(acceptsRoutineInput).length);
-const outputParameterCount = computed(() => parameters.value.filter((parameter) => parameter.mode === "OUT" || (props.databaseType === "xugu" && parameter.mode === "INOUT")).length);
+const outputParameterCount = computed(() => parameters.value.filter((parameter) => parameter.mode === "OUT" || parameter.mode === "INOUT").length);
 const isXugu = computed(() => props.databaseType === "xugu");
+const manualSqlActive = computed(() => manualSqlDirty.value && sqlDraft.value.trim() !== generatedSql.value.trim());
+const missingInputParameters = computed(() => parameters.value.filter(isMissingInput));
+const canSubmit = computed(() => dialogActive.value && open.value && !loading.value && !!sqlDraft.value.trim() && (manualSqlActive.value || (!loadError.value && missingInputParameters.value.length === 0)));
+
+const executionContext = () => [open.value, props.connectionId, props.database, props.databaseType, props.schema, props.routineName] as const;
 
 watch(
-  () => [open.value, props.connectionId, props.database, props.databaseType, props.schema, props.routineName] as const,
+  executionContext,
+  () => {
+    // Invalidate on close as well as target changes: a response for a closed
+    // dialog must never populate its next invocation.
+    ++loadToken;
+    dialogActive.value = false;
+    loading.value = false;
+    loadError.value = "";
+    manualSqlDirty.value = false;
+    parameters.value = [];
+    sqlDraft.value = "";
+  },
+  { flush: "sync" },
+);
+
+watch(
+  executionContext,
   ([isOpen]) => {
     if (!isOpen || !props.connectionId || !props.database || !props.routineName) return;
+    dialogActive.value = true;
     void refreshParameters();
   },
   { immediate: true },
 );
 
+onBeforeUnmount(() => {
+  dialogActive.value = false;
+  ++loadToken;
+});
+
 watch(
   generatedSql,
   (sql) => {
-    if (!manualSqlDirty.value) sqlDraft.value = sql;
+    if (dialogActive.value && !manualSqlDirty.value) sqlDraft.value = sql;
   },
-  { immediate: true },
+  { immediate: true, flush: "sync" },
 );
 
 async function refreshParameters() {
   const token = ++loadToken;
   loading.value = true;
   loadError.value = "";
-  parameters.value = [];
   manualSqlDirty.value = false;
+  parameters.value = [];
   sqlDraft.value = generatedSql.value;
   try {
     const loaded = await loadRoutineParameters({
@@ -87,7 +115,7 @@ async function refreshParameters() {
       schema: props.schema,
       routineName: props.routineName,
     });
-    if (token !== loadToken) return;
+    if (token !== loadToken || !dialogActive.value) return;
     parameters.value = loaded.map((parameter) => ({
       ...parameter,
       value: "",
@@ -96,7 +124,7 @@ async function refreshParameters() {
     }));
     sqlDraft.value = generatedSql.value;
   } catch (e: any) {
-    if (token !== loadToken) return;
+    if (token !== loadToken || !dialogActive.value) return;
     loadError.value = e?.message || String(e);
     sqlDraft.value = generatedSql.value;
   } finally {
@@ -105,8 +133,9 @@ async function refreshParameters() {
 }
 
 function onSqlInput(event: Event) {
-  manualSqlDirty.value = true;
+  if (!dialogActive.value || loading.value) return;
   sqlDraft.value = (event.target as HTMLTextAreaElement).value;
+  manualSqlDirty.value = sqlDraft.value.trim() !== generatedSql.value.trim();
 }
 
 function resetSqlPreview() {
@@ -115,25 +144,31 @@ function resetSqlPreview() {
 }
 
 function close() {
+  dialogActive.value = false;
+  ++loadToken;
   open.value = false;
 }
 
 function openSql() {
+  if (!canSubmit.value) return;
   const sql = sqlDraft.value.trim();
-  if (!sql) return;
   close();
   emit("openSql", sql);
 }
 
 function execute() {
+  if (!canSubmit.value) return;
   const sql = sqlDraft.value.trim();
-  if (!sql) return;
   close();
   emit("execute", sql);
 }
 
 function canEditParameter(parameter: RoutineParameterValue): boolean {
   return acceptsRoutineInput(parameter);
+}
+
+function isMissingInput(parameter: RoutineParameterValue): boolean {
+  return acceptsRoutineInput(parameter) && !parameter.useNull && !(parameter.useDefault && parameter.hasDefault) && parameter.value.trim() === "";
 }
 
 function displayParameterDefault(parameter: RoutineParameterValue): string {
@@ -197,19 +232,49 @@ function displayParameterDefault(parameter: RoutineParameterValue): string {
             <div
               v-for="parameter in parameters"
               :key="`${parameter.ordinal}:${parameter.name}`"
+              :data-routine-parameter="parameter.name"
               class="grid items-center gap-2 border-b px-3 py-2 text-sm last:border-b-0"
               :class="isXugu ? 'grid-cols-[minmax(120px,1.2fr)_minmax(96px,1fr)_72px_minmax(150px,1.4fr)_56px_minmax(130px,1.1fr)]' : 'grid-cols-[minmax(120px,1.2fr)_minmax(96px,1fr)_72px_minmax(160px,1.5fr)_64px_86px]'"
             >
               <div class="min-w-0 truncate font-medium">{{ parameter.name }}</div>
               <div class="min-w-0 truncate text-muted-foreground">{{ parameter.dataType || "-" }}</div>
               <div class="text-xs text-muted-foreground">{{ parameter.mode }}</div>
-              <Input v-model="parameter.value" class="h-8 bg-background font-mono text-xs" :disabled="!canEditParameter(parameter) || parameter.useNull || parameter.useDefault" :placeholder="canEditParameter(parameter) ? t('contextMenu.parameterValuePlaceholder') : t('contextMenu.outputOnly')" />
-              <input type="checkbox" class="h-4 w-4 accent-primary" :checked="!!parameter.useNull" :disabled="!canEditParameter(parameter) || parameter.useDefault" @change="(event: Event) => (parameter.useNull = (event.target as HTMLInputElement).checked)" />
+              <Input
+                v-model="parameter.value"
+                class="h-8 bg-background font-mono text-xs"
+                :aria-label="parameter.name"
+                :aria-invalid="!manualSqlActive && isMissingInput(parameter)"
+                :disabled="!canEditParameter(parameter) || parameter.useNull || parameter.useDefault"
+                :placeholder="canEditParameter(parameter) ? t('contextMenu.parameterValuePlaceholder') : t('contextMenu.outputOnly')"
+              />
+              <input
+                type="checkbox"
+                class="h-4 w-4 accent-primary"
+                :aria-label="`${parameter.name} ${t('contextMenu.parameterNull')}`"
+                :checked="!!parameter.useNull"
+                :disabled="!canEditParameter(parameter) || parameter.useDefault"
+                @change="(event: Event) => (parameter.useNull = (event.target as HTMLInputElement).checked)"
+              />
               <label v-if="isXugu" class="flex min-w-0 items-center gap-2" :title="displayParameterDefault(parameter)">
-                <input type="checkbox" class="h-4 w-4 shrink-0 accent-primary" :checked="!!parameter.useDefault" :disabled="!canEditParameter(parameter) || !parameter.hasDefault || parameter.useNull" @change="(event: Event) => (parameter.useDefault = (event.target as HTMLInputElement).checked)" />
+                <input
+                  type="checkbox"
+                  class="h-4 w-4 shrink-0 accent-primary"
+                  :aria-label="`${parameter.name} ${t('contextMenu.parameterDefault')}`"
+                  :checked="!!parameter.useDefault"
+                  :disabled="!canEditParameter(parameter) || !parameter.hasDefault || parameter.useNull"
+                  @change="(event: Event) => (parameter.useDefault = (event.target as HTMLInputElement).checked)"
+                />
                 <span class="truncate font-mono text-xs text-muted-foreground">{{ displayParameterDefault(parameter) }}</span>
               </label>
-              <input v-else type="checkbox" class="h-4 w-4 accent-primary" :checked="!!parameter.useDefault" :disabled="!canEditParameter(parameter) || !parameter.hasDefault || parameter.useNull" @change="(event: Event) => (parameter.useDefault = (event.target as HTMLInputElement).checked)" />
+              <input
+                v-else
+                type="checkbox"
+                class="h-4 w-4 accent-primary"
+                :aria-label="`${parameter.name} ${t('contextMenu.parameterDefault')}`"
+                :checked="!!parameter.useDefault"
+                :disabled="!canEditParameter(parameter) || !parameter.hasDefault || parameter.useNull"
+                @change="(event: Event) => (parameter.useDefault = (event.target as HTMLInputElement).checked)"
+              />
             </div>
           </div>
         </div>
@@ -222,6 +287,10 @@ function displayParameterDefault(parameter: RoutineParameterValue): string {
           {{ t("contextMenu.noProcedureParameters") }}
         </p>
 
+        <p v-if="!loading && !manualSqlActive && missingInputParameters.length" role="alert" class="text-sm text-destructive">
+          {{ t("contextMenu.procedureParameterValuesRequired", { names: missingInputParameters.map((parameter) => parameter.name).join(", ") }) }}
+        </p>
+
         <div class="grid gap-2">
           <div class="flex items-center justify-between gap-2">
             <div class="text-xs font-medium text-muted-foreground">{{ t("contextMenu.sqlPreview") }}</div>
@@ -229,16 +298,24 @@ function displayParameterDefault(parameter: RoutineParameterValue): string {
               {{ t("contextMenu.resetSqlPreview") }}
             </Button>
           </div>
-          <textarea :value="sqlDraft" class="min-h-28 w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none transition-colors focus:border-ring focus:ring-1 focus:ring-ring/40" spellcheck="false" @input="onSqlInput"></textarea>
+          <textarea
+            :value="sqlDraft"
+            :disabled="loading"
+            :aria-label="t('contextMenu.sqlPreview')"
+            class="min-h-28 w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs outline-none transition-colors focus:border-ring focus:ring-1 focus:ring-ring/40 disabled:opacity-50"
+            spellcheck="false"
+            @input="onSqlInput"
+          ></textarea>
+          <p v-if="inputParameterCount" class="text-xs text-muted-foreground">{{ t("contextMenu.procedureEmptyStringHint") }}</p>
         </div>
       </div>
 
       <DialogFooter>
         <Button variant="outline" @click="close">{{ t("dangerDialog.cancel") }}</Button>
-        <Button variant="outline" :disabled="!sqlDraft.trim()" @click="openSql">
+        <Button variant="outline" :disabled="!canSubmit" @click="openSql">
           {{ t("contextMenu.openInSqlEditor") }}
         </Button>
-        <Button :disabled="!sqlDraft.trim()" @click="execute">
+        <Button :disabled="!canSubmit" @click="execute">
           {{ t("contextMenu.executeProcedure") }}
         </Button>
       </DialogFooter>

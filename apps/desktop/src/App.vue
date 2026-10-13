@@ -65,6 +65,7 @@ import { useWorkbenchNavigation, type WorkbenchNavigationSection } from "@/compo
 import { loadUiTuning } from "@/lib/app/uiTuning";
 import { useDatabaseOptions } from "@/composables/useDatabaseOptions";
 import { useSqlExecution } from "@/composables/useSqlExecution";
+import { useProcedureExecutionDialog } from "@/composables/useProcedureExecutionDialog";
 import MultiDbExecuteDialog from "@/components/editor/MultiDbExecuteDialog.vue";
 import { useDialogSources } from "@/composables/useDialogSources";
 import { useNavigationTargets } from "@/composables/useNavigationTargets";
@@ -217,6 +218,7 @@ const ActionSearchDialog = defineAsyncComponent(() => import("@/components/layou
 const TabSwitcherDialog = defineAsyncComponent(() => import("@/components/tabs/TabSwitcherDialog.vue"));
 const QueryEditorDdlViewDialog = defineAsyncComponent(() => import("@/components/objects/DdlViewDialog.vue"));
 const QueryEditorObjectSourceDialog = defineAsyncComponent(() => import("@/components/objects/ObjectSourceDialog.vue"));
+const ProcedureExecutionDialog = defineAsyncComponent(() => import("@/components/objects/ProcedureExecutionDialog.vue"));
 
 type AiAssistantHandle = {
   openPluginConversation: (request: AiPluginConversationRequest) => void;
@@ -337,6 +339,7 @@ async function initializeUpdatePreparation() {
         showQueryEditorDdlDialog.value ||
         showQueryEditorObjectSourceDialog.value ||
         showSqlParameterDialog.value ||
+        showProcedureExecutionDialog.value ||
         showDangerDialog.value ||
         showMultiDbExecuteDialog.value ||
         [
@@ -942,6 +945,28 @@ function promptActiveDatabaseSelection(tabId?: string) {
   toast(t("editor.selectDatabaseRequired"), 2500);
 }
 
+const { open: showProcedureExecutionDialog, target: procedureExecutionTarget, request: requestProcedureExecution, confirm: confirmProcedureExecution, cancel: cancelProcedureExecution } = useProcedureExecutionDialog();
+
+function openProcedureExecutionSql(sql: string) {
+  const target = procedureExecutionTarget.value;
+  cancelProcedureExecution();
+  if (!target || !sql.trim() || !queryStore.tabs.some((tab) => tab.id === target.tabId)) return;
+  const tabId = queryStore.createTab(target.connectionId, target.database, `${t("contextMenu.executeProcedure")} - ${target.routineName}`, "query", target.schema, undefined, target.catalog);
+  queryStore.updateSql(tabId, sql);
+}
+
+watch(
+  () => {
+    const target = procedureExecutionTarget.value;
+    if (!target) return true;
+    const tab = queryStore.tabs.find((candidate) => candidate.id === target.tabId);
+    return !!tab && tab.connectionId === target.connectionId && tab.database === target.database && tab.objectSource?.objectType === "PROCEDURE" && tab.objectSource.name === target.routineName;
+  },
+  (valid) => {
+    if (!valid && showProcedureExecutionDialog.value) cancelProcedureExecution();
+  },
+);
+
 const {
   dangerSql,
   showDangerDialog,
@@ -971,6 +996,7 @@ const {
   blockDangerousRedisCommands,
   onMissingDatabase: promptActiveDatabaseSelection,
   requestDangerConfirmation: (request) => sqlExecutionDangerStore.requestConfirmation(request),
+  requestProcedureExecution,
   onExecutionStarted: (editorViewportRequestId) => contentAreaRef.value?.acceptQueryEditorExecutionViewport(editorViewportRequestId),
   onExecutionCancelled: (editorViewportRequestId) => contentAreaRef.value?.cancelQueryEditorExecutionViewport(editorViewportRequestId),
 });
@@ -4957,6 +4983,17 @@ onUnmounted(() => {
             @open-lineage-target="openLineageTarget"
             @open-database-search-target="openDatabaseSearchTarget"
             @open-diagram-target="openDiagramTarget"
+          />
+          <ProcedureExecutionDialog
+            v-if="procedureExecutionTarget"
+            v-model:open="showProcedureExecutionDialog"
+            :connection-id="procedureExecutionTarget.connectionId"
+            :database="procedureExecutionTarget.database"
+            :database-type="procedureExecutionTarget.databaseType"
+            :schema="procedureExecutionTarget.schema"
+            :routine-name="procedureExecutionTarget.routineName"
+            @execute="confirmProcedureExecution"
+            @open-sql="openProcedureExecutionSql"
           />
           <MultiDbExecuteDialog
             v-model:open="showMultiDbExecuteDialog"

@@ -3713,6 +3713,8 @@ export default withEnglishFallback({
     parameterDefault: "DEFAULT",
     parameterDefaultHint: "勾選 DEFAULT 時會省略該參數，讓資料庫使用預存程序定義中的預設值。",
     parameterValuePlaceholder: "輸入參數值",
+    procedureParameterValuesRequired: "請填寫參數值，或勾選 NULL / DEFAULT：{names}。",
+    procedureEmptyStringHint: "如需傳入空字串，請在 SQL 預覽中填寫 ''。",
     outputOnly: "僅輸出",
     sqlPreview: "SQL 預覽",
     resetSqlPreview: "重設 SQL",

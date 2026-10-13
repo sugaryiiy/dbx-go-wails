@@ -1,12 +1,13 @@
 import { computed, nextTick, ref } from "vue";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { isDangerousSql, requiresDatabaseSelection, snapshotResultForMerge, supportsSqlTemplateParameters, useSqlExecution } from "../useSqlExecution";
+import { isDangerousSql, requiresDatabaseSelection, snapshotResultForMerge, supportsSqlTemplateParameters, useSqlExecution, type ProcedureExecutionRequest } from "../useSqlExecution";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useHistoryStore } from "@/stores/historyStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useProductionSafetyStore } from "@/stores/productionSafetyStore";
+import { useReadOnlyUnlockStore } from "@/stores/readOnlyUnlockStore";
 import { createQueryEditorExecutionViewportOwnership } from "@/lib/editor/queryEditorExecutionViewport";
 import * as objectMetadataCache from "@/lib/metadata/objectMetadataCache";
 import type { ConnectionConfig, QueryTab } from "@/types/database";
@@ -1658,6 +1659,283 @@ SELECT @value AS Message;`;
     productionSafetyStore.confirm();
     await pendingExecution;
     expect(executeCurrentSql).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("procedure source execution", () => {
+  const definition = "CREATE DEFINER=`root`@`%` PROCEDURE `master_p9_dg`(IN SDATE DATE)\nBEGIN\n  DECLARE j_SDATE DATE;\n  DECLARE p_SDATE DATE;\n  SELECT SDATE;\nEND;";
+  const callSql = "CALL `master_p9_dg`('2026-10-13');";
+
+  beforeEach(() => {
+    installLocalStorage();
+    setActivePinia(createPinia());
+  });
+
+  function setup(
+    options: {
+      sql?: string;
+      objectSource?: QueryTab["objectSource"] | null;
+      config?: ConnectionConfig;
+      request?: (request: ProcedureExecutionRequest) => Promise<string | undefined>;
+    } = {},
+  ) {
+    const config = options.config ?? connection("mysql");
+    const activeTab = ref<QueryTab>({
+      ...queryTab("mes"),
+      sql: options.sql ?? definition,
+      schema: "fallback_schema",
+      catalog: "source_catalog",
+      objectSource: options.objectSource === null ? undefined : (options.objectSource ?? { name: "master_p9_dg", schema: "mes", objectType: "PROCEDURE" }),
+    });
+    const activeConnection = ref<ConnectionConfig>(config);
+    const activeOutputView = ref<"result" | "summary" | "explain" | "chart">("result");
+    const queryStore = useQueryStore();
+    queryStore.tabs = [activeTab.value];
+    useConnectionStore().connections = [config];
+    const executeCurrentSql = vi.spyOn(queryStore, "executeCurrentSql").mockImplementation(async () => undefined);
+    vi.spyOn(useHistoryStore(), "add").mockResolvedValue(undefined);
+    vi.spyOn(useConnectionStore(), "refreshObjectListTreeNode").mockResolvedValue(undefined);
+    const requestProcedureExecution = vi.fn(options.request ?? (async () => callSql));
+    const onExecutionCancelled = vi.fn();
+    const execution = useSqlExecution({
+      activeTab: computed(() => activeTab.value),
+      activeConnection: computed(() => activeConnection.value),
+      executableSql: computed(() => activeTab.value.sql),
+      resolveExecutableSql: async (snapshot, tab) => snapshot?.selectedSql.trim() || snapshot?.fullSql || tab?.sql || "",
+      activeOutputView,
+      requestProcedureExecution,
+      onExecutionCancelled,
+    });
+    return { execution, activeTab, activeConnection, queryStore, executeCurrentSql, requestProcedureExecution, onExecutionCancelled };
+  }
+
+  it("prompts for the input parameters when the toolbar executes a procedure source", async () => {
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup();
+
+    await execution.tryExecute();
+
+    expect(requestProcedureExecution).toHaveBeenCalledExactlyOnceWith({
+      tabId: "tab-1",
+      connectionId: "conn-1",
+      database: "mes",
+      databaseType: "mysql",
+      schema: "mes",
+      catalog: "source_catalog",
+      routineName: "master_p9_dg",
+    });
+    expect(execution.showSqlParameterDialog.value).toBe(false);
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(callSql, { tabId: "tab-1" });
+  });
+
+  it("recognizes a complete gutter range without the delimiter commands and clears its source offset", async () => {
+    const fullSql = `DELIMITER $$\n${definition.slice(0, -1)}$$\nDELIMITER ;`;
+    const selectedSql = definition.slice(0, -1);
+    const selectionFrom = fullSql.indexOf(selectedSql);
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup({ sql: fullSql });
+
+    await execution.tryExecute({ fullSql, selectedSql, cursorPos: 0, selectionFrom, selectionTo: selectionFrom + selectedSql.length, editorViewportRequestId: 7 });
+
+    expect(requestProcedureExecution).toHaveBeenCalledTimes(1);
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(callSql, { tabId: "tab-1", onExecutionStarted: expect.any(Function) });
+  });
+
+  it.each([
+    { databaseType: "postgres" as const, sql: "CREATE OR REPLACE PROCEDURE master_p9_dg(IN SDATE DATE) LANGUAGE SQL AS $$ SELECT SDATE; $$;" },
+    { databaseType: "sqlserver" as const, sql: "CREATE OR ALTER PROCEDURE master_p9_dg @SDATE DATE AS SELECT @SDATE;" },
+    { databaseType: "oracle" as const, sql: "CREATE OR REPLACE PROCEDURE master_p9_dg(SDATE IN DATE) AS BEGIN NULL; END;\n/" },
+  ])("recognizes a complete $databaseType source definition", async ({ databaseType, sql }) => {
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup({ sql, config: connection(databaseType) });
+
+    await execution.tryExecute();
+
+    expect(requestProcedureExecution).toHaveBeenCalledWith(expect.objectContaining({ databaseType }));
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(callSql, { tabId: "tab-1" });
+  });
+
+  it("cancels the gutter viewport request without executing SQL when the parameter dialog is cancelled", async () => {
+    const { execution, requestProcedureExecution, executeCurrentSql, onExecutionCancelled } = setup({ request: async () => undefined });
+
+    await execution.tryExecute({ fullSql: definition, selectedSql: definition, cursorPos: 0, selectionFrom: 0, selectionTo: definition.length, editorViewportRequestId: 8 });
+
+    expect(requestProcedureExecution).toHaveBeenCalledTimes(1);
+    expect(executeCurrentSql).not.toHaveBeenCalled();
+    expect(onExecutionCancelled).toHaveBeenCalledExactlyOnceWith(8);
+  });
+
+  it("keeps the original target when another tab is activated while parameters are being entered", async () => {
+    let confirm!: (sql: string | undefined) => void;
+    const { execution, activeTab, activeConnection, queryStore, executeCurrentSql, requestProcedureExecution } = setup({ request: () => new Promise((resolve) => (confirm = resolve)) });
+    const originalTab = activeTab.value;
+    const pending = execution.tryExecute();
+    await vi.waitFor(() => expect(requestProcedureExecution).toHaveBeenCalledTimes(1));
+    const otherTab = { ...queryTab("another_db"), id: "tab-2", connectionId: "conn-2", sql: "SELECT 1;" };
+    const otherConnection = { ...connection("postgres"), id: "conn-2" };
+    queryStore.tabs = [originalTab, otherTab];
+    useConnectionStore().connections.push(otherConnection);
+    activeTab.value = otherTab;
+    activeConnection.value = otherConnection;
+
+    confirm(callSql);
+    await pending;
+
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(callSql, { tabId: originalTab.id });
+  });
+
+  it("does not execute if the owning source tab was closed during the dialog", async () => {
+    let confirm!: (sql: string | undefined) => void;
+    const { execution, activeTab, queryStore, executeCurrentSql, requestProcedureExecution, onExecutionCancelled } = setup({ request: () => new Promise((resolve) => (confirm = resolve)) });
+    const pending = execution.tryExecute({ fullSql: definition, selectedSql: definition, cursorPos: 0, selectionFrom: 0, selectionTo: definition.length, editorViewportRequestId: 9 });
+    await vi.waitFor(() => expect(requestProcedureExecution).toHaveBeenCalledTimes(1));
+    const otherTab = { ...queryTab("another_db"), id: "tab-2" };
+    queryStore.tabs = [otherTab];
+    activeTab.value = otherTab;
+
+    confirm(callSql);
+    await pending;
+
+    expect(executeCurrentSql).not.toHaveBeenCalled();
+    expect(onExecutionCancelled).toHaveBeenCalledExactlyOnceWith(9);
+  });
+
+  it("preserves execution in a new result tab", async () => {
+    const { execution, executeCurrentSql } = setup();
+
+    await execution.tryExecuteInNewResultTab();
+
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(callSql, { tabId: "tab-1", openInNewResultTab: true });
+  });
+
+  it.each([
+    { field: "connection", mutate: (tab: QueryTab) => (tab.connectionId = "conn-2") },
+    { field: "database", mutate: (tab: QueryTab) => (tab.database = "another_db") },
+    { field: "catalog", mutate: (tab: QueryTab) => (tab.catalog = "another_catalog") },
+    { field: "tab schema", mutate: (tab: QueryTab) => (tab.schema = "another_schema") },
+    { field: "source schema", mutate: (tab: QueryTab) => (tab.objectSource!.schema = "another_schema") },
+    { field: "routine name", mutate: (tab: QueryTab) => (tab.objectSource!.name = "another_procedure") },
+    { field: "object type", mutate: (tab: QueryTab) => (tab.objectSource!.objectType = "FUNCTION") },
+  ])("cancels if the original source tab's $field changes while parameters are being entered", async ({ mutate }) => {
+    let confirm!: (sql: string | undefined) => void;
+    const { execution, activeTab, executeCurrentSql, requestProcedureExecution, onExecutionCancelled } = setup({ request: () => new Promise((resolve) => (confirm = resolve)) });
+    const pending = execution.tryExecute({ fullSql: definition, selectedSql: definition, cursorPos: 0, selectionFrom: 0, selectionTo: definition.length, editorViewportRequestId: 10 });
+    await vi.waitFor(() => expect(requestProcedureExecution).toHaveBeenCalledTimes(1));
+
+    mutate(activeTab.value);
+    confirm(callSql);
+    await pending;
+
+    expect(executeCurrentSql).not.toHaveBeenCalled();
+    expect(onExecutionCancelled).toHaveBeenCalledExactlyOnceWith(10);
+  });
+
+  it("continues to require a read-only write unlock for generated calls", async () => {
+    const { execution, executeCurrentSql } = setup({ config: { ...connection("mysql"), read_only: true } });
+    const unlockStore = useReadOnlyUnlockStore();
+    const pending = execution.tryExecute();
+    await vi.waitFor(() => expect(unlockStore.pending?.sql).toBe(callSql));
+    expect(executeCurrentSql).not.toHaveBeenCalled();
+
+    unlockStore.cancel();
+    await pending;
+
+    expect(executeCurrentSql).not.toHaveBeenCalled();
+  });
+
+  it("continues to require production confirmation for generated calls", async () => {
+    const { execution, executeCurrentSql } = setup({ config: { ...connection("mysql"), production_databases: ["mes"] } });
+    const productionStore = useProductionSafetyStore();
+    const pending = execution.tryExecute();
+    await vi.waitFor(() => expect(productionStore.pending?.sql).toBe(callSql));
+    expect(executeCurrentSql).not.toHaveBeenCalled();
+
+    productionStore.confirm();
+    await pending;
+
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(callSql, { tabId: "tab-1" });
+  });
+
+  it("keeps the dangerous SQL check for manually edited call previews", async () => {
+    const dangerousSql = "DELETE FROM logs;\nCALL `master_p9_dg`('2026-10-13');";
+    const { execution, executeCurrentSql } = setup({ request: async () => dangerousSql });
+    useSettingsStore().editorSettings.confirmDangerousSqlExecution = true;
+
+    await execution.tryExecute();
+
+    expect(execution.showDangerDialog.value).toBe(true);
+    expect(execution.dangerSql.value).toBe(dangerousSql);
+    expect(executeCurrentSql).not.toHaveBeenCalled();
+  });
+
+  it("keeps CREATE PROCEDURE in an ordinary query as definition SQL", async () => {
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup({ objectSource: null });
+
+    await execution.tryExecute();
+
+    expect(requestProcedureExecution).not.toHaveBeenCalled();
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(definition, { tabId: "tab-1" });
+  });
+
+  it("does not intercept explicit SQL overrides", async () => {
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup();
+
+    await execution.tryExecute(definition);
+
+    expect(requestProcedureExecution).not.toHaveBeenCalled();
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(definition, { tabId: "tab-1" });
+  });
+
+  it.each(["DECLARE j_SDATE DATE;", "SELECT SDATE;"])("does not reinterpret an explicitly selected internal statement: %s", async (selectedSql) => {
+    const selectionFrom = definition.indexOf(selectedSql);
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup();
+
+    await execution.tryExecute({ fullSql: definition, selectedSql, cursorPos: selectionFrom, selectionFrom, selectionTo: selectionFrom + selectedSql.length });
+
+    expect(requestProcedureExecution).not.toHaveBeenCalled();
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(selectedSql, { tabId: "tab-1", sourceOffset: selectionFrom });
+  });
+
+  it("does not intercept an explicit call that replaced the source text", async () => {
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup({ sql: callSql });
+
+    await execution.tryExecute();
+
+    expect(requestProcedureExecution).not.toHaveBeenCalled();
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(callSql, { tabId: "tab-1" });
+  });
+
+  it("does not mistake another CREATE statement for a procedure definition", async () => {
+    const sql = "CREATE TABLE logs (procedure VARCHAR(128));";
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup({ sql });
+
+    await execution.tryExecute();
+
+    expect(requestProcedureExecution).not.toHaveBeenCalled();
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(sql, { tabId: "tab-1" });
+  });
+
+  it("does not intercept a source script with additional independent statements", async () => {
+    const sql = `${definition}\nSELECT 1;`;
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup({ sql });
+
+    await execution.tryExecute();
+
+    expect(requestProcedureExecution).not.toHaveBeenCalled();
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(sql, { tabId: "tab-1" });
+  });
+
+  it.each([
+    { label: "a procedure body split into multiple ranges", sql: "CREATE OR ALTER PROCEDURE master_p9_dg @SDATE DATE AS BEGIN SELECT @SDATE; END;" },
+    { label: "GO batches", sql: "CREATE PROCEDURE master_p9_dg AS SELECT 1;\nGO\nSELECT 2;\nGO" },
+    { label: "an appended independent SELECT", sql: "CREATE OR ALTER PROCEDURE master_p9_dg AS BEGIN SELECT 1; END;\nSELECT 2;" },
+    { label: "an appended independent DDL statement", sql: "CREATE OR ALTER PROCEDURE master_p9_dg AS BEGIN SELECT 1; END;\nDROP TABLE old_logs;" },
+  ])("preserves SQL Server source scripts with $label instead of converting them to a call", async ({ sql }) => {
+    const { execution, requestProcedureExecution, executeCurrentSql } = setup({ sql, config: connection("sqlserver") });
+    useSettingsStore().editorSettings.confirmDangerousSqlExecution = false;
+
+    await execution.tryExecute();
+
+    expect(requestProcedureExecution).not.toHaveBeenCalled();
+    expect(execution.showSqlParameterDialog.value).toBe(false);
+    expect(executeCurrentSql).toHaveBeenCalledExactlyOnceWith(sql, { tabId: "tab-1" });
   });
 });
 
