@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	sqlite "modernc.org/sqlite"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -162,7 +161,7 @@ func (m *Manager) SQLiteRestore(ctx context.Context, id, source string) error {
 	if e != nil {
 		return e
 	}
-	u := url.URL{Scheme: "file", Path: abs}
+	u := sqliteFileURL(abs)
 	q := u.Query()
 	q.Set("mode", "ro")
 	u.RawQuery = q.Encode()

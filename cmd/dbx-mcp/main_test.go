@@ -74,6 +74,7 @@ func TestLocalCLIStoreLockAndEOFCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer app.Close()
 	request := httptest.NewRequest(http.MethodPost, "/api/workspace/sample", strings.NewReader("{}"))
 	request.RemoteAddr = "" // The same in-process transport used by Wails.
 	response := httptest.NewRecorder()

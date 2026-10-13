@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -119,7 +120,11 @@ func installFixtureAgent(t *testing.T) *agent.Store {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	file, err := os.OpenFile(filepath.Join(dir, "agent"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
+	name := "agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	file, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
 	if err != nil {
 		t.Fatal(err)
 	}

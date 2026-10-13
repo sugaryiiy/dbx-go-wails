@@ -221,7 +221,7 @@ func TestPluginDataGrantReadOnlyAndRevocation(t *testing.T) {
 		t.Fatal("grant revocation did not cancel in-flight query")
 	}
 }
-func buildPluginFixture(t *testing.T) []byte {
+func buildPluginFixture(t *testing.T) (string, []byte) {
 	t.Helper()
 	goTool, err := exec.LookPath("go")
 	if err != nil {
@@ -297,17 +297,17 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return b
+	return filepath.Base(output), b
 }
 func TestPluginProcessesJSONLFramedEOFTimeoutAndShutdown(t *testing.T) {
-	binary := buildPluginFixture(t)
+	executable, binary := buildPluginFixture(t)
 	for _, transport := range []string{"stdio-jsonl", "stdio-framed"} {
 		t.Run(transport, func(t *testing.T) {
 			s := testServer(t, t.TempDir())
 			manifest := pluginTestManifest("rpc-plugin", "1.0.0", []any{"host.events", "host.binary"})
 			entries := appObject(manifest["entrypoints"])
-			entries["backend"] = map[string]any{"executable": "backend", "transport": transport}
-			archive := pluginTestArchive(t, manifest, map[string][]byte{"ui/index.html": []byte("RPC"), "backend": binary}, nil, "")
+			entries["backend"] = map[string]any{"executable": executable, "transport": transport}
+			archive := pluginTestArchive(t, manifest, map[string][]byte{"ui/index.html": []byte("RPC"), executable: binary}, nil, "")
 			if _, err := s.installPluginPackage(archive, true, "file", nil); err != nil {
 				t.Fatal(err)
 			}
@@ -358,7 +358,7 @@ func TestPluginProcessesJSONLFramedEOFTimeoutAndShutdown(t *testing.T) {
 }
 
 func TestPluginInitializeHostDataCallbackAndShutdown(t *testing.T) {
-	binary := buildPluginFixture(t)
+	executable, binary := buildPluginFixture(t)
 	for _, transport := range []string{"stdio-jsonl", "stdio-framed"} {
 		t.Run(transport, func(t *testing.T) {
 			s := testServer(t, t.TempDir())
@@ -367,9 +367,9 @@ func TestPluginInitializeHostDataCallbackAndShutdown(t *testing.T) {
 			value(t, call(s, "POST", "/api/connection/save", map[string]any{"configs": []any{config}}, cookie, ""))
 			value(t, call(s, "POST", "/api/connection/connect", map[string]any{"config": config}, cookie, ""))
 			manifest := pluginTestManifest("handshake-plugin", "1.0.0", []any{"host.data:read"})
-			appObject(manifest["entrypoints"])["backend"] = map[string]any{"executable": "backend", "transport": transport}
+			appObject(manifest["entrypoints"])["backend"] = map[string]any{"executable": executable, "transport": transport}
 			manifest["test_initialize_query"] = map[string]any{"connectionId": "handshake-db", "database": "main", "sql": "SELECT 42", "maxRows": 1}
-			archive := pluginTestArchive(t, manifest, map[string][]byte{"ui/index.html": []byte("Handshake"), "backend": binary}, nil, "")
+			archive := pluginTestArchive(t, manifest, map[string][]byte{"ui/index.html": []byte("Handshake"), executable: binary}, nil, "")
 			if _, err := s.installPluginPackage(archive, true, "file", nil); err != nil {
 				t.Fatal(err)
 			}
@@ -390,9 +390,9 @@ func TestPluginInitializeHostDataCallbackAndShutdown(t *testing.T) {
 	t.Run("shutdown-during-initialize", func(t *testing.T) {
 		s := testServer(t, t.TempDir())
 		manifest := pluginTestManifest("initializing-plugin", "1.0.0", []any{})
-		appObject(manifest["entrypoints"])["backend"] = map[string]any{"executable": "backend", "transport": "stdio-jsonl"}
+		appObject(manifest["entrypoints"])["backend"] = map[string]any{"executable": executable, "transport": "stdio-jsonl"}
 		manifest["test_initialize_hang"] = true
-		archive := pluginTestArchive(t, manifest, map[string][]byte{"ui/index.html": []byte("Initializing"), "backend": binary}, nil, "")
+		archive := pluginTestArchive(t, manifest, map[string][]byte{"ui/index.html": []byte("Initializing"), executable: binary}, nil, "")
 		if _, err := s.installPluginPackage(archive, true, "file", nil); err != nil {
 			t.Fatal(err)
 		}

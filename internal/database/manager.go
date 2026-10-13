@@ -242,7 +242,7 @@ func openDB(ctx context.Context, c Config, database string) (*sql.DB, error) {
 			if e != nil {
 				return nil, e
 			}
-			u := url.URL{Scheme: "file", Path: p}
+			u := sqliteFileURL(p)
 			dsn = u.String()
 		}
 		sep := "?"
