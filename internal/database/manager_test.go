@@ -11,9 +11,15 @@ import (
 
 func testManager(t *testing.T) (*Manager, Config) {
 	t.Helper()
-	m := NewManager()
-	t.Cleanup(func() { m.Close() })
+	// Cleanups run in reverse registration order. Close SQLite before TempDir
+	// removes its files, which cannot be removed while open on Windows.
 	c := Config{ID: "test", Type: "sqlite", Host: filepath.Join(t.TempDir(), "data with spaces.sqlite"), Database: "main"}
+	m := NewManager()
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Errorf("close database manager: %v", err)
+		}
+	})
 	if e := m.Connect(context.Background(), c); e != nil {
 		t.Fatal(e)
 	}

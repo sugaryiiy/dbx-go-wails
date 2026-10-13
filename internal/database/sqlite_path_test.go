@@ -46,9 +46,13 @@ func TestSQLiteFileURLPreservesAbsolutePaths(t *testing.T) {
 
 func TestSQLiteSpecialFilePathsConnectBackupAndRestore(t *testing.T) {
 	ctx := context.Background()
-	m := NewManager()
-	t.Cleanup(func() { m.Close() })
 	dir := t.TempDir()
+	m := NewManager()
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Errorf("close database manager: %v", err)
+		}
+	})
 	name := "喜鹊 #100% +&.sqlite"
 	if runtime.GOOS != "windows" {
 		name = `喜鹊 \#100% +&.sqlite`

@@ -34,12 +34,20 @@ func fixtureNativeManager(t *testing.T) (*Manager, *lifecycleNative) {
 	driver := &lifecycleNative{entered: make(chan struct{})}
 	life, cancel := context.WithCancel(context.Background())
 	m.connections["native"] = &connection{config: Config{ID: "native", Type: "redis", ReadOnly: true}, native: driver, life: life, cancel: cancel}
-	t.Cleanup(func() { m.Close() })
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Errorf("close database manager: %v", err)
+		}
+	})
 	return m, driver
 }
 func TestNativeConnectionManagerLifecycle(t *testing.T) {
 	for _, action := range []string{"cancel", "disconnect", "close", "replace"} {
 		t.Run(action, func(t *testing.T) {
+			var replacementPath string
+			if action == "replace" {
+				replacementPath = filepath.Join(t.TempDir(), "replacement.sqlite")
+			}
 			m, driver := fixtureNativeManager(t)
 			done := make(chan error, 1)
 			go func() {
@@ -64,7 +72,7 @@ func TestNativeConnectionManagerLifecycle(t *testing.T) {
 			case "close":
 				err = m.Close()
 			case "replace":
-				err = m.Connect(context.Background(), Config{ID: "native", Type: "sqlite", Host: filepath.Join(t.TempDir(), "replacement.sqlite")})
+				err = m.Connect(context.Background(), Config{ID: "native", Type: "sqlite", Host: replacementPath})
 			}
 			if err != nil {
 				t.Fatal(err)
