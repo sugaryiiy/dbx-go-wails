@@ -70,7 +70,7 @@ export const nacosAccessControlMessages = {
   removeRole: "Remove role",
   removeRoleTitle: "Remove Nacos role",
   removeRoleDescription: "Remove role {role} from user {username}?",
-  protectedRole: "The built-in administrator role cannot be removed from Database Workbench.",
+  protectedRole: "The built-in administrator role cannot be removed from MagpieDB.",
   close: "Close",
   accessSearchRoles: "Search roles",
   accessRoleCounts: "{members} members / {permissions} permissions",

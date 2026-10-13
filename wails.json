@@ -1,6 +1,6 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "Database Workbench",
+  "name": "MagpieDB",
   "outputfilename": "dbx-go-wails",
   "frontend:dir": ".",
   "frontend:install": "",
@@ -12,6 +12,6 @@
   "wailsjsdir": "apps/desktop/src/generated/wails",
   "build:dir": "build/wails",
   "build:tags": "desktop",
-  "author": { "name": "Database Workbench" },
-  "info": { "productName": "Database Workbench", "productVersion": "0.1.0", "copyright": "", "comments": "Database Workbench" }
+  "author": { "name": "MagpieDB" },
+  "info": { "productName": "MagpieDB", "productVersion": "0.1.0", "copyright": "", "comments": "MagpieDB" }
 }

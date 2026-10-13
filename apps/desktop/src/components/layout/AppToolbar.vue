@@ -2,7 +2,7 @@
 import { computed, ref, onMounted, onBeforeUnmount, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
-import { ChevronsRight, DatabaseZap, FilePlus2, Moon, Sun, SunMoon, History, Bot, ArrowLeftRight, FileCode, BookMarked, GitCompareArrows, TableProperties, Settings, LogOut, Package, PlugZap, FolderTree, Pin, PinOff, CalendarClock, Waypoints, Search, Wrench, Type } from "@lucide/vue";
+import { ChevronsRight, PanelLeft, DatabaseZap, FilePlus2, Moon, Sun, SunMoon, History, Bot, ArrowLeftRight, FileCode, BookMarked, GitCompareArrows, TableProperties, Settings, LogOut, Package, PlugZap, FolderTree, Pin, PinOff, CalendarClock, Waypoints, Search, Wrench, Type } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import LightDropdown, { type LightDropdownItem } from "@/components/ui/LightDropdown.vue";
@@ -20,6 +20,7 @@ const props = defineProps<{
   workspaceName?: string;
   databaseName?: string;
   toolWindowsInRail?: boolean;
+  unifiedNavigation?: boolean;
   isDark: boolean;
   themeMode: AppThemeMode;
   showSidebarExpand?: boolean;
@@ -52,6 +53,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "expand-sidebar": [];
+  "toggle-sidebar": [];
   "new-connection": [];
   "new-query": [];
   "set-theme-mode": [mode: AppThemeMode];
@@ -82,6 +84,10 @@ const showAlwaysOnTopButton = computed(() => isDesktop && (toolbarItems.value.al
 const workspaceLabel = computed(() => props.workspaceName?.trim() || t("workbenchLayout.workspace"));
 const actionSearchShortcut = computed(() => (settingsStore.editorSettings.shortcuts.findAction ? formatShortcutDisplay(settingsStore.editorSettings.shortcuts.findAction) : ""));
 const sidebarExpandTooltip = computed(() => formatShortcutTooltip(t("sidebar.expand"), settingsStore.editorSettings.shortcuts.toggleSidebar));
+const sidebarToggleLabel = computed(() => t(props.showSidebarExpand ? "sidebar.expand" : "sidebar.collapse"));
+const sidebarToggleTooltip = computed(() => formatShortcutTooltip(sidebarToggleLabel.value, settingsStore.editorSettings.shortcuts.toggleSidebar));
+const aiToggleTooltip = computed(() => formatShortcutTooltip("AI", settingsStore.editorSettings.shortcuts.toggleAiPanel));
+const aiNoticeCount = computed(() => props.awaitingAiRunCount || props.activeAiRunCount);
 const newQueryTooltip = computed(() => formatShortcutTooltip(t("toolbar.newQuery"), settingsStore.editorSettings.shortcuts.newQuery));
 const settingsTooltip = computed(() => (props.hasMcpUpdateAvailable ? t("toolbar.mcpUpdateAvailable") : formatShortcutTooltip(t("settings.title"), settingsStore.editorSettings.shortcuts.openSettings)));
 const themeTriggerIcon = computed(() => (isSystemAppThemeMode(props.themeMode) ? SunMoon : props.isDark ? Moon : Sun));
@@ -111,7 +117,9 @@ const toolMenuItems = computed<ToolbarMenuItem[]>(() => [
   { value: "driver-store", label: props.agentDriverUpdateCount > 0 ? `${t("toolbar.driverManager")} (${props.agentDriverUpdateCount})` : t("toolbar.driverManager"), groupLabel: t("workbenchLayout.tools"), separatorBefore: true, icon: Package, action: () => emit("open-driver-store") },
   { value: "plugin-center", label: t("toolbar.pluginCenter"), icon: PlugZap, action: () => emit("open-plugin-center") },
   { value: "mcp-settings", label: t("settings.openMcpSettings"), icon: Waypoints, action: () => emit("open-mcp-settings") },
-  ...toolWindowItems.value.filter((item) => !item.visible).map((item, index) => ({ value: `window-${item.id}`, label: item.label, icon: item.icon, action: item.action, separatorBefore: index === 0, groupLabel: index === 0 ? t("workbenchLayout.workspace") : undefined })),
+  ...(props.unifiedNavigation
+    ? []
+    : toolWindowItems.value.filter((item) => !item.visible).map((item, index) => ({ value: `window-${item.id}`, label: item.label, icon: item.icon, action: item.action, separatorBefore: index === 0, groupLabel: index === 0 ? t("workbenchLayout.workspace") : undefined }))),
 ]);
 const activeToolValues = computed(() => [props.showDriverStore && "driver-store", props.showPluginCenter && "plugin-center", ...toolWindowItems.value.filter((item) => !item.visible && item.active).map((item) => `window-${item.id}`)].filter((value): value is string => !!value));
 function runTool(value: string) {
@@ -190,23 +198,29 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <header ref="toolbarEl" class="app-toolbar workbench-toolbar" :class="{ 'is-compact': compact }" :style="toolbarStyle" data-tauri-drag-region>
+  <header ref="toolbarEl" class="app-toolbar workbench-toolbar" :class="{ 'is-compact': compact, 'is-unified': unifiedNavigation }" :style="toolbarStyle" data-tauri-drag-region>
     <div class="workbench-identity" data-tauri-drag-region>
       <span class="workbench-brand" :title="t('app.name')" data-testid="workbench-brand" data-tauri-drag-region
-        ><AppLogo class="size-5 pointer-events-none" /><span>{{ t("app.name") }}</span></span
+        ><AppLogo class="workbench-logo size-5 pointer-events-none" /><span>{{ t("app.name") }}</span></span
       >
       <div class="workbench-context" data-tauri-drag-region>
         <span class="workbench-workspace-name" :title="workspaceLabel">{{ workspaceLabel }}</span>
         <span v-if="databaseName" class="workbench-database-name" :title="databaseName">{{ databaseName }}</span>
       </div>
     </div>
-    <Tooltip v-if="showSidebarExpand">
+    <Tooltip v-if="unifiedNavigation">
+      <TooltipTrigger as-child>
+        <Button variant="ghost" size="icon" class="workbench-icon-button" :class="{ 'is-active': !showSidebarExpand }" data-workbench-sidebar-toggle :aria-label="sidebarToggleLabel" :aria-expanded="!showSidebarExpand" @click="emit('toggle-sidebar')"><PanelLeft class="size-4" /></Button>
+      </TooltipTrigger>
+      <TooltipContent>{{ sidebarToggleTooltip }}</TooltipContent>
+    </Tooltip>
+    <Tooltip v-else-if="showSidebarExpand">
       <TooltipTrigger as-child
         ><Button variant="ghost" size="icon" class="workbench-icon-button" :aria-label="t('sidebar.expand')" @click="emit('expand-sidebar')"><ChevronsRight class="size-4" /></Button
       ></TooltipTrigger>
       <TooltipContent>{{ sidebarExpandTooltip }}</TooltipContent>
     </Tooltip>
-    <div class="workbench-primary-actions" role="group" :aria-label="t('toolbar.newConnection')">
+    <div v-if="!unifiedNavigation" class="workbench-primary-actions" role="group" :aria-label="t('toolbar.newConnection')">
       <Button variant="ghost" size="sm" class="workbench-command" :title="t('toolbar.newConnection')" :aria-label="t('toolbar.newConnection')" @click="emit('new-connection')"
         ><DatabaseZap class="size-4" /><span v-if="!compact">{{ t("toolbar.newConnection") }}</span></Button
       >
@@ -243,7 +257,16 @@ onBeforeUnmount(() => {
       />
       <PluginShortcutToolbar v-if="showPluginShortcuts" dropdown-only @layout-change="scheduleToolbarLayout" />
     </div>
-    <div v-if="!toolWindowsInRail" class="workbench-legacy-windows" role="group" :aria-label="t('workbenchLayout.workspace')">
+    <Tooltip v-if="unifiedNavigation">
+      <TooltipTrigger as-child>
+        <Button variant="ghost" size="icon" class="workbench-icon-button relative" :class="{ 'is-active': showAiPanel }" data-workbench-ai-toggle aria-label="AI" :aria-pressed="showAiPanel" @click="emit('toggle-ai')">
+          <Bot class="size-4" />
+          <span v-if="aiNoticeCount" class="workbench-count" :class="{ 'is-awaiting': awaitingAiRunCount > 0 }" :title="awaitingAiRunCount > 0 ? t('ai.toolbarAwaitingConfirmation', { count: awaitingAiRunCount }) : undefined">{{ Math.min(aiNoticeCount, 9) }}{{ aiNoticeCount > 9 ? "+" : "" }}</span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{{ aiToggleTooltip }}</TooltipContent>
+    </Tooltip>
+    <div v-if="!unifiedNavigation && !toolWindowsInRail" class="workbench-legacy-windows" role="group" :aria-label="t('workbenchLayout.workspace')">
       <Tooltip v-for="item in legacyToolWindows" :key="item.id">
         <TooltipTrigger as-child>
           <Button
@@ -488,5 +511,50 @@ onBeforeUnmount(() => {
 .is-compact .workbench-command {
   width: 28px;
   padding: 0;
+}
+.is-unified {
+  flex-basis: 50px;
+  height: 50px;
+  gap: 10px;
+  padding-inline: 12px;
+}
+.is-unified .workbench-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+}
+.is-unified .workbench-brand {
+  gap: 8px;
+  font-size: 13px;
+}
+.is-unified .workbench-icon-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+}
+.is-unified .workbench-action-search {
+  height: 30px;
+  max-width: 390px;
+  border-radius: 6px;
+}
+.is-unified .workbench-tools :deep(.workbench-tools-trigger) {
+  height: 30px;
+  border-radius: 6px;
+}
+.is-unified.is-compact {
+  gap: 6px;
+  padding-inline: 8px;
+}
+@media (max-width: 720px) {
+  .is-unified .workbench-context {
+    display: none;
+  }
+  .is-unified .workbench-identity {
+    flex: none;
+    min-width: 0;
+  }
+  .is-unified .workbench-action-search kbd {
+    display: none;
+  }
 }
 </style>

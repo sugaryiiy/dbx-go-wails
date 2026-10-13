@@ -282,7 +282,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
         return {
           pos: range.from,
           end: range.to,
-          create: () => createHoverDom(table.name, sqlObjectHoverDetail(table), sqlContent, metadataLoadFailed ? ["[DBX] Failed to load table structure — check connection"] : undefined),
+          create: () => createHoverDom(table.name, sqlObjectHoverDetail(table), sqlContent, metadataLoadFailed ? ["[MagpieDB] Failed to load table structure — check connection"] : undefined),
         };
       }
 

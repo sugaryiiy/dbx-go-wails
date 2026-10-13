@@ -2669,15 +2669,15 @@ export async function cloudSyncLocalCatalog(editorSettings?: unknown): Promise<S
 }
 
 export async function localBackupExport(): Promise<never> {
-  throw new Error("Local backup is available only in Database Workbench Desktop.");
+  throw new Error("Local backup is available only in MagpieDB Desktop.");
 }
 
 export async function localBackupInspect(): Promise<never> {
-  throw new Error("Local backup is available only in Database Workbench Desktop.");
+  throw new Error("Local backup is available only in MagpieDB Desktop.");
 }
 
 export async function localBackupImport(): Promise<never> {
-  throw new Error("Local backup is available only in Database Workbench Desktop.");
+  throw new Error("Local backup is available only in MagpieDB Desktop.");
 }
 
 export async function webdavSyncInspect(config: WebDavConfig, secretsPassphrase?: string): Promise<SyncSnapshotCatalog> {
@@ -5499,7 +5499,7 @@ export async function checkMcpServerStatus(): Promise<import("@/lib/backend/taur
 }
 
 export async function installMcpServer(): Promise<string> {
-  throw new Error("MCP is built into Database Workbench Go. Enable it in MCP settings.");
+  throw new Error("MCP is built into MagpieDB Go. Enable it in MCP settings.");
 }
 
 export async function installNativeMcpServer(): Promise<string> {
@@ -5507,11 +5507,11 @@ export async function installNativeMcpServer(): Promise<string> {
 }
 
 export async function uninstallMcpServer(): Promise<string> {
-  throw new Error("MCP is built into Database Workbench Go. Disable it in MCP settings.");
+  throw new Error("MCP is built into MagpieDB Go. Disable it in MCP settings.");
 }
 
 export async function uninstallNpmMcpServer(): Promise<string> {
-  throw new Error("Database Workbench Go does not manage the legacy npm MCP package.");
+  throw new Error("MagpieDB Go does not manage the legacy npm MCP package.");
 }
 
 export async function getSystemProxyUrl(): Promise<string | null> {

@@ -4,27 +4,27 @@
  * portaled under body; visual rules remain scoped to the workbench. */
 :root,
 .dbx-workbench {
-  --workbench-chrome: #f0f2f5;
-  --workbench-sidebar: #f7f8fa;
-  --workbench-rail: #eef0f3;
-  --workbench-status: #f0f2f5;
+  --workbench-chrome: #f7f8fa;
+  --workbench-sidebar: #f2f4f7;
+  --workbench-rail: #f2f4f7;
+  --workbench-status: #f7f8fa;
   --workbench-surface: var(--background);
-  --workbench-border: #d9dde5;
-  --workbench-grid-line: #e7e9ef;
-  --workbench-text: var(--foreground);
-  --workbench-secondary: #475569;
-  --workbench-muted: #59677c;
+  --workbench-border: #e0e4ea;
+  --workbench-grid-line: #eaedf2;
+  --workbench-text: #263244;
+  --workbench-secondary: #4a5970;
+  --workbench-muted: #627087;
   --workbench-font-ui: var(--font-sans, system-ui, sans-serif);
   --workbench-font-mono: var(--font-mono, ui-monospace, Menlo, monospace);
-  --workbench-font-size-ui: 12px;
+  --workbench-font-size-ui: 13px;
   --workbench-font-size-caption: 11px;
-  --workbench-font-weight-heading: 600;
-  --workbench-accent: #245bd7;
-  --workbench-accent-soft: #e2ebfc;
-  --workbench-hover: #e4e7ee;
-  --workbench-selection: #dce7fa;
+  --workbench-font-weight-heading: 500;
+  --workbench-accent: #3561d9;
+  --workbench-accent-soft: #e6edfc;
+  --workbench-hover: #e7ebf1;
+  --workbench-selection: #e6edfc;
   --workbench-selection-strong: #ccddfa;
-  --workbench-header: #f3f4f7;
+  --workbench-header: #f7f8fa;
   --workbench-success: #18794e;
   --workbench-warning: #946000;
   --workbench-danger: #c8343b;
@@ -32,20 +32,22 @@
 :root.dark,
 .dark .dbx-workbench,
 .dbx-workbench.dark {
-  --workbench-chrome: #2b2d31;
-  --workbench-sidebar: #26282e;
-  --workbench-rail: #26282e;
-  --workbench-status: #2b2d31;
-  --workbench-border: #3b3d43;
-  --workbench-grid-line: #33363d;
-  --workbench-secondary: #bdc4d2;
-  --workbench-muted: #a5afc0;
-  --workbench-accent: #6b9bfa;
-  --workbench-accent-soft: #303e58;
-  --workbench-hover: #373a42;
+  --workbench-chrome: #1f232a;
+  --workbench-sidebar: #20252d;
+  --workbench-rail: #20252d;
+  --workbench-status: #1f232a;
+  --workbench-surface: #181b21;
+  --workbench-border: #343b46;
+  --workbench-grid-line: #2b313b;
+  --workbench-text: #e4eaf3;
+  --workbench-secondary: #c0cad9;
+  --workbench-muted: #a7b2c3;
+  --workbench-accent: #91b1ff;
+  --workbench-accent-soft: #29394f;
+  --workbench-hover: #2d3440;
   --workbench-selection: #2e4260;
   --workbench-selection-strong: #365174;
-  --workbench-header: #2b2d31;
+  --workbench-header: #1f232a;
   --workbench-success: #70c69b;
   --workbench-warning: #e9b768;
   --workbench-danger: #f08890;
@@ -107,7 +109,7 @@
 }
 
 .dbx-workbench [data-grid-root] .data-grid-topbar-action-button {
-  border-radius: 4px;
+  border-radius: 6px;
   line-height: 1.15;
 }
 

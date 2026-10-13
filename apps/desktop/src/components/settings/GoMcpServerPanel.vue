@@ -140,7 +140,7 @@ onMounted(load);
         <Switch id="go-mcp-enabled" v-model="settings.enabled" :disabled="busy || !loaded || managed" />
       </div>
       <p class="text-xs text-muted-foreground">
-        {{ tr("与数据库工作台共用连接和权限，无需安装 npm 包。默认关闭；启用后客户端仍须提供 Bearer Token。", "Uses Database Workbench connections and permissions with no npm installation. Disabled by default; clients require a bearer token when enabled.") }}
+        {{ tr("与喜鹊共用连接和权限，无需安装 npm 包。默认关闭；启用后客户端仍须提供 Bearer Token。", "Uses MagpieDB connections and permissions with no npm installation. Disabled by default; clients require a bearer token when enabled.") }}
       </p>
       <div v-if="!policyConfigured" class="rounded border border-amber-500/30 p-3 text-xs space-y-2">
         <p>{{ tr("先配置并应用访问权限，再开启服务。", "Configure and apply access permissions before enabling the service.") }}</p>
@@ -159,7 +159,7 @@ onMounted(load);
           </div>
         </div>
         <p class="text-xs text-muted-foreground">
-          {{ tr("桌面服务仅允许 127.0.0.1 或 ::1；关闭数据库工作台后服务停止。远程接入请使用有 HTTPS 反向代理的 Web 部署。", "Desktop service only binds to 127.0.0.1 or ::1 and stops when Database Workbench closes. For remote access, use a Web deployment behind an HTTPS reverse proxy.") }}
+          {{ tr("桌面服务仅允许 127.0.0.1 或 ::1；关闭喜鹊后服务停止。远程接入请使用有 HTTPS 反向代理的 Web 部署。", "Desktop service only binds to 127.0.0.1 or ::1 and stops when MagpieDB closes. For remote access, use a Web deployment behind an HTTPS reverse proxy.") }}
         </p>
       </template>
       <template v-else>
@@ -218,8 +218,8 @@ onMounted(load);
       <p v-if="format === 'stdio'" class="text-xs text-muted-foreground">
         {{
           tr(
-            "使用 Go 仓库 build:mcp 生成的 dbx-mcp-go，将 command 替换为其绝对路径（Windows 为 .exe）。该程序通过 HTTP 连接当前数据库工作台，数据库工作台必须保持运行。",
-            "Use dbx-mcp-go from the Go repository's build:mcp command and replace command with its absolute path (.exe on Windows). This bridge connects to the running Database Workbench over HTTP.",
+            "使用 Go 仓库 build:mcp 生成的 dbx-mcp-go，将 command 替换为其绝对路径（Windows 为 .exe）。该程序通过 HTTP 连接当前喜鹊，喜鹊必须保持运行。",
+            "Use dbx-mcp-go from the Go repository's build:mcp command and replace command with its absolute path (.exe on Windows). This bridge connects to the running MagpieDB over HTTP.",
           )
         }}
       </p>

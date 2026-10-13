@@ -11,7 +11,7 @@ import { FileText } from "@lucide/vue";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import AppToolbar from "@/components/layout/AppToolbar.vue";
 import WorkbenchFrame from "@/components/layout/WorkbenchFrame.vue";
-import WorkbenchToolRail, { type WorkbenchToolItem } from "@/components/layout/WorkbenchToolRail.vue";
+import WorkbenchNavigationDock from "@/components/layout/WorkbenchNavigationDock.vue";
 import WorkbenchStatusBar from "@/components/layout/WorkbenchStatusBar.vue";
 import AppTabBar from "@/components/layout/AppTabBar.vue";
 import { createGroupTabBarPortal, GROUP_TAB_BAR_PORTAL } from "@/components/layout/groupTabBarPortal";
@@ -33,7 +33,7 @@ import { useSqlExecutionDangerStore } from "@/stores/sqlExecutionDangerStore";
 import type { MultiDbExecutionContext } from "@/composables/useMultiDbExecution";
 import type { MultiDbExecutionTarget } from "@/types/sqlExecution";
 import { useProductionSafetyStore } from "@/stores/productionSafetyStore";
-import { enforceRightSidebarPanelExclusivity, RIGHT_SIDEBAR_PANEL_IDS, transitionRightSidebarPanels, useSettingsStore, type RightSidebarPanelId, type RightSidebarPanelState } from "@/stores/settingsStore";
+import { useSettingsStore, type RightSidebarPanelId } from "@/stores/settingsStore";
 import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { usePromptTemplateStore } from "@/stores/promptTemplateStore";
 import { useToast } from "@/composables/useToast";
@@ -61,6 +61,7 @@ import { useExportTracker } from "@/composables/useExportTracker";
 import { useFileDrop } from "@/composables/useFileDrop";
 import { useLargeSqlFileStreamingFallback } from "@/composables/useLargeSqlFileFallback";
 import { usePanelResize } from "@/composables/usePanelResize";
+import { useWorkbenchNavigation, type WorkbenchNavigationSection } from "@/composables/useWorkbenchNavigation";
 import { loadUiTuning } from "@/lib/app/uiTuning";
 import { useDatabaseOptions } from "@/composables/useDatabaseOptions";
 import { useSqlExecution } from "@/composables/useSqlExecution";
@@ -430,17 +431,12 @@ const rightSidebarPanelRefs: Record<RightSidebarPanelId, typeof showAiPanel> = {
   sqlLibrary: showSqlLibraryPanel,
   sqlFile: showSqlFilePanel,
 };
-const rightSidebarPanelStorageKeys: Partial<Record<RightSidebarPanelId, string>> = {
-  ai: "dbx-ai-panel-open",
-  sqlLibrary: "dbx-sql-library-open",
-  sqlFile: "dbx-sql-file-panel-open",
-};
-let lastOpenedRightSidebarPanel = RIGHT_SIDEBAR_PANEL_IDS.find((panelId) => rightSidebarPanelRefs[panelId].value);
 const sidebarOpen = ref(safeLocalStorageGet("dbx-sidebar-open") !== "false");
+const workbenchNavigation = useWorkbenchNavigation({ sidebarOpen, history: showHistory, sqlLibrary: showSqlLibraryPanel, sqlFile: showSqlFilePanel });
+const navigationSection = workbenchNavigation.activeSection;
 const aiPanelReady = ref(false);
 void loadUiTuning();
-const { sidebarWidth, aiPanelWidth, historyWidth, sqlLibraryWidth, sqlFilePanelWidth, tabBarWidth, tabBarCollapsed, startSidebarResize, startAiPanelResize, startHistoryResize, startSqlLibraryResize, startSqlFilePanelResize, startLeftTabBarResize, startRightTabBarResize, setTabBarCollapsed } =
-  usePanelResize();
+const { sidebarWidth, aiPanelWidth, tabBarWidth, tabBarCollapsed, startSidebarResize, startAiPanelResize, startLeftTabBarResize, startRightTabBarResize, setTabBarCollapsed } = usePanelResize();
 const aiAssistantRef = ref<AiAssistantHandle | null>(null);
 provide(OPEN_PLUGIN_AI_CONVERSATION, (request) => {
   openAiPanel();
@@ -849,36 +845,12 @@ const workbenchCursorPosition = computed(() => {
   if (tab?.mode !== "query" || showSettingsPage.value || showDriverStore.value || showPluginCenter.value) return undefined;
   return cursorPositionFromLineStarts(workbenchSqlLineStarts.value, tab.sql.length, cursorPos.value);
 });
-const workbenchNavigationItems = computed<WorkbenchToolItem[]>(() => {
-  const shortcuts = settingsStore.editorSettings.shortcuts;
-  return [
-    { id: "database", label: t("workbenchLayout.databaseTool"), icon: "database", active: sidebarOpen.value, shortcut: shortcuts.toggleSidebar },
-    { id: "objects", label: t("workbenchLayout.searchObjects"), icon: "search", shortcut: shortcuts.quickOpen },
-    { id: "newQuery", label: t("toolbar.newQuery"), icon: "newQuery", disabled: !canCreateNewQuery.value, shortcut: shortcuts.newQuery },
-    { id: "settings", label: t("settings.title"), icon: "settings", active: showSettingsPage.value, shortcut: shortcuts.openSettings, bottom: true },
-  ];
-});
-const workbenchToolItems = computed<WorkbenchToolItem[]>(() => {
-  const shortcuts = settingsStore.editorSettings.shortcuts;
-  const visibility = settingsStore.editorSettings.toolbarItems;
-  const items: WorkbenchToolItem[] = [
-    { id: "sqlLibrary", label: t("sqlLibrary.title"), icon: "sqlLibrary", active: showSqlLibraryPanel.value },
-    { id: "sqlFile", label: t("sqlFileTree.title"), icon: "sqlFile", active: showSqlFilePanel.value },
-    { id: "history", label: t("history.title"), icon: "history", active: showHistory.value, shortcut: shortcuts.toggleQueryHistory },
-    { id: "ai", label: "AI", icon: "ai", active: showAiPanel.value, shortcut: shortcuts.toggleAiPanel, badge: activeAiRunCount.value, attention: awaitingAiRunCount.value > 0 },
-  ];
-  return items.filter((item) => visibility[item.id === "sqlFile" ? "sqlFileTree" : (item.id as "sqlLibrary" | "history" | "ai")]);
-});
-function selectWorkbenchNavigation(id: string) {
-  if (id === "database") setSidebarOpen(!sidebarOpen.value);
-  else if (id === "objects") {
-    quickOpenForceContent.value = false;
-    showQuickOpen.value = true;
-  } else if (id === "newQuery") void newQuery();
-  else if (id === "settings") openSettings();
-}
-function selectWorkbenchTool(id: string) {
-  if (RIGHT_SIDEBAR_PANEL_IDS.includes(id as RightSidebarPanelId)) toggleRightSidebarPanel(id as RightSidebarPanelId);
+function selectWorkbenchNavigation(section: WorkbenchNavigationSection) {
+  workbenchNavigation.selectSection(section);
+  isHistoryPanelMaximized.value = false;
+  isAiPanelMaximized.value = false;
+  if (section === "objects") rememberSidebarSearchSurface();
+  else if (section === "history" || section === "sqlLibrary") rememberAuxiliarySearchSurface(section);
 }
 
 function supportsGenericNewQuery(connection: ConnectionConfig | undefined): boolean {
@@ -1751,54 +1723,24 @@ watch(
   { immediate: true, deep: true },
 );
 
-watch(
-  [() => settingsStore.isEditorSettingsLoaded, () => settingsStore.editorSettings.toolbarItems.exclusiveRightSidebarPanels],
-  ([loaded, exclusive]) => {
-    if (!loaded || !exclusive) return;
-    // Compatibility: old persisted panel flags may contain multiple open panels.
-    applyRightSidebarPanelState(enforceRightSidebarPanelExclusivity(currentRightSidebarPanelState(), lastOpenedRightSidebarPanel));
-  },
-  { immediate: true },
-);
-
-function currentRightSidebarPanelState(): RightSidebarPanelState {
-  return Object.fromEntries(RIGHT_SIDEBAR_PANEL_IDS.map((panelId) => [panelId, rightSidebarPanelRefs[panelId].value])) as RightSidebarPanelState;
-}
-
-function applyRightSidebarPanelState(next: RightSidebarPanelState) {
-  for (const panelId of RIGHT_SIDEBAR_PANEL_IDS) {
-    const panelRef = rightSidebarPanelRefs[panelId];
-    if (panelRef.value === next[panelId]) continue;
-    panelRef.value = next[panelId];
-    const storageKey = rightSidebarPanelStorageKeys[panelId];
-    if (storageKey) safeLocalStorageSet(storageKey, String(next[panelId]));
-  }
-}
-
 function setRightSidebarPanelOpen(panelId: RightSidebarPanelId, open: boolean) {
-  if ((panelId === "history" && !open) || (panelId !== "history" && open)) isHistoryPanelMaximized.value = false;
-  if (panelId === "ai" && !open) {
-    isAiPanelMaximized.value = false;
-  } else if (open && panelId !== "ai" && isAiPanelMaximized.value) {
-    // Opening another right-side panel should make the hidden panel visible again
-    // instead of leaving it behind the maximized AI surface.
-    isAiPanelMaximized.value = false;
-  }
-  const exclusive = settingsStore.isEditorSettingsLoaded && settingsStore.editorSettings.toolbarItems.exclusiveRightSidebarPanels;
-  applyRightSidebarPanelState(transitionRightSidebarPanels(currentRightSidebarPanelState(), panelId, open, exclusive));
-  if (open) {
-    lastOpenedRightSidebarPanel = panelId;
-    if (panelId === "ai" || panelId === "history" || panelId === "sqlLibrary") {
-      lastFocusedAuxiliarySurface.value = panelId;
-      lastFocusedSidebarSurface.value = false;
+  if (panelId !== "ai") {
+    if (open) selectWorkbenchNavigation(panelId);
+    else {
+      workbenchNavigation.closeSection(panelId);
+      isHistoryPanelMaximized.value = false;
     }
-  } else if (lastOpenedRightSidebarPanel === panelId) {
-    lastOpenedRightSidebarPanel = RIGHT_SIDEBAR_PANEL_IDS.find((candidate) => rightSidebarPanelRefs[candidate].value);
+    return;
   }
+  showAiPanel.value = open;
+  safeLocalStorageSet("dbx-ai-panel-open", String(open));
+  if (!open) isAiPanelMaximized.value = false;
+  else rememberAuxiliarySearchSurface("ai");
 }
 
 function toggleRightSidebarPanel(panelId: RightSidebarPanelId) {
-  setRightSidebarPanelOpen(panelId, !rightSidebarPanelRefs[panelId].value);
+  const open = !rightSidebarPanelRefs[panelId].value || (panelId !== "ai" && !sidebarOpen.value);
+  setRightSidebarPanelOpen(panelId, open);
 }
 
 function openRightSidebarPanel(panelId: RightSidebarPanelId) {
@@ -3301,7 +3243,7 @@ function setSidebarOpen(open: boolean) {
 }
 
 async function locateTabInSidebar(tab: QueryTab) {
-  setSidebarOpen(true);
+  selectWorkbenchNavigation("objects");
   await nextTick();
   await appSidebarRef.value?.locateTabInSidebar(tab);
 }
@@ -3797,20 +3739,22 @@ function focusSearchInAuxiliarySurface(target: Element | null): boolean {
     focusSearchInput("[data-connection-db-search]");
     return true;
   }
+  if (showAiPanel.value && target?.closest("[data-ai-assistant-root], [data-ai-conversation-search]")) {
+    if (aiAssistantRef.value) return aiAssistantRef.value.focusSearch();
+    invokeWhenAiReady((handle) => handle.focusSearch());
+    return true;
+  }
+  if (sidebarOpen.value && !isZenMode.value) {
+    const navigationFocused = target?.closest("[data-workbench-navigation]");
+    if (showHistory.value && navigationFocused) return focusSearchInput("[data-history-search]");
+    if (showSqlLibraryPanel.value && navigationFocused) return focusSearchInput("[data-sql-library-search]");
+  }
   if (showSettingsPage.value) return focusSearchInput("[data-settings-global-search]");
   if (showDriverStore.value) {
     const selector = driverStoreActiveTab.value === "jdbc" ? "[data-driver-store-jdbc-search]" : "[data-driver-store-agent-search]";
     return focusSearchInput(selector);
   }
   if (showPluginCenter.value) return focusSearchInput("[data-plugin-marketplace-search]");
-
-  if (showAiPanel.value && target?.closest("[data-ai-assistant-root], [data-ai-conversation-search]")) {
-    if (aiAssistantRef.value) return aiAssistantRef.value.focusSearch();
-    invokeWhenAiReady((handle) => handle.focusSearch());
-    return true;
-  }
-  if (showHistory.value && target?.closest("[data-history-panel], [data-history-search]")) return focusSearchInput("[data-history-search]");
-  if (showSqlLibraryPanel.value && target?.closest("[data-sql-library-panel], [data-sql-library-search]")) return focusSearchInput("[data-sql-library-search]");
 
   const targetIsDocument = !target || target === document.body || target === document.documentElement;
   if (!targetIsDocument) return false;
@@ -3821,8 +3765,10 @@ function focusSearchInAuxiliarySurface(target: Element | null): boolean {
     invokeWhenAiReady((handle) => handle.focusSearch());
     return true;
   }
-  if (lastFocusedAuxiliarySurface.value === "history" && showHistory.value) return focusSearchInput("[data-history-search]");
-  if (lastFocusedAuxiliarySurface.value === "sqlLibrary" && showSqlLibraryPanel.value) return focusSearchInput("[data-sql-library-search]");
+  if (sidebarOpen.value && !isZenMode.value) {
+    if (lastFocusedAuxiliarySurface.value === "history" && showHistory.value) return focusSearchInput("[data-history-search]");
+    if (lastFocusedAuxiliarySurface.value === "sqlLibrary" && showSqlLibraryPanel.value) return focusSearchInput("[data-sql-library-search]");
+  }
   return false;
 }
 
@@ -4044,8 +3990,9 @@ async function handleKeydown(e: KeyboardEvent) {
     // search belonging to the active table/query tab.
     const target = e.target instanceof Element ? e.target : null;
     const targetIsDocument = !target || target === document.body || target === document.documentElement;
-    const sidebarFocused = target?.closest("[data-app-sidebar]") || (targetIsDocument && lastFocusedSidebarSurface.value);
-    const focused = sidebarFocused ? appSidebarRef.value?.focusSearch(target) : focusSearchInAuxiliarySurface(target) || contentAreaRef.value?.focusSearch(target) || appSidebarRef.value?.focusSearch(target);
+    const objectsVisible = sidebarOpen.value && !isZenMode.value && navigationSection.value === "objects";
+    const sidebarFocused = objectsVisible && (target?.closest("[data-app-sidebar]") || (targetIsDocument && lastFocusedSidebarSurface.value));
+    const focused = sidebarFocused ? appSidebarRef.value?.focusSearch(target) : focusSearchInAuxiliarySurface(target) || contentAreaRef.value?.focusSearch(target) || (objectsVisible && appSidebarRef.value?.focusSearch(target));
     if (focused) {
       e.preventDefault();
       e.stopPropagation();
@@ -4532,7 +4479,7 @@ onUnmounted(() => {
             v-if="!isDetachedWindowContext"
             :workspace-name="workbenchConnectionName"
             :database-name="activeTab?.database"
-            tool-windows-in-rail
+            unified-navigation
             :is-dark="isDark"
             :theme-mode="themeMode"
             :show-sidebar-expand="!sidebarOpen && !isZenMode"
@@ -4561,6 +4508,7 @@ onUnmounted(() => {
             :show-logout="!isDesktop && needsAuth"
             @new-connection="showConnectionDialog = true"
             @expand-sidebar="setSidebarOpen(true)"
+            @toggle-sidebar="setSidebarOpen(!sidebarOpen)"
             @new-query="newQuery"
             @set-theme-mode="setThemeMode"
             @toggle-ai="toggleRightSidebarPanel('ai')"
@@ -4582,10 +4530,61 @@ onUnmounted(() => {
           />
         </template>
         <template #navigation>
-          <WorkbenchToolRail v-if="!isDetachedWindowContext && !isZenMode" side="left" :label="t('workbenchLayout.navigation')" :items="workbenchNavigationItems" @select="selectWorkbenchNavigation" />
-        </template>
-        <template #tools>
-          <WorkbenchToolRail v-if="!isDetachedWindowContext && !isZenMode" side="right" :label="t('workbenchLayout.toolWindows')" :items="workbenchToolItems" @select="selectWorkbenchTool" />
+          <WorkbenchNavigationDock
+            v-if="!isDetachedWindowContext"
+            v-show="sidebarOpen && !isZenMode"
+            :section="navigationSection"
+            :width="sidebarWidth"
+            :connection-count="connectionStore.connections.length"
+            :can-new-query="canCreateNewQuery"
+            :maximized="isHistoryPanelMaximized"
+            :settings-notice="showMcpSettingsUpdateBadge"
+            :sql-library-save-feedback-id="sqlLibrarySaveFeedbackId"
+            @select="selectWorkbenchNavigation"
+            @resize="startSidebarResize"
+            @collapse="setSidebarOpen(false)"
+            @new-connection="showConnectionDialog = true"
+            @new-query="newQuery"
+            @settings="openSettings(showMcpSettingsUpdateBadge ? 'mcp' : 'appearance')"
+          >
+            <template #objects>
+              <AppSidebar
+                ref="appSidebarRef"
+                :sidebar-width="sidebarWidth"
+                :classic-layout="true"
+                embedded
+                @new-connection="showConnectionDialog = true"
+                @import="dialogs.onImportClick"
+                @export="dialogs.onExportClick"
+                @collapse="setSidebarOpen(false)"
+                @open-settings="(initialTab) => openSettings(initialTab ?? 'appearance')"
+                @add-to-ai="addToAi"
+                @mousedown="rememberSidebarSearchSurface"
+              />
+            </template>
+            <template #history>
+              <div data-history-panel class="h-full min-h-0" @mousedown="rememberAuxiliarySearchSurface('history')">
+                <QueryHistory
+                  :active="showHistory && sidebarOpen && !isZenMode"
+                  :maximized="isHistoryPanelMaximized"
+                  @toggle-maximize="isHistoryPanelMaximized = !isHistoryPanelMaximized"
+                  :current-connection-id="activeTab?.connectionId"
+                  :current-database="activeTab?.database"
+                  @restore="restoreHistorySql"
+                  @analyze-ai="analyzeHistoryWithAi"
+                  @close="closeRightSidebarPanel('history')"
+                />
+              </div>
+            </template>
+            <template #sqlLibrary>
+              <div data-sql-library-panel class="h-full min-h-0" @mousedown="rememberAuxiliarySearchSurface('sqlLibrary')">
+                <SqlLibraryPanel @close="closeRightSidebarPanel('sqlLibrary')" />
+              </div>
+            </template>
+            <template #sqlFile>
+              <SqlFilePanel @close="closeRightSidebarPanel('sqlFile')" />
+            </template>
+          </WorkbenchNavigationDock>
         </template>
         <template #status>
           <WorkbenchStatusBar
@@ -4604,23 +4603,7 @@ onUnmounted(() => {
         <template #default>
           <div class="workbench-panes app-layout-classic flex min-w-0 flex-1 min-h-0">
             <PluginShortcutBar v-if="!isDetachedWindowContext && !isZenMode && settingsStore.editorSettings.pluginShortcuts.enabled && settingsStore.editorSettings.pluginShortcuts.position.startsWith('left-')" :position="settingsStore.editorSettings.pluginShortcuts.position" />
-            <AppSidebar
-              v-if="!isDetachedWindowContext"
-              v-show="sidebarOpen && !isZenMode"
-              ref="appSidebarRef"
-              :sidebar-width="sidebarWidth"
-              :classic-layout="true"
-              @new-connection="showConnectionDialog = true"
-              @import="dialogs.onImportClick"
-              @export="dialogs.onExportClick"
-              @start-resize="startSidebarResize"
-              @collapse="setSidebarOpen(false)"
-              @open-settings="(initialTab) => openSettings(initialTab ?? 'appearance')"
-              @add-to-ai="addToAi"
-              @mousedown="rememberSidebarSearchSurface"
-            />
-
-            <div data-editor-content v-show="(!isAiPanelMaximized && !isHistoryPanelMaximized) || isZenMode" class="workbench-editor-stage flex-1 min-w-0 overflow-hidden bg-background">
+            <div data-editor-content v-show="!isAiPanelMaximized || isZenMode" class="workbench-editor-stage flex-1 min-w-0 overflow-hidden bg-background">
               <div class="h-full flex min-h-0 min-w-0 flex-col">
                 <AppTabBar
                   v-if="!isDetachedWindowContext"
@@ -4899,12 +4882,7 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div
-              v-if="!isDetachedWindowContext && showAiPanel"
-              v-show="!isHistoryPanelMaximized && !isZenMode"
-              :class="['workbench-tool-window h-full relative z-30 isolate bg-background', isAiPanelMaximized ? 'min-w-0 flex-1' : 'min-w-[240px] max-w-full']"
-              :style="isAiPanelMaximized ? {} : { width: aiPanelWidth + 'px' }"
-            >
+            <div v-if="!isDetachedWindowContext && showAiPanel" v-show="!isZenMode" :class="['workbench-tool-window h-full relative z-30 isolate bg-background', isAiPanelMaximized ? 'min-w-0 flex-1' : 'min-w-[240px] max-w-full']" :style="isAiPanelMaximized ? {} : { width: aiPanelWidth + 'px' }">
               <div v-if="!isAiPanelMaximized" class="panel-resize-handle panel-resize-handle--left" @pointerdown="startAiPanelResize" />
               <div class="h-full min-h-0 overflow-hidden rounded-[inherit]" @mousedown="rememberAuxiliarySearchSurface('ai')">
                 <AiAssistant
@@ -4928,43 +4906,6 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div
-              v-if="!isDetachedWindowContext && showHistory"
-              v-show="!isAiPanelMaximized && !isZenMode"
-              :class="['workbench-tool-window h-full relative z-30 isolate bg-background', isHistoryPanelMaximized ? 'min-w-0 flex-1' : 'shrink-0 max-w-full']"
-              :style="isHistoryPanelMaximized ? {} : { width: historyWidth + 'px' }"
-            >
-              <div v-if="!isHistoryPanelMaximized" class="panel-resize-handle panel-resize-handle--left" @pointerdown="startHistoryResize" />
-              <div class="h-full min-h-0 overflow-hidden rounded-[inherit]" @mousedown="rememberAuxiliarySearchSurface('history')">
-                <div data-history-panel class="h-full min-h-0">
-                  <QueryHistory
-                    :maximized="isHistoryPanelMaximized"
-                    @toggle-maximize="isHistoryPanelMaximized = !isHistoryPanelMaximized"
-                    :current-connection-id="activeTab?.connectionId"
-                    :current-database="activeTab?.database"
-                    @restore="restoreHistorySql"
-                    @analyze-ai="analyzeHistoryWithAi"
-                    @close="closeRightSidebarPanel('history')"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div v-if="!isDetachedWindowContext && showSqlLibraryPanel" v-show="!isAiPanelMaximized && !isHistoryPanelMaximized && !isZenMode" class="workbench-tool-window h-full shrink-0 relative z-30 isolate bg-background" :style="{ width: sqlLibraryWidth + 'px' }">
-              <div class="panel-resize-handle panel-resize-handle--left" @pointerdown="startSqlLibraryResize" />
-              <div class="h-full min-h-0 overflow-hidden rounded-[inherit]" @mousedown="rememberAuxiliarySearchSurface('sqlLibrary')">
-                <div data-sql-library-panel class="h-full min-h-0">
-                  <SqlLibraryPanel @close="closeRightSidebarPanel('sqlLibrary')" />
-                </div>
-              </div>
-            </div>
-
-            <div v-if="!isDetachedWindowContext && showSqlFilePanel" v-show="!isAiPanelMaximized && !isHistoryPanelMaximized && !isZenMode" class="workbench-tool-window h-full shrink-0 relative z-30 isolate bg-background" :style="{ width: sqlFilePanelWidth + 'px' }">
-              <div class="panel-resize-handle panel-resize-handle--left" @pointerdown="startSqlFilePanelResize" />
-              <div class="h-full min-h-0 overflow-hidden rounded-[inherit]">
-                <SqlFilePanel @close="closeRightSidebarPanel('sqlFile')" />
-              </div>
-            </div>
             <PluginShortcutBar v-if="!isDetachedWindowContext && !isZenMode && settingsStore.editorSettings.pluginShortcuts.enabled && settingsStore.editorSettings.pluginShortcuts.position.startsWith('right-')" :position="settingsStore.editorSettings.pluginShortcuts.position" />
           </div>
         </template>

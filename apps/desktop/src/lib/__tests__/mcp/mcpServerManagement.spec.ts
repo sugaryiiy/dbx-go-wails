@@ -17,7 +17,7 @@ describe("Go MCP management capabilities", () => {
     expect(status.install_command).toBe("");
     expect(status.uninstall_command).toBe("");
     expect(status.npm_available).toBe(false);
-    await expect(installMcpServer()).rejects.toThrow("built into Database Workbench Go");
+    await expect(installMcpServer()).rejects.toThrow("built into MagpieDB Go");
     await expect(uninstallMcpServer()).rejects.toThrow("Disable it in MCP settings");
   });
   it("materializes a tool allowlist using only the implemented Go tools", () => {

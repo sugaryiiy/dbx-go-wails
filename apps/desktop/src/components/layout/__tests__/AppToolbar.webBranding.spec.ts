@@ -100,7 +100,7 @@ function mount(props: Record<string, unknown> = {}) {
       fallbackWarn: false,
       messages: {
         en: {
-          app: { name: "Database Workbench" },
+          app: { name: "MagpieDB" },
           toolbar: {
             newConnection: "New Connection",
             newQuery: "New Query",
@@ -140,12 +140,12 @@ describe("AppToolbar web branding (#8703)", () => {
     expect(brandEl).not.toBeNull();
     expect(brandEl?.querySelector("a")).toBeNull();
     expect(brandEl?.getAttribute("href")).toBeNull();
-    expect(brandEl?.textContent).toContain("Database Workbench");
+    expect(brandEl?.textContent).toContain("MagpieDB");
 
     const logoImg = brandEl?.querySelector("img");
     expect(logoImg).not.toBeNull();
-    expect(logoImg?.getAttribute("alt")).toBe("Database Workbench");
-    expect(logoImg?.getAttribute("src")).toContain("workbench.svg");
+    expect(logoImg?.getAttribute("alt")).toBe("MagpieDB");
+    expect(logoImg?.getAttribute("src")).toContain("icons/brand/magpiedb.png");
 
     unmount();
   });
@@ -157,7 +157,7 @@ describe("AppToolbar web branding (#8703)", () => {
 
     const brandEl = host.querySelector('[data-testid="web-brand-logo"]');
     expect(brandEl).toBeNull();
-    expect(host.querySelector('[data-testid="workbench-brand"]')?.textContent).toContain("Database Workbench");
+    expect(host.querySelector('[data-testid="workbench-brand"]')?.textContent).toContain("MagpieDB");
 
     unmount();
   });

@@ -826,7 +826,8 @@ const editExportRowLimit = ref(settingsStore.editorSettings.exportRowLimit);
 const editQueryExportKeysetOptimizationEnabled = ref(settingsStore.editorSettings.queryExportKeysetOptimizationEnabled);
 const editUpdateDownloadSource = ref<UpdateDownloadSource>(settingsStore.editorSettings.updateDownloadSource);
 const editToolbarItems = ref({ ...settingsStore.editorSettings.toolbarItems });
-// Desktop-only toolbar buttons (always-on-top) can never render in the Web build, so their switches stay out of the Web settings dialog.
+// Only configurable header controls appear here. Resource navigation and AI
+// remain available in the workbench; legacy visibility fields are still saved.
 const toolbarVisibilityItems = computed(() => visibleToolbarVisibilityItems(TOOLBAR_VISIBILITY_ITEMS, isWeb));
 function getToolbarVisibilityItemLabel(item: ToolbarVisibilityItem): string {
   return toolbarVisibilityItemLabel(item, t);
@@ -7101,15 +7102,6 @@ onUnmounted(() => {
                     <p>{{ t("settings.toolbarHiddenHint") }}</p>
                   </HelpTooltip>
                 </div>
-                <div class="settings-item flex items-center justify-between gap-4 rounded-md border border-border/60 p-3">
-                  <div class="space-y-1">
-                    <Label for="exclusive-right-sidebar-panels" class="text-sm cursor-pointer">{{ t("settings.exclusiveRightSidebarPanels") }}</Label>
-                    <p class="text-xs text-muted-foreground">
-                      {{ t("settings.exclusiveRightSidebarPanelsDescription") }}
-                    </p>
-                  </div>
-                  <Switch id="exclusive-right-sidebar-panels" v-model="editToolbarItems.exclusiveRightSidebarPanels" />
-                </div>
                 <div class="grid grid-cols-3 gap-2 mt-2">
                   <div v-for="item in toolbarVisibilityItems" :key="item.key" class="flex items-center gap-2">
                     <Switch :id="`toolbar-${item.key}`" :model-value="(editToolbarItems as any)[item.key]" @update:model-value="(v: boolean) => ((editToolbarItems as any)[item.key] = v)" />
@@ -10105,7 +10097,11 @@ LIMIT 100;</pre
                             </label>
                           </div>
                           <p class="text-xs text-muted-foreground">
-                            {{ locale.startsWith("zh") ? `Go MCP 提供上方 ${mcpToolOptions.length} 项工具；对象与事件工具只读。已有的显式工具授权列表不会自动勾选新增工具，批量执行为原子事务。会话、插件和连接管理工具尚未实现。` : `Go MCP provides the ${mcpToolOptions.length} tools above. Object and event tools are read-only. Existing explicit tool allowlists do not automatically select new tools. Batch execution is atomic. Session, plugin and connection management tools are not implemented.` }}
+                            {{
+                              locale.startsWith("zh")
+                                ? `Go MCP 提供上方 ${mcpToolOptions.length} 项工具；对象与事件工具只读。已有的显式工具授权列表不会自动勾选新增工具，批量执行为原子事务。会话、插件和连接管理工具尚未实现。`
+                                : `Go MCP provides the ${mcpToolOptions.length} tools above. Object and event tools are read-only. Existing explicit tool allowlists do not automatically select new tools. Batch execution is atomic. Session, plugin and connection management tools are not implemented.`
+                            }}
                           </p>
                         </section>
                       </div>

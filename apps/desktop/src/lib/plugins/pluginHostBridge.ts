@@ -624,13 +624,13 @@ export class PluginHostBridge {
     }
     if (method === "host.ai.listModels") {
       this.requirePermission("host.ai");
-      if (!this.api.listAiModels) throw new Error("Database Workbench AI model selection is unavailable");
+      if (!this.api.listAiModels) throw new Error("MagpieDB AI model selection is unavailable");
       // Whitelist response fields even if an adapter accidentally returns config objects.
       return (await this.api.listAiModels()).map((m) => ({ configId: m.configId, name: m.name, model: m.model, isDefault: !!m.isDefault }));
     }
     if (method === "host.ai.generateText") {
       this.requirePermission("host.ai");
-      if (!this.api.generateAiText) throw new Error("Database Workbench AI text generation is unavailable");
+      if (!this.api.generateAiText) throw new Error("MagpieDB AI text generation is unavailable");
       const input = requireRecord(params, "AI generation request");
       for (const key of ["configId", "model", "prompt"] as const) {
         if (typeof input[key] !== "string" || !input[key].trim() || input[key].length > (key === "prompt" ? 100000 : 256)) throw new Error("Invalid AI " + key);
@@ -644,7 +644,7 @@ export class PluginHostBridge {
       this.requirePermission("host.ai");
       // Same conjunction the aiCompletionStream capability advertises: a host
       // that cannot cancel does not stream.
-      if (!this.api.generateAiTextStream || !this.api.cancelAiGeneration) throw new Error("Database Workbench AI text generation streaming is unavailable");
+      if (!this.api.generateAiTextStream || !this.api.cancelAiGeneration) throw new Error("MagpieDB AI text generation streaming is unavailable");
       const input = requireRecord(params, "AI generation request");
       for (const key of ["configId", "model", "prompt"] as const) {
         if (typeof input[key] !== "string" || !input[key].trim() || input[key].length > (key === "prompt" ? 100000 : 256)) throw new Error("Invalid AI " + key);
@@ -679,14 +679,14 @@ export class PluginHostBridge {
     }
     if (method === "host.ai.openConversation") {
       this.requirePermission("host.ai");
-      if (!this.api.openAiConversation) throw new Error("Database Workbench AI conversation panel is unavailable");
+      if (!this.api.openAiConversation) throw new Error("MagpieDB AI conversation panel is unavailable");
       const request = createPluginAiConversation(this.plugin.manifest, params);
       await this.api.openAiConversation(request);
       return null;
     }
     if (method === "host.ai.setRecommendations") {
       this.requirePermission("host.ai");
-      if (!this.api.openAiConversation || !this.api.setAiRecommendations) throw new Error("Database Workbench AI recommendations are unavailable");
+      if (!this.api.openAiConversation || !this.api.setAiRecommendations) throw new Error("MagpieDB AI recommendations are unavailable");
       const update = requirePluginAiRecommendationUpdate(params);
       this.runtimeAiRecommendations = update;
       this.publishAiRecommendations();
@@ -694,7 +694,7 @@ export class PluginHostBridge {
     }
     if (method === "host.ai.clearRecommendations") {
       this.requirePermission("host.ai");
-      if (!this.api.openAiConversation || !this.api.setAiRecommendations) throw new Error("Database Workbench AI recommendations are unavailable");
+      if (!this.api.openAiConversation || !this.api.setAiRecommendations) throw new Error("MagpieDB AI recommendations are unavailable");
       this.runtimeAiRecommendations = { context: {}, items: [] };
       this.publishAiRecommendations();
       return null;

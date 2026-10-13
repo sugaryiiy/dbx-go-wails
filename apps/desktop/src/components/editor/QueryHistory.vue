@@ -35,6 +35,7 @@ const props = defineProps<{
   currentConnectionId?: string;
   currentDatabase?: string;
   maximized?: boolean;
+  active?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -554,10 +555,28 @@ watch(
 
 watch([searchText, mcpToolName, activeSource, activeFilter, () => dateRange.value.startDate, () => dateRange.value.endDate, () => selectedConnections.value.map(connectionKey).join("\0"), () => selectedDatabases.value.map(databaseKey).join("\0")], scheduleHistorySearch);
 
+watch(
+  () => props.active ?? true,
+  (active) => {
+    store.setHistoryPanelActive(active);
+    if (active) {
+      void store.loadConnectionOptions().catch(() => {});
+      void runHistorySearch();
+      void nextTick(updateFilterScrollability);
+    } else if (searchDebounceTimer) {
+      clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+    }
+  },
+);
+
 onMounted(() => {
-  store.setHistoryPanelActive(true);
-  void store.loadConnectionOptions().catch(() => {});
-  void runHistorySearch();
+  const active = props.active ?? true;
+  store.setHistoryPanelActive(active);
+  if (active) {
+    void store.loadConnectionOptions().catch(() => {});
+    void runHistorySearch();
+  }
   void nextTick(updateFilterScrollability);
 
   if (filterScrollRef.value) {

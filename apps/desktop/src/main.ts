@@ -27,7 +27,7 @@ function renderStartupError(error: unknown) {
   const card = document.createElement("div");
   card.style.cssText = ["max-width:760px", "width:100%", "border:1px solid #e5e7eb", "border-radius: var(--dbx-radius-fixed-6)", "padding:20px", "box-shadow:0 10px 30px rgba(0,0,0,0.08)", "background:#fff"].join(";");
   const title = document.createElement("h1");
-  title.textContent = "Database Workbench startup failed";
+  title.textContent = "MagpieDB startup failed";
   title.style.cssText = "margin:0 0 12px;font-size:18px;font-weight:700;";
   const text = document.createElement("p");
   text.textContent = "The desktop UI crashed during startup. Please copy the error below for troubleshooting.";
