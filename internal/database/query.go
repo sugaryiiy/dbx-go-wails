@@ -337,7 +337,11 @@ func runStatement(ctx context.Context, q queryRunner, statement, dialect string,
 	case "INSERT", "UPDATE", "DELETE", "REPLACE", "MERGE":
 		mutation = true
 	}
-	if !returnsRows(statement, dialect) {
+	hasRows := returnsRows(statement, dialect)
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	if !hasRows {
 		result, e := q.ExecContext(ctx, statement)
 		if e != nil {
 			return out, e

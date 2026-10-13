@@ -2,11 +2,17 @@ package database
 
 import (
 	"context"
+	"database/sql/driver"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
 )
 
 func testManager(t *testing.T) (*Manager, Config) {
@@ -166,26 +172,32 @@ func TestExportReadOnlyCannotWriteAndResetsConnection(t *testing.T) {
 	handle(t, m, "/api/query/execute", map[string]any{"connectionId": "test", "database": "main", "sql": "SELECT * FROM target", "readOnly": true})
 	run(t, m, "INSERT INTO target VALUES(1)")
 }
+
+var sqliteCancellationFixtureID atomic.Uint64
+
 func TestQueryCancellationAndTimeout(t *testing.T) {
+	started := make(chan struct{})
+	var signal sync.Once
+	name := fmt.Sprintf("dbx_cancel_started_%d", sqliteCancellationFixtureID.Add(1))
+	if err := sqlite.RegisterScalarFunction(name, 0, func(*sqlite.FunctionContext, []driver.Value) (driver.Value, error) {
+		signal.Do(func() { close(started) })
+		return int64(0), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 	m, _ := testManager(t)
-	heavy := "WITH RECURSIVE counter(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM counter WHERE x<1000000000) SELECT sum(x) FROM counter"
+	heavy := fmt.Sprintf("WITH RECURSIVE counter(x) AS (VALUES(%s()) UNION ALL SELECT x+1 FROM counter WHERE x<1000000000) SELECT sum(x) FROM counter", name)
 	done := make(chan error, 1)
 	go func() {
 		_, e := m.Handle(context.Background(), "/api/query/execute", map[string]any{"connectionId": "test", "database": "main", "sql": heavy, "executionId": "cancel-me"})
 		done <- e
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		m.mu.RLock()
-		_, running := m.running["cancel-me"]
-		m.mu.RUnlock()
-		if running {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("query never started")
-		}
-		time.Sleep(time.Millisecond)
+	// Registration precedes driver preparation. The function runs inside
+	// sqlite3_step, so cancellation now exercises an active engine query.
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SQLite never started executing the query")
 	}
 	if handle(t, m, "/api/query/cancel", map[string]any{"executionId": "cancel-me"}) != true {
 		t.Fatal("cancel did not find execution")
