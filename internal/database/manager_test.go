@@ -2,17 +2,11 @@ package database
 
 import (
 	"context"
-	"database/sql/driver"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
-
-	"modernc.org/sqlite"
 )
 
 func testManager(t *testing.T) (*Manager, Config) {
@@ -173,20 +167,9 @@ func TestExportReadOnlyCannotWriteAndResetsConnection(t *testing.T) {
 	run(t, m, "INSERT INTO target VALUES(1)")
 }
 
-var sqliteCancellationFixtureID atomic.Uint64
-
 func TestQueryCancellationAndTimeout(t *testing.T) {
-	started := make(chan struct{})
-	var signal sync.Once
-	name := fmt.Sprintf("dbx_cancel_started_%d", sqliteCancellationFixtureID.Add(1))
-	if err := sqlite.RegisterScalarFunction(name, 0, func(*sqlite.FunctionContext, []driver.Value) (driver.Value, error) {
-		signal.Do(func() { close(started) })
-		return int64(0), nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	heavy, started := sqliteCancellationQuery(t)
 	m, _ := testManager(t)
-	heavy := fmt.Sprintf("WITH RECURSIVE counter(x) AS (VALUES(%s()) UNION ALL SELECT x+1 FROM counter WHERE x<1000000000) SELECT sum(x) FROM counter", name)
 	done := make(chan error, 1)
 	go func() {
 		_, e := m.Handle(context.Background(), "/api/query/execute", map[string]any{"connectionId": "test", "database": "main", "sql": heavy, "executionId": "cancel-me"})
@@ -385,24 +368,17 @@ func TestMySQLDriverValuesPreserveDecimalUnsignedAndBinary(t *testing.T) {
 	}
 }
 func TestCloseCancelsRunningQueryWithoutManagerLockDeadlock(t *testing.T) {
+	heavy, started := sqliteCancellationQuery(t)
 	m, _ := testManager(t)
 	done := make(chan error, 1)
 	go func() {
-		_, e := m.Handle(context.Background(), "/api/query/execute", map[string]any{"connectionId": "test", "database": "main", "executionId": "closing", "sql": "WITH RECURSIVE r(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM r WHERE n<1000000000) SELECT sum(n) FROM r"})
+		_, e := m.Handle(context.Background(), "/api/query/execute", map[string]any{"connectionId": "test", "database": "main", "executionId": "closing", "sql": heavy})
 		done <- e
 	}()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		m.mu.RLock()
-		_, exists := m.running["closing"]
-		m.mu.RUnlock()
-		if exists {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("query did not start")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SQLite never started executing the query")
 	}
 	closed := make(chan error, 1)
 	go func() { closed <- m.Close() }()
@@ -421,5 +397,11 @@ func TestCloseCancelsRunningQueryWithoutManagerLockDeadlock(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("query failed to release its manager entry")
+	}
+	m.mu.RLock()
+	_, running := m.running["closing"]
+	m.mu.RUnlock()
+	if running {
+		t.Fatal("cancelled query retained its manager entry")
 	}
 }
