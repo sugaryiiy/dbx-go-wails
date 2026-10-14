@@ -95,6 +95,7 @@ import { findTreeNodeById, resolveNewQueryTarget, resolveNewQueryInitialSql } fr
 import { isSqlObjectNavigationRoutineType, normalizeOracleNavigationTarget, sqlObjectNavigationSourceKind, sqlObjectNavigationSourceName, sqlObjectNavigationSourceSchema, sqlObjectNavigationTableType, type SqlObjectNavigationTarget } from "@/lib/sql/sqlNavigation";
 import { buildEditableObjectSource, buildExecutableObjectSourceStatements, executeObjectSourceSave } from "@/lib/table/objectSourceEditor";
 import { loadEditableObjectSourceForEditor } from "@/lib/table/objectSourceLoad";
+import { resolveContentSearchReveal } from "@/lib/globalSearch/contentSearchReveal";
 import { schemaAfterConnectionSwitch } from "@/lib/schema/connectionSchemaInitialization";
 import { resolveHistorySqlRestoreTarget } from "@/lib/history/historyRestoreTarget";
 import { resolveExecutableSql, resolveExecutableSqlWithBackend, type SqlExecutionOverride, type SqlExecutionSnapshot } from "@/lib/sql/sqlExecutionTarget";
@@ -3423,6 +3424,13 @@ async function handleQuickOpenSelect(item: any) {
   const connectionStore = useConnectionStore();
   const queryStore = useQueryStore();
 
+  if (item.type === "content_match" && item.contentSource === "query_tab" && item.queryTabId) {
+    if (queryStore.requestEditorReveal(item.queryTabId, { line: item.line ?? 1, column: item.column })) {
+      activateQueryTab(item.queryTabId);
+    }
+    return;
+  }
+
   // Handle SQL file types first — they don't require a database connection
   if (item.type === "content_match" && item.filePath) {
     try {
@@ -3452,12 +3460,17 @@ async function handleQuickOpenSelect(item: any) {
     return;
   }
 
-  if (item.type === "sql_library_file" && item.sqlFileId) {
-    const file = await savedSqlStore.ensureFileContent(item.sqlFileId);
-    if (!file) return;
-    const tabId = queryStore.openSavedSql(file);
-    connectionStore.activeConnectionId = queryStore.tabs.find((tab) => tab.id === tabId)?.connectionId ?? file.connectionId;
-    void savedSqlStore.recordFileUsage(file.id);
+  if ((item.type === "sql_library_file" || (item.type === "content_match" && item.contentSource === "saved_query")) && item.sqlFileId) {
+    try {
+      const file = await savedSqlStore.ensureFileContent(item.sqlFileId);
+      if (!file) return;
+      const tabId = queryStore.openSavedSql(file, item.type === "content_match" ? { reveal: { line: item.line ?? 1, column: item.column } } : {});
+      connectionStore.activeConnectionId = queryStore.tabs.find((tab) => tab.id === tabId)?.connectionId ?? file.connectionId;
+      activateQueryTab(tabId);
+      void savedSqlStore.recordFileUsage(file.id);
+    } catch (error) {
+      toast((error as any)?.message || String(error), 5000);
+    }
     return;
   }
 
@@ -3475,6 +3488,7 @@ async function handleQuickOpenSelect(item: any) {
     await connectionStore.ensureConnected(item.connectionId);
   } catch (error) {
     console.error("Failed to connect:", error);
+    if (item.type === "content_match") toast((error as any)?.message || String(error), 5000);
     return;
   }
 
@@ -3564,7 +3578,18 @@ async function handleQuickOpenSelect(item: any) {
       tableName: item.objectName || item.tableName,
       tableType: item.type === "view" ? "VIEW" : item.type === "materialized_view" ? "MATERIALIZED_VIEW" : "TABLE",
     });
-  } else if (item.type === "procedure" || item.type === "function" || item.type === "trigger" || item.type === "event" || item.type === "sequence" || item.type === "package" || item.type === "package-body" || item.type === "type" || item.type === "type-body") {
+  } else if (
+    (item.type === "content_match" && item.contentSource === "object") ||
+    item.type === "procedure" ||
+    item.type === "function" ||
+    item.type === "trigger" ||
+    item.type === "event" ||
+    item.type === "sequence" ||
+    item.type === "package" ||
+    item.type === "package-body" ||
+    item.type === "type" ||
+    item.type === "type-body"
+  ) {
     // Open the object source in a source tab
     const objectTypeMap: Record<string, ObjectSourceKind> = {
       procedure: "PROCEDURE",
@@ -3578,7 +3603,7 @@ async function handleQuickOpenSelect(item: any) {
       "type-body": "TYPE_BODY",
     };
 
-    const objectType = objectTypeMap[item.type];
+    const objectType = item.type === "content_match" ? item.objectType : objectTypeMap[item.type];
     if (!objectType) return;
 
     const schema = item.schema || item.database;
@@ -3595,6 +3620,26 @@ async function handleQuickOpenSelect(item: any) {
         databaseType,
         signature: item.signature,
       });
+      if (item.type === "content_match") {
+        const tabId = queryStore.openObjectSourceTab({
+          connectionId: item.connectionId,
+          database: item.database,
+          schema,
+          catalog: item.catalog,
+          title: `Source - ${objectName}`,
+          sql: editableSource,
+          objectSource: { schema, name: objectName, objectType: resolvedType, signature: item.signature },
+        });
+        const tab = queryStore.tabs.find((candidate) => candidate.id === tabId);
+        const reveal = resolveContentSearchReveal(tab?.sql ?? editableSource, item);
+        if (reveal) queryStore.requestEditorReveal(tabId, reveal);
+        else {
+          if (tab) tab.editorRevealRequest = undefined;
+          toast(t("quickOpen.contentChanged"), 5000);
+        }
+        activateQueryTab(tabId);
+        return;
+      }
       const tabId = queryStore.createTab(item.connectionId, item.database, `Source - ${objectName}`, "query", undefined, undefined, undefined, { sourceView: true });
       queryStore.updateSql(tabId, editableSource);
       if (item.type !== "sequence" && item.type !== "trigger" && item.type !== "event" && item.type !== "type" && item.type !== "type-body") {

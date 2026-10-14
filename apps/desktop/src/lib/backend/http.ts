@@ -2,6 +2,7 @@ import type { MongoDumpFormat, MongoDumpSourceInput, MongoDumpCatalog, MongoRest
 import type { MongoRestoreUpload, MongoSourceReadOptions } from "./mongodbDumpTypes";
 import type { UserSkillRootSettings, UserSkillsListResult, UserSkillsReadResult } from "@/types/userSkills";
 import type { SampleWorkspace } from "@/types/workspace";
+import type { ConnectionContentSearchRequest, ObjectContentSearchRequest, ObjectContentSearchMatch, SavedQueryContentSearchMatch, ContentSearchResult } from "@/lib/globalSearch/contentSearchTypes";
 import type { DatabaseBackupCommand, DatabaseBackupBackgroundStatus } from "@/lib/backup/backgroundDatabaseBackup";
 import type { PluginUiStorageItemRef, SyncCatalogItem, SyncSelection, SyncSnapshotCatalog } from "@/lib/backend/tauri";
 
@@ -348,11 +349,12 @@ const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   sidebar_table_page_size: 1000,
 };
 
-async function post<T>(url: string, body: unknown): Promise<T> {
+async function post<T>(url: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(apiUrl(url), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
   if (!res.ok) throw await backendResponseError(res);
   if (res.status === 204) return undefined as T;
@@ -2957,6 +2959,14 @@ export interface GlobalSearchMatch {
 
 export async function globalSearch(_request: GlobalSearchRequest): Promise<GlobalSearchMatch[]> {
   throw new Error("Global content search is only available in the desktop app");
+}
+
+export function searchObjectSources(request: ObjectContentSearchRequest, signal?: AbortSignal): Promise<ContentSearchResult<ObjectContentSearchMatch>> {
+  return post("/api/schema/search-object-sources", request, signal);
+}
+
+export function searchSavedQueries(request: ConnectionContentSearchRequest, signal?: AbortSignal): Promise<ContentSearchResult<SavedQueryContentSearchMatch>> {
+  return post("/api/saved-sql/search", request, signal);
 }
 
 export interface GlobalSearchSettings {

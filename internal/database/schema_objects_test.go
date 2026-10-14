@@ -124,6 +124,15 @@ func TestMySQLObjectCatalog(t *testing.T) {
 	if objects := catalogCall(t, m, database, database, "objects", map[string]any{"filter": "' OR 1=1 --"}).([]record); len(objects) != 0 {
 		t.Fatal("filter was interpreted as SQL")
 	}
+	search := catalogCall(t, m, "", "", "search-object-sources", map[string]any{"query": "SELECT", "databases": []string{database}}).(ObjectSourceSearchResult)
+	if len(search.Matches) != 2 || search.Truncated || len(search.Warnings) != 0 {
+		t.Fatalf("procedure/event definition search: %#v", search)
+	}
+	for _, match := range search.Matches {
+		if match.Database != database || match.ObjectType != "PROCEDURE" && match.ObjectType != "EVENT" {
+			t.Fatalf("search returned an unexpected object: %#v", match)
+		}
+	}
 }
 
 func TestPostgresObjectCatalog(t *testing.T) {
@@ -200,6 +209,15 @@ func TestPostgresObjectCatalog(t *testing.T) {
 			}
 			if _, err := m.Handle(ctx, "/api/schema/object-source", map[string]any{"connection_id": "fixture", "database": "postgres", "schema": schema, "table": "row_changed", "object_type": "TRIGGER"}); err == nil {
 				t.Fatal("an ambiguous trigger name returned an arbitrary table's trigger")
+			}
+			search := catalogCall(t, m, "postgres", "", "search-object-sources", map[string]any{"query": "SELECT", "schemas": []string{schema}}).(ObjectSourceSearchResult)
+			if len(search.Matches) != 3 || search.Truncated || len(search.Warnings) != 0 {
+				t.Fatalf("overloaded function definition search: %#v", search)
+			}
+			for _, match := range search.Matches {
+				if match.Schema != schema || match.ObjectType != "FUNCTION" || match.Signature == "" {
+					t.Fatalf("search lost routine identity: %#v", match)
+				}
 			}
 		})
 	}

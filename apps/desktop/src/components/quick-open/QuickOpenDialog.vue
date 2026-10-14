@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, nextTick } from "vue";
+import { computed, ref, watch, nextTick, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { Command, FileCode, FileText, Search, FolderPlus, SlidersHorizontal, X } from "@lucide/vue";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -28,8 +28,27 @@ const { t } = useI18n();
 // list refresh is driven by dbx:plugins-changed / focus / locale change, with a fallback refresh when the dialog opens.
 const pluginPalette = usePluginCommandPalette();
 const { toast } = useToast();
-const { searchQuery, filteredItems, selectedIndex, selectedItem, selectNext, selectPrevious, setQuery, loadExternalSqlFiles, loadPluginWorkbenches, contentMode, contentGroups, contentSelectedItem, contentSearching, setContentMode } = useQuickOpen({ extraItems: pluginPalette.items });
-const inputRef = ref<HTMLInputElement | null>(null);
+const {
+  searchQuery,
+  filteredItems,
+  selectedIndex,
+  selectedItem,
+  selectNext,
+  selectPrevious,
+  setQuery,
+  loadExternalSqlFiles,
+  loadPluginWorkbenches,
+  contentMode,
+  contentGroups,
+  contentSelectedItem,
+  contentSearching,
+  contentScopeLabel,
+  contentSearchError,
+  contentTruncated,
+  setContentMode,
+  setSearchActive,
+} = useQuickOpen({ extraItems: pluginPalette.items });
+const inputRef = ref<{ $el: HTMLInputElement } | null>(null);
 const listRef = ref<HTMLElement | null>(null);
 const settingsStore = useSettingsStore();
 const globalSearchShortcut = computed(() => formatShortcutDisplay(settingsStore.editorSettings.shortcuts.globalSearch || "Mod+Shift+F"));
@@ -76,7 +95,10 @@ function saveExtensions(): void {
 
 interface ContentRow {
   isHeader: boolean;
+  key: string;
   header?: string;
+  description?: string;
+  type?: string;
   filePath?: string;
   count?: number; // match count under a header
   item?: QuickOpenItem;
@@ -87,9 +109,9 @@ const contentRows = computed<ContentRow[]>(() => {
   const rows: ContentRow[] = [];
   let flatIndex = 0;
   for (const group of contentGroups.value) {
-    rows.push({ isHeader: true, header: group.header, filePath: group.filePath, count: group.matches.length, item: undefined, flatIndex: -1 });
+    rows.push({ isHeader: true, key: group.key, header: group.header, description: group.description, type: group.type, filePath: group.filePath, count: group.matches.length, item: undefined, flatIndex: -1 });
     for (const match of group.matches) {
-      rows.push({ isHeader: false, header: undefined, filePath: group.filePath, count: undefined, item: match, flatIndex: flatIndex++ });
+      rows.push({ isHeader: false, key: match.id, filePath: group.filePath, item: match, flatIndex: flatIndex++ });
     }
   }
   return rows;
@@ -203,6 +225,8 @@ function getTypeLabel(type: string): string {
       return t("common.procedure");
     case "function":
       return t("common.function");
+    case "event":
+      return t("common.event");
     case "sequence":
       return t("common.sequence");
     case "package":
@@ -213,6 +237,10 @@ function getTypeLabel(type: string): string {
       return t("quickOpen.sqlFile");
     case "sql_library_file":
       return t("quickOpen.sqlLibraryFile");
+    case "saved_query":
+      return t("quickOpen.savedQuery");
+    case "query_tab":
+      return t("quickOpen.openQuery");
     case "plugin_workbench":
       return t("quickOpen.pluginWorkbench");
     default:
@@ -235,6 +263,7 @@ function getTypeBadge(item: QuickOpenItem): string {
 watch(
   () => props.open,
   (newOpen) => {
+    setSearchActive(newOpen);
     if (newOpen) {
       setQuery("");
       setContentMode(props.initialContentMode === true);
@@ -247,11 +276,14 @@ watch(
       // Refresh plugin workbench entries so installs/uninstalls show up without a restart
       void loadPluginWorkbenches();
       nextTick(() => {
-        inputRef.value?.focus();
+        inputRef.value?.$el?.focus();
       });
     }
   },
+  { immediate: true },
 );
+
+onUnmounted(() => setSearchActive(false));
 
 // While the dialog is open, Ctrl+P / Ctrl+Shift+F switch the mode without
 // closing it. The parent drives this by mutating the `initialContentMode` prop.
@@ -287,7 +319,7 @@ watch(selectedIndex, async () => {
             @keydown="handleKeyDown"
           />
           <div class="flex items-center gap-1 shrink-0">
-            <!-- Object/file ⇄ file content mode toggle -->
+            <!-- Object/file and full-text content search mode toggle -->
             <div class="flex items-center rounded-md bg-muted p-0.5 text-muted-foreground">
               <button class="flex h-7 w-7 items-center justify-center rounded" :class="contentMode ? 'hover:bg-muted-foreground/10' : 'bg-background text-foreground shadow-sm'" :title="t('quickOpen.modeObjects')" @click="setContentMode(false)">
                 <FileCode class="h-4 w-4" />
@@ -301,6 +333,10 @@ watch(selectedIndex, async () => {
               <SlidersHorizontal class="h-4 w-4" />
             </button>
           </div>
+        </div>
+
+        <div v-if="contentMode" class="border-b px-4 py-2 text-xs text-muted-foreground" data-content-search-scope>
+          {{ t("quickOpen.contentScope", { connection: contentScopeLabel }) }}
         </div>
 
         <!-- Search settings panel -->
@@ -333,22 +369,35 @@ watch(selectedIndex, async () => {
 
         <!-- Results List -->
         <div ref="listRef" class="max-h-[400px] overflow-y-auto">
-          <!-- Content search mode: group matches by file (DataGrip-style) -->
+          <!-- Content search mode: group matches by database object, query, or file. -->
           <template v-if="contentMode">
-            <div v-if="contentSearching" class="px-4 py-8 text-center text-muted-foreground">
+            <div v-if="contentSearchError.length" role="status" class="space-y-1 border-b px-4 py-2 text-xs text-destructive" data-content-search-error>
+              <p>{{ t("quickOpen.contentSearchFailed") }}</p>
+              <p v-for="(error, index) in contentSearchError" :key="index">{{ error }}</p>
+            </div>
+            <div v-if="contentTruncated" role="status" class="border-b px-4 py-2 text-xs text-muted-foreground" data-content-search-truncated>
+              {{ t("quickOpen.contentTruncated") }}
+            </div>
+            <div v-if="contentSearching" role="status" class="px-4 py-2 text-xs text-muted-foreground">
               {{ t("quickOpen.searchingContent") }}
             </div>
-            <div v-else-if="contentRows.length === 0" class="px-4 py-8 text-center text-muted-foreground">
+            <div v-if="!contentSearching && contentRows.length === 0 && !contentSearchError.length" class="px-4 py-8 text-center text-muted-foreground">
               <p v-if="!searchQuery.trim()">{{ t("quickOpen.emptyPlaceholder") }}</p>
               <p v-else>{{ t("quickOpen.noResults") }}</p>
             </div>
-            <div v-else class="divide-y">
-              <template v-for="row in contentRows" :key="row.isHeader ? `h-${row.filePath}` : row.item!.id">
+            <div v-if="contentRows.length" class="divide-y">
+              <template v-for="row in contentRows" :key="row.isHeader ? `h-${row.key}` : row.key">
                 <!-- Group header -->
                 <div v-if="row.isHeader" class="flex items-center justify-between gap-3 px-4 py-1.5 bg-muted/50">
                   <div class="flex items-center gap-2 min-w-0">
                     <FileCode class="h-4 w-4 shrink-0 text-muted-foreground" />
-                    <span class="text-xs font-semibold text-foreground truncate">{{ row.header }}</span>
+                    <div class="min-w-0">
+                      <div class="flex min-w-0 items-center gap-2">
+                        <span class="text-xs font-semibold text-foreground truncate">{{ row.header }}</span>
+                        <span v-if="row.type" class="shrink-0 rounded bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">{{ getTypeLabel(row.type) }}</span>
+                      </div>
+                      <div v-if="row.description || row.filePath" class="truncate text-[10px] text-muted-foreground" :title="row.description || row.filePath">{{ row.description || row.filePath }}</div>
+                    </div>
                   </div>
                   <span class="text-xs text-muted-foreground whitespace-nowrap">{{ row.count }}</span>
                 </div>

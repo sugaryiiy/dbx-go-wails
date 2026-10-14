@@ -5520,6 +5520,14 @@ export const useQueryStore = defineStore("query", () => {
     return registerOpenTab(tab);
   }
 
+  /** Request a fresh content-search jump without changing the tab's SQL or execution target. */
+  function requestEditorReveal(tabId: string, reveal: { line: number; column?: number }): boolean {
+    const tab = tabs.value.find((candidate) => candidate.id === tabId && candidate.mode === "query");
+    if (!tab) return false;
+    tab.editorRevealRequest = { id: ++contentRevealSeq, line: reveal.line, column: reveal.column };
+    return true;
+  }
+
   async function hydrateSavedSqlTabs() {
     await initSavedSqlEditorPositions();
     const savedSqlStore = useSavedSqlStore();
@@ -9702,6 +9710,7 @@ export const useQueryStore = defineStore("query", () => {
     linkExternalSqlPath,
     openExternalSqlFile,
     openSavedSql,
+    requestEditorReveal,
     hydrateSavedSqlTabs,
     syncSavedSqlExecutionTargets,
     togglePinnedTab,

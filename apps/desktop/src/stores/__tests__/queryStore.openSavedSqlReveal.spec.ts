@@ -66,4 +66,27 @@ describe("queryStore openSavedSql with reveal", () => {
       }),
     );
   });
+
+  it("reveals an open query without replacing unsaved SQL or its execution target", () => {
+    const store = useQueryStore();
+    const tabId = store.openSavedSql(savedFile);
+    const tab = store.tabs.find((candidate) => candidate.id === tabId)!;
+    store.updateSql(tabId, "SELECT 1;\nSELECT 'unsaved change';");
+
+    expect(store.requestEditorReveal(tabId, { line: 2, column: 8 })).toBe(true);
+    const firstRequest = tab.editorRevealRequest!;
+    expect(store.requestEditorReveal(tabId, { line: 2, column: 8 })).toBe(true);
+
+    expect(tab.editorRevealRequest).toMatchObject({ line: 2, column: 8 });
+    expect(tab.editorRevealRequest!.id).toBeGreaterThan(firstRequest.id);
+    expect(tab.sql).toBe("SELECT 1;\nSELECT 'unsaved change';");
+    expect(tab.connectionId).toBe(savedFile.connectionId);
+    expect(tab.database).toBe(savedFile.database);
+  });
+
+  it("ignores a result whose query tab was closed", () => {
+    const store = useQueryStore();
+    expect(store.requestEditorReveal("closed-tab", { line: 7 })).toBe(false);
+    expect(store.tabs).toHaveLength(0);
+  });
 });
