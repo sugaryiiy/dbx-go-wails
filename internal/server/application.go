@@ -87,6 +87,8 @@ func (s *Server) handleApplication(w http.ResponseWriter, r *http.Request, p map
 			}
 			return nil
 		})
+	case route == "/api/saved-sql/search" && method == "POST":
+		result, err = s.searchSavedSQL(r.Context(), p)
 	case route == "/api/saved-sql" && method == "GET":
 		state := s.snapshot()
 		for _, file := range state.SQLFiles {

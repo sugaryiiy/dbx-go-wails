@@ -1,5 +1,5 @@
 import { computed, ref, watch, type Ref } from "vue";
-import type { ConnectionConfig } from "@/types/database";
+import type { ConnectionConfig, ObjectSourceKind } from "@/types/database";
 import type { SqlCompletionTable } from "@/lib/sql/sqlCompletion";
 import { resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
 import { useConnectionStore } from "@/stores/connectionStore";
@@ -7,7 +7,7 @@ import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import * as api from "@/lib/backend/api";
 import type { SqlFileEntry } from "@/lib/backend/api";
 import { getSqlFileFilter, getSqlFileFolderPaths, sqlFileFoldersVersion } from "@/lib/sqlFile/sqlFileFolders";
-import { composeGlobalSearchRoots, getGlobalSearchExtensions, globalSearchSettingsVersion } from "@/lib/globalSearch/globalSearchSettings";
+import { useGlobalContentSearch } from "@/composables/useGlobalContentSearch";
 import { containsHan, pinyinFirstLetters } from "@/lib/common/pinyin";
 import { createFrontendPluginRegistry } from "@/lib/plugins/frontendPlugin";
 import i18n, { currentLocale } from "@/i18n";
@@ -22,19 +22,23 @@ const QUICK_OPEN_MAX_RESULTS = 200;
 const INITIAL_SQL_LIBRARY_LIMIT = 20;
 const INITIAL_SQL_FILE_LIMIT = 20;
 
-const CONTENT_SEARCH_DEBOUNCE_MS = 200;
-const CONTENT_SEARCH_MAX_RESULTS = 500;
-
 const REMOTE_SEARCH_UNSUPPORTED_TYPES = new Set<ConnectionConfig["db_type"]>(["redis", "mongodb", "elasticsearch", "easysearch", "meilisearch", "solr", "qdrant", "milvus", "weaviate", "chromadb", "neo4j", "influxdb", "victoriametrics", "etcd", "zookeeper", "mq", "nacos", "consul", "salesforce"]);
 
 export interface QuickOpenItem {
   id: string;
-  type: "connection" | "plugin_workbench" | "database" | "schema" | "table" | "view" | "materialized_view" | "procedure" | "function" | "sequence" | "package" | "package-body" | "sql_file" | "sql_library_file" | "content_match" | "plugin_command";
+  type: "connection" | "plugin_workbench" | "database" | "schema" | "table" | "view" | "materialized_view" | "procedure" | "function" | "event" | "sequence" | "package" | "package-body" | "sql_file" | "sql_library_file" | "content_match" | "plugin_command";
   label: string;
   description?: string;
   connectionId: string;
   database?: string;
   schema?: string;
+  catalog?: string;
+  objectType?: ObjectSourceKind;
+  signature?: string;
+  contentSource?: "file" | "object" | "saved_query" | "query_tab";
+  contentGroupKey?: string;
+  contentGroupType?: string;
+  queryTabId?: string;
   objectName?: string; // For non-table objects (views, procedures, functions, sequences, packages)
   tableName?: string; // Kept for backward compatibility
   connectionName?: string;
@@ -300,105 +304,8 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
   const pluginWorkbenchItems = ref<QuickOpenItem[]>([]);
   let pluginWorkbenchesLoading = false;
 
-  // --- Content search mode (global search of local SQL/text file contents) ---
-  const contentMode = ref(false);
-  const contentSearching = ref(false);
-  const contentItems = ref<MatchedItem[]>([]);
-  let contentSearchGeneration = 0;
-  let contentSearchTimer: ReturnType<typeof setTimeout> | undefined;
-
-  interface ContentGroup {
-    header: string;
-    filePath: string;
-    matches: MatchedItem[];
-  }
-
-  const contentGroups = computed<ContentGroup[]>(() => {
-    const groups: ContentGroup[] = [];
-    const indexByPath = new Map<string, ContentGroup>();
-    for (const item of contentItems.value) {
-      const path = item.filePath;
-      if (!path) continue;
-      let group = indexByPath.get(path);
-      if (!group) {
-        group = { header: item.fileName || item.label, filePath: path, matches: [] };
-        indexByPath.set(path, group);
-        groups.push(group);
-      }
-      group.matches.push(item);
-    }
-    for (const group of groups) {
-      group.matches.sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
-    }
-    return groups;
-  });
-
-  const selectableContentItems = computed<MatchedItem[]>(() => contentGroups.value.flatMap((group) => group.matches));
-
-  function clearContentResults(): void {
-    contentItems.value = [];
-    contentSearching.value = false;
-  }
-
-  async function runContentSearch(query: string, generation: number): Promise<void> {
-    const roots = composeGlobalSearchRoots();
-    if (roots.length === 0) {
-      if (generation === contentSearchGeneration) clearContentResults();
-      return;
-    }
-    contentSearching.value = true;
-    try {
-      const matches = await api.globalSearch({
-        roots,
-        query,
-        extensions: getGlobalSearchExtensions(),
-        limit: CONTENT_SEARCH_MAX_RESULTS,
-      });
-      if (generation !== contentSearchGeneration) return;
-      contentItems.value = matches.map((match) => {
-        const isFileName = match.line === 0;
-        const highlightIndices: [number, number] = [Math.max(0, match.column - 1), Math.max(match.column - 1, match.column - 1 + match.matchText.length)];
-        return {
-          id: `content-${match.path}-${match.line}-${match.column}`,
-          type: "content_match" as const,
-          label: match.fileName,
-          description: match.fileName,
-          connectionId: "",
-          filePath: match.path,
-          fileName: match.fileName,
-          line: match.line,
-          column: match.column,
-          matchText: match.matchText,
-          lineText: isFileName ? match.fileName : match.lineText,
-          highlightIndices,
-          searchText: match.lineText,
-          matchScore: 0,
-          matchIndices: [],
-        };
-      });
-    } catch {
-      if (generation === contentSearchGeneration) contentItems.value = [];
-    } finally {
-      if (generation === contentSearchGeneration) contentSearching.value = false;
-    }
-  }
-
-  function setContentMode(enabled: boolean): void {
-    if (contentMode.value === enabled) return;
-    contentMode.value = enabled;
-    selectedIndex.value = 0;
-    if (enabled) {
-      const query = searchQuery.value.trim();
-      if (query) {
-        const generation = ++contentSearchGeneration;
-        void runContentSearch(query, generation);
-      } else {
-        clearContentResults();
-      }
-    } else {
-      clearContentResults();
-    }
-  }
+  const contentSearch = useGlobalContentSearch({ searchQuery, selectedIndex, connectionStore, savedSqlVersion: () => savedSqlStore.version });
+  const { contentMode, contentSearching, contentGroups, contentSelectedItem, selectableContentItems, contentScopeLabel, contentSearchError, contentTruncated, setContentMode, setSearchActive } = contentSearch;
 
   function getConnectionLabel(connectionId: string): string {
     if (!connectionId) return i18n.global.t("sqlLibrary.unassociated");
@@ -692,6 +599,22 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
         });
       }
 
+      if (node.type === "event" && node.database && node.label) {
+        items.push({
+          id: `event-${conn.id}-${node.database}-${node.schema || ""}-${node.label}`,
+          type: "event",
+          label: node.label,
+          description: `${conn.name} / ${node.database}${node.schema ? " / " + node.schema : ""}`,
+          connectionId: conn.id,
+          database: node.database,
+          schema: node.schema,
+          objectName: node.label,
+          objectType: "EVENT",
+          connectionName: conn.name,
+          searchText: `${conn.name} ${node.database} ${node.schema || ""} ${node.label}`,
+        });
+      }
+
       // Sequence nodes
       if (node.type === "sequence" && node.database && node.label) {
         items.push({
@@ -899,13 +822,15 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
   });
 
   watch(
-    searchQuery,
-    (query) => {
+    [searchQuery, contentMode],
+    ([query, inContentMode]) => {
       selectedIndex.value = 0;
       const generation = ++remoteSearchGeneration;
       cancelStaleRemoteRequestWaiters(generation);
       if (remoteSearchTimer) clearTimeout(remoteSearchTimer);
       remoteItems.value = [];
+
+      if (inContentMode) return;
 
       const normalizedQuery = query.trim();
 
@@ -975,13 +900,14 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
         materialized_view: 6,
         procedure: 7,
         function: 8,
-        sequence: 9,
-        package: 10,
-        "package-body": 11,
-        sql_library_file: 12,
-        sql_file: 13,
-        content_match: 14,
-        plugin_command: 15,
+        event: 9,
+        sequence: 10,
+        package: 11,
+        "package-body": 12,
+        sql_library_file: 13,
+        sql_file: 14,
+        content_match: 15,
+        plugin_command: 16,
       };
       const typeDifference = typeOrder[a.type] - typeOrder[b.type];
       if (typeDifference !== 0) return typeDifference;
@@ -998,12 +924,6 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
       return null;
     }
     return filteredItems.value[selectedIndex.value];
-  });
-
-  const contentSelectedItem = computed((): MatchedItem | null => {
-    if (!contentMode.value) return null;
-    if (selectedIndex.value < 0 || selectedIndex.value >= selectableContentItems.value.length) return null;
-    return selectableContentItems.value[selectedIndex.value];
   });
 
   function selectNext(): void {
@@ -1028,46 +948,6 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
     resetSelection();
   }
 
-  // Content search: debounced full-text search fired from the shared query.
-  watch(
-    searchQuery,
-    (query) => {
-      selectedIndex.value = 0;
-      const generation = ++contentSearchGeneration;
-      if (contentSearchTimer) clearTimeout(contentSearchTimer);
-      contentSearchTimer = undefined;
-      if (!contentMode.value) {
-        clearContentResults();
-        return;
-      }
-      const normalizedQuery = query.trim();
-      if (!normalizedQuery) {
-        clearContentResults();
-        return;
-      }
-      contentSearchTimer = setTimeout(() => {
-        contentSearchTimer = undefined;
-        void runContentSearch(normalizedQuery, generation);
-      }, CONTENT_SEARCH_DEBOUNCE_MS);
-    },
-    { flush: "sync" },
-  );
-
-  // Re-run the current content search when search roots or extensions change.
-  watch(globalSearchSettingsVersion, () => {
-    if (contentMode.value && searchQuery.value.trim()) {
-      const generation = ++contentSearchGeneration;
-      void runContentSearch(searchQuery.value.trim(), generation);
-    }
-  });
-
-  watch(sqlFileFoldersVersion, () => {
-    if (contentMode.value && searchQuery.value.trim()) {
-      const generation = ++contentSearchGeneration;
-      void runContentSearch(searchQuery.value.trim(), generation);
-    }
-  });
-
   return {
     searchQuery,
     filteredItems,
@@ -1077,7 +957,11 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
     contentSearching,
     contentGroups,
     contentSelectedItem,
+    contentScopeLabel,
+    contentSearchError,
+    contentTruncated,
     setContentMode,
+    setSearchActive,
     selectNext,
     selectPrevious,
     resetSelection,

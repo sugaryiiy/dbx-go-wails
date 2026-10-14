@@ -3,6 +3,7 @@ import { Channel } from "@tauri-apps/api/core";
 import type { MongoDumpFormat, MongoDumpSourceInput, MongoDumpCatalog, MongoRestoreSourcePreview, MongoDatabaseDumpRequest, MongoDatabaseRestoreRequest, MongoDatabaseDumpProgress } from "./mongodbDumpTypes";
 import type { MongoRestoreUpload, MongoSourceReadOptions } from "./mongodbDumpTypes";
 import type { UserSkillRootSettings, UserSkillsListResult, UserSkillsReadResult } from "@/types/userSkills";
+import type { ConnectionContentSearchRequest, ObjectContentSearchRequest, ObjectContentSearchMatch, SavedQueryContentSearchMatch, ContentSearchResult } from "@/lib/globalSearch/contentSearchTypes";
 import type { DatabaseBackupCommand, DatabaseBackupBackgroundStatus } from "@/lib/backup/backgroundDatabaseBackup";
 
 export function databaseBackupCommand<T = unknown>(command: DatabaseBackupCommand): Promise<T> {
@@ -1327,6 +1328,14 @@ export interface GlobalSearchMatch {
 
 export async function globalSearch(request: GlobalSearchRequest): Promise<GlobalSearchMatch[]> {
   return invoke("global_search", { request });
+}
+
+export async function searchObjectSources(_request: ObjectContentSearchRequest, _signal?: AbortSignal): Promise<ContentSearchResult<ObjectContentSearchMatch>> {
+  throw new Error("Database content search requires the Go backend");
+}
+
+export async function searchSavedQueries(_request: ConnectionContentSearchRequest, _signal?: AbortSignal): Promise<ContentSearchResult<SavedQueryContentSearchMatch>> {
+  throw new Error("Saved query content search requires the Go backend");
 }
 
 // --- AI Conversations ---

@@ -526,6 +526,9 @@ func (m *Manager) pool(ctx context.Context, id, database string) (*sql.DB, Confi
 	return db, cfg, locked, nil
 }
 func (m *Manager) Handle(ctx context.Context, path string, p map[string]any) (any, error) {
+	if path == "/api/schema/search-object-sources" {
+		return m.searchObjectSources(ctx, p)
+	}
 	if result, handled, err := m.handleManualTransaction(ctx, path, p); handled {
 		return result, err
 	}

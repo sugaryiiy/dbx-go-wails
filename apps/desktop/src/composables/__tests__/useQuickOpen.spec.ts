@@ -1,4 +1,4 @@
-import { nextTick } from "vue";
+import { effectScope, nextTick } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matchQuickOpenText, useQuickOpen } from "@/composables/useQuickOpen";
 import * as api from "@/lib/backend/api";
@@ -56,6 +56,23 @@ describe("useQuickOpen", () => {
   beforeEach(() => {
     vi.mocked(useSavedSqlStore).mockReturnValue(emptySavedSqlStore() as any);
     vi.mocked(getSqlFileFolderPaths).mockReturnValue([]);
+  });
+
+  it("does not search other connections for object names while content mode is active", async () => {
+    vi.useFakeTimers();
+    const listCompletionTables = vi.fn().mockResolvedValue([]);
+    vi.mocked(useConnectionStore).mockReturnValue({ connections: [{ id: "other", name: "Other", db_type: "mysql", database: "biz" }], treeNodes: [], activeConnectionId: null, listCompletionTables } as any);
+    const scope = effectScope();
+    const { setContentMode, setQuery } = scope.run(() => useQuickOpen())!;
+    setContentMode(true);
+    setQuery("orders");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(listCompletionTables).not.toHaveBeenCalled();
+    setContentMode(false);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(listCompletionTables).toHaveBeenCalledTimes(1);
+    scope.stop();
+    vi.useRealTimers();
   });
 
   describe("external SQL files", () => {
