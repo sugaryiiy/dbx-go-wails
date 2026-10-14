@@ -55,6 +55,9 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 	words := []string{}
 	triggerBody, triggerCases := 0, 0
 	sqliteTrigger := false
+	createKind := ""
+	mysqlRoutine := false
+	routineBlocks := mysqlRoutineBlocks{}
 	appendStatement := func(end int) error {
 		if !hasCode {
 			return nil
@@ -62,24 +65,22 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 		if len(words) > 0 && words[0] == "DELIMITER" {
 			return unsupported("MySQL DELIMITER scripts")
 		}
-		if len(words) > 1 && words[0] == "CREATE" {
-			for _, word := range words[1:] {
-				switch word {
-				case "TRIGGER", "PROCEDURE", "FUNCTION", "EVENT":
-					if dialect == "postgres" || dialect == "sqlite" && word == "TRIGGER" {
-						goto normalCreate
-					}
-					return unsupported("CREATE " + word + " scripts")
-				case "TABLE", "VIEW", "INDEX", "DATABASE", "SCHEMA", "SEQUENCE", "TYPE", "EXTENSION", "ROLE", "USER":
-					goto normalCreate
-				}
+		if mysqlRoutine && !routineBlocks.inBody {
+			return errors.New("MySQL routine definition requires a recognizable body")
+		}
+		switch createKind {
+		case "TRIGGER", "PROCEDURE", "FUNCTION", "EVENT":
+			if dialect != "postgres" && dialect != "mysql" && !(dialect == "sqlite" && createKind == "TRIGGER") {
+				return unsupported("CREATE " + createKind + " scripts")
 			}
 		}
-	normalCreate:
 
 		result = append(result, sqlStatement{text: strings.TrimSpace(source[start:end]), words: words})
 		words = []string{}
 		sqliteTrigger = false
+		createKind = ""
+		mysqlRoutine = false
+		routineBlocks = mysqlRoutineBlocks{}
 		hasCode = false
 		return nil
 	}
@@ -154,6 +155,11 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 			i++
 			continue
 		}
+		if mysqlRoutine && !sqlSpace(ch) && !sqlLetterByte(ch) {
+			if err := routineBlocks.symbol(ch, depth); err != nil {
+				return nil, err
+			}
+		}
 		if ch == '\'' || ch == '"' || ch == '`' || ch == '[' && (dialect == "" || dialect == "sqlite") {
 			quote = ch
 			hasCode = true
@@ -169,7 +175,7 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 			}
 		}
 		if ch == ';' {
-			if triggerBody > 0 {
+			if triggerBody > 0 || len(routineBlocks.stack) > 0 {
 				continue
 			}
 			if depth != 0 {
@@ -199,9 +205,17 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 			for j < len(source) && sqlIdentifierByte(source[j]) {
 				j++
 			}
+			word := strings.ToUpper(source[i:j])
 			if depth == 0 {
-				word := strings.ToUpper(source[i:j])
 				words = append(words, word)
+				if createKind == "" && len(words) > 1 && words[0] == "CREATE" {
+					switch word {
+					case "PROCEDURE", "FUNCTION", "TRIGGER", "EVENT", "TABLE", "VIEW", "INDEX", "DATABASE", "SCHEMA", "SEQUENCE", "TYPE", "EXTENSION", "ROLE", "USER":
+						createKind = word
+						mysqlRoutine = dialect == "mysql" && (word == "PROCEDURE" || word == "FUNCTION" || word == "TRIGGER" || word == "EVENT")
+						routineBlocks.kind = word
+					}
+				}
 				if dialect == "sqlite" && len(words) > 1 && words[0] == "CREATE" && word == "TRIGGER" {
 					sqliteTrigger = true
 				}
@@ -222,6 +236,12 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 					}
 				}
 			}
+			// CASE expressions also occur inside parentheses in routine bodies.
+			if mysqlRoutine {
+				if err := routineBlocks.word(word, depth); err != nil {
+					return nil, err
+				}
+			}
 			hasCode = true
 			i = j - 1
 			continue
@@ -238,6 +258,12 @@ func scanSQL(source, dialect string) ([]sqlStatement, error) {
 	}
 	if triggerBody != 0 || triggerCases != 0 {
 		return nil, errors.New("unterminated SQLite trigger body")
+	}
+	if err := routineBlocks.finishEnd(""); err != nil {
+		return nil, err
+	}
+	if len(routineBlocks.stack) > 0 {
+		return nil, errors.New("unterminated MySQL routine body")
 	}
 	if e := appendStatement(len(source)); e != nil {
 		return nil, e
