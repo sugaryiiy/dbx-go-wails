@@ -310,6 +310,8 @@ func TestDialectSplitterNeverExecutesLiteralContents(t *testing.T) {
 		{"mysql", "# SELECT '; DELETE FROM secret\nSELECT 1; -- comment ;\nSELECT 2", 2},
 		{"mysql", "SELECT 1--\x01; DELETE FROM secret\n; SELECT 2", 2},
 		{"mysql", "SELECT 5--2; SELECT 2", 2},
+		{"mysql", "CREATE /* a */ /* b */ /* c */ TRIGGER t AFTER INSERT ON x FOR EACH ROW BEGIN SELECT 1; DELETE FROM y; END", 1},
+		{"mysql", "CREATE DEFINER='root'@'localhost' PROCEDURE p() BEGIN SELECT 1; DELETE FROM y; END", 1},
 		{"sqlite", "SELECT [a;b], 'RETURNING'; SELECT 2", 2},
 	}
 	for _, c := range cases {
@@ -319,8 +321,7 @@ func TestDialectSplitterNeverExecutesLiteralContents(t *testing.T) {
 		}
 	}
 	for _, source := range []string{
-		"CREATE /* a */ /* b */ /* c */ TRIGGER t AFTER INSERT ON x BEGIN SELECT 1; DELETE FROM y; END",
-		"CREATE DEFINER='root'@'localhost' PROCEDURE p() BEGIN SELECT 1; DELETE FROM y; END",
+		"DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END$$",
 		"/*! SET autocommit=0 */; SELECT 1",
 		`SELECT 'backslash\' ; DELETE FROM y'`,
 	} {
