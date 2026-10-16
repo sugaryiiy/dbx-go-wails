@@ -154,6 +154,50 @@ func TestSavedSQLSearchLimitsAndTruncation(t *testing.T) {
 	}
 }
 
+func TestSavedSQLSearchFirstMatchPerQuery(t *testing.T) {
+	s := testServer(t, t.TempDir())
+	cookie := loginTest(t, s)
+	if err := s.update(func(state *diskState) error {
+		state.SQLFiles = []map[string]any{
+			{"id": "busy", "connectionId": "one", "name": "Busy report", "sql": "SELECT 1\r\n😀 ORDERS orders\r\n" + strings.Repeat("SELECT orders;\n", 501)},
+			{"id": "later", "connectionId": "one", "name": "Later report", "database": "biz", "schema": "public", "sql": "SELECT orders orders"},
+			{"id": "name", "connectionId": "one", "name": "😀 orders orders", "sql": "SELECT 1"},
+			{"id": "other", "connectionId": "two", "name": "orders", "sql": "SELECT orders"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	payload := map[string]any{"connection_id": "one", "query": "orders", "first_match_only": true, "limit": 500}
+	result := savedSQLSearchRequest(t, s, cookie, payload)
+	want := []savedSQLSearchMatch{
+		{ID: "busy", Name: "Busy report", ConnectionID: "one", Line: 2, Column: 4, LineText: "😀 ORDERS orders", MatchText: "ORDERS", Start: 3, End: 9},
+		{ID: "later", Name: "Later report", ConnectionID: "one", Database: "biz", Schema: "public", Line: 1, Column: 8, LineText: "SELECT orders orders", MatchText: "orders", Start: 7, End: 13},
+		{ID: "name", Name: "😀 orders orders", ConnectionID: "one", Line: 0, Column: 4, LineText: "😀 orders orders", MatchText: "orders", Start: 3, End: 9},
+	}
+	if !reflect.DeepEqual(result.Matches, want) || result.Truncated {
+		t.Fatalf("repeated body/name occurrences hid later queries or changed positions: got %+v; want %+v", result, want)
+	}
+	payload["limit"] = 3
+	if exact := savedSQLSearchRequest(t, s, cookie, payload); len(exact.Matches) != 3 || exact.Truncated {
+		t.Fatalf("exact query limit was marked truncated: %+v", exact)
+	}
+	payload["limit"] = 2
+	if bounded := savedSQLSearchRequest(t, s, cookie, payload); len(bounded.Matches) != 2 || !bounded.Truncated || bounded.Matches[1].ID != "later" {
+		t.Fatalf("later name fallback must mark truncation: %+v", bounded)
+	}
+	payload["limit"] = 500
+	payload["exclude_ids"] = []string{"busy"}
+	if excluded := savedSQLSearchRequest(t, s, cookie, payload); len(excluded.Matches) != 2 || excluded.Truncated || excluded.Matches[0].ID != "later" {
+		t.Fatalf("excluded query consumed first-match slots: %+v", excluded)
+	}
+	delete(payload, "exclude_ids")
+	payload["first_match_only"] = false
+	if all := savedSQLSearchRequest(t, s, cookie, payload); len(all.Matches) != 500 || !all.Truncated || all.Matches[499].ID != "busy" {
+		t.Fatalf("full-content search must retain occurrence limits: %+v", all)
+	}
+}
+
 func TestSavedSQLSearchExclusionPreservesLimitAndScope(t *testing.T) {
 	s := testServer(t, t.TempDir())
 	cookie := loginTest(t, s)

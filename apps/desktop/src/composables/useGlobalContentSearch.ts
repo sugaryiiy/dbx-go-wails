@@ -79,7 +79,7 @@ export function useGlobalContentSearch(options: ContentSearchOptions) {
 
   const connection = computed(() => connectionStore.connections.find((item) => item.id === connectionStore.activeConnectionId));
   const contentScopeLabel = computed(() => connection.value?.name || i18n.global.t("quickOpen.contentScopeUnconnected"));
-  const queryTabs = computed(() => (contentMode.value && searchActive.value ? getQueryTabs().filter((tab) => tab.connectionId === connection.value?.id && tab.mode === "query" && !tab.objectSource) : []));
+  const queryTabs = computed(() => (searchActive.value ? getQueryTabs().filter((tab) => tab.connectionId === connection.value?.id && tab.mode === "query" && !tab.objectSource) : []));
   const contentGroups = computed<ContentGroup[]>(() => {
     const groups = new Map<string, ContentGroup>();
     for (const item of contentItems.value) {
@@ -119,16 +119,26 @@ export function useGlobalContentSearch(options: ContentSearchOptions) {
     const config = connection.value;
     const connectionId = config?.id ?? "";
     const tabs = [...queryTabs.value];
+    const firstMatchOnly = !contentMode.value;
     const openSavedIds = new Set(tabs.map((tab) => tab.savedSqlId).filter(Boolean));
     const results: QuickOpenItem[][] = [[], [], [], []];
     const publish = () => {
       if (!current()) return;
       const selectedId = contentSelectedItem.value?.id;
-      const combined = results.flat();
+      const seen = new Set<string>();
+      const combined = results.flat().filter((item) => {
+        if (!firstMatchOnly) return true;
+        const key = item.contentGroupKey || item.id;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
       if (combined.length > MAX_RESULTS) contentTruncated.value = true;
       contentItems.value = combined.slice(0, MAX_RESULTS);
-      const retainedIndex = selectedId ? selectableContentItems.value.findIndex((item) => item.id === selectedId) : -1;
-      selectedIndex.value = retainedIndex >= 0 ? retainedIndex : Math.min(selectedIndex.value, Math.max(0, selectableContentItems.value.length - 1));
+      if (contentMode.value) {
+        const retainedIndex = selectedId ? selectableContentItems.value.findIndex((item) => item.id === selectedId) : -1;
+        selectedIndex.value = retainedIndex >= 0 ? retainedIndex : Math.min(selectedIndex.value, Math.max(0, selectableContentItems.value.length - 1));
+      }
     };
     const report = (error: unknown) => {
       if (current()) contentSearchError.value.push(errorMessage(error));
@@ -139,7 +149,7 @@ export function useGlobalContentSearch(options: ContentSearchOptions) {
     for (const tab of tabs) {
       const remaining = MAX_RESULTS + 1 - results[0].length;
       if (remaining <= 0) break;
-      const matches = findContentMatches(tab.sql, query, remaining);
+      const matches = findContentMatches(tab.sql, query, firstMatchOnly ? 1 : remaining);
       for (const match of matches) {
         results[0].push({
           id: `query-content-${tab.id}-${match.line}-${match.column}`,
@@ -155,6 +165,7 @@ export function useGlobalContentSearch(options: ContentSearchOptions) {
           schema: tab.schema,
           catalog: tab.catalog,
           queryTabId: tab.id,
+          sqlFileId: tab.savedSqlId,
           searchText: match.lineText,
           ...match,
         });
@@ -165,7 +176,7 @@ export function useGlobalContentSearch(options: ContentSearchOptions) {
     async function searchSaved(): Promise<void> {
       if (!connectionId) return;
       try {
-        const response = await api.searchSavedQueries({ connection_id: connectionId, query, limit: MAX_RESULTS + 1, exclude_ids: [...openSavedIds] as string[] }, abort.signal);
+        const response = await api.searchSavedQueries({ connection_id: connectionId, query, limit: MAX_RESULTS + 1, exclude_ids: [...openSavedIds] as string[], ...(firstMatchOnly ? { first_match_only: true } : {}) }, abort.signal);
         if (!current()) return;
         contentTruncated.value ||= response.truncated;
         for (const match of response.matches) {
@@ -224,7 +235,10 @@ export function useGlobalContentSearch(options: ContentSearchOptions) {
             const index = cursor++;
             const database = databases[index];
             try {
-              const response = await api.searchObjectSources({ connection_id: connectionId, database, databases: visibleDatabases, schemas: database ? (config.visible_schemas?.[database] ?? null) : undefined, query, limit: MAX_RESULTS + 1 }, abort.signal);
+              const response = await api.searchObjectSources(
+                { connection_id: connectionId, database, databases: visibleDatabases, schemas: database ? (config.visible_schemas?.[database] ?? null) : undefined, query, limit: MAX_RESULTS + 1, ...(firstMatchOnly ? { first_match_only: true } : {}) },
+                abort.signal,
+              );
               if (!current()) return;
               contentTruncated.value ||= response.truncated;
               for (const warning of response.warnings ?? []) report(warning);
@@ -306,7 +320,7 @@ export function useGlobalContentSearch(options: ContentSearchOptions) {
     clear();
     selectedIndex.value = 0;
     const query = searchQuery.value.trim();
-    if (!contentMode.value || !searchActive.value || !query) return;
+    if (!searchActive.value || !query) return;
     const searchGeneration = generation;
     contentSearching.value = true;
     timer = setTimeout(() => {

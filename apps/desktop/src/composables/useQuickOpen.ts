@@ -688,6 +688,17 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
     return item.id.toLowerCase();
   }
 
+  function searchTargetKey(item: QuickOpenItem): string {
+    if (item.sqlFileId) return `saved-query:${item.sqlFileId}`;
+    if (item.queryTabId) return `query-tab:${item.queryTabId}`;
+    if (item.filePath) return `file:${item.filePath}`;
+    const kind = item.contentSource === "object" ? item.objectType?.toLowerCase() : item.type;
+    if (kind === "procedure" || kind === "function" || kind === "event") {
+      return JSON.stringify([item.connectionId, item.database ?? "", item.schema || item.database || "", kind, item.objectName || item.label, item.signature ?? ""]);
+    }
+    return quickOpenItemKey(item);
+  }
+
   function remoteTableItem(table: SqlCompletionTable, conn: ConnectionConfig, database: string): QuickOpenItem {
     // Completion "tables" may carry routine navigation types; quick-open relation entries only accept relation kinds.
     const type = table.type === "view" || table.type === "materialized_view" ? table.type : "table";
@@ -854,6 +865,8 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
     { flush: "sync" },
   );
 
+  let selectedNormalKey: string | undefined;
+  let selectedNormalQuery = "";
   const filteredItems = computed((): MatchedItem[] => {
     if (!searchQuery.value.trim()) {
       // Show all tree items plus a limited set of recent SQL library files and external SQL files
@@ -865,6 +878,13 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
     }
 
     const matched: MatchedItem[] = [];
+    // A table can be referenced by an object whose name has no text in common
+    // with it. Keep one source hit per target alongside the name matches.
+    const sourceHits = new Map<string, QuickOpenItem>();
+    for (const group of contentGroups.value) {
+      const item = group.matches[0];
+      if (item) sourceHits.set(searchTargetKey(item), item);
+    }
 
     const seen = new Set<string>();
     // When searching, include ALL SQL library files and external SQL files
@@ -876,12 +896,19 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
       const metadataMatch = labelMatch ? null : matchQuickOpenText(searchQuery.value, item.searchText);
       const result = labelMatch ?? metadataMatch;
       if (result) {
+        const sourceKey = searchTargetKey(item);
+        const sourceHit = sourceHits.get(sourceKey);
+        sourceHits.delete(sourceKey);
         matched.push({
-          ...item,
+          ...(sourceHit ?? item),
           matchScore: result.score + (labelMatch ? 0 : 1000),
           matchIndices: labelMatch ? result.indices : [],
         });
       }
+    }
+
+    for (const item of sourceHits.values()) {
+      matched.push({ ...item, matchScore: 2000, matchIndices: [] });
     }
 
     // Sort by score and type (connections > databases > tables > other objects for equal scores)
@@ -916,8 +943,48 @@ export function useQuickOpen(options: UseQuickOpenOptions = {}) {
       return a.label.localeCompare(b.label);
     });
 
-    return matched.slice(0, QUICK_OPEN_MAX_RESULTS);
+    // Broad table-name matches must not consume every slot before references
+    // arrive. Reserve part of the list for targets found only in SQL text.
+    const reserved = Math.min(sourceHits.size, 50);
+    const names = matched.filter((item) => item.matchScore < 2000).slice(0, QUICK_OPEN_MAX_RESULTS - reserved);
+    const pinned = selectedNormalQuery === searchQuery.value ? matched.find((item) => item.matchScore < 2000 && searchTargetKey(item) === selectedNormalKey) : undefined;
+    if (pinned && !names.some((item) => searchTargetKey(item) === selectedNormalKey)) names[names.length - 1] = pinned;
+    const references = matched.filter((item) => item.matchScore === 2000).slice(0, QUICK_OPEN_MAX_RESULTS - names.length);
+    return [...names, ...references];
   });
+
+  let selectionQuery = searchQuery.value;
+  watch(
+    filteredItems,
+    (items, previousItems) => {
+      const queryChanged = selectionQuery !== searchQuery.value;
+      selectionQuery = searchQuery.value;
+      if (contentMode.value) return;
+      if (queryChanged) {
+        selectedNormalKey = items[0] ? searchTargetKey(items[0]) : undefined;
+        selectedNormalQuery = searchQuery.value;
+        return;
+      }
+      const previous = previousItems[selectedIndex.value];
+      const previousKey = previous ? searchTargetKey(previous) : undefined;
+      const retainedIndex = previousKey ? items.findIndex((item) => searchTargetKey(item) === previousKey) : -1;
+      selectedIndex.value = retainedIndex >= 0 ? retainedIndex : Math.min(selectedIndex.value, Math.max(0, items.length - 1));
+      selectedNormalKey = items[selectedIndex.value] ? searchTargetKey(items[selectedIndex.value]) : undefined;
+      selectedNormalQuery = searchQuery.value;
+    },
+    { flush: "sync" },
+  );
+
+  watch(
+    selectedIndex,
+    (index) => {
+      if (contentMode.value) return;
+      const item = filteredItems.value[index];
+      selectedNormalKey = item ? searchTargetKey(item) : undefined;
+      selectedNormalQuery = searchQuery.value;
+    },
+    { flush: "sync" },
+  );
 
   const selectedItem = computed((): MatchedItem | null => {
     if (selectedIndex.value < 0 || selectedIndex.value >= filteredItems.value.length) {
