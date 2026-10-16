@@ -16,7 +16,7 @@ vi.mock("@/composables/useQuickOpen", async () => {
     searchQuery: ref(""),
     filteredItems: ref([]),
     selectedIndex: ref(0),
-    selectedItem: ref(undefined),
+    selectedItem: computed(() => mocks.state.filteredItems.value[mocks.state.selectedIndex.value]),
     contentMode: ref(true),
     contentGroups: ref([]),
     contentSearching: ref(false),
@@ -96,6 +96,7 @@ const match: QuickOpenItem = {
   lineText: "DELETE FROM audit",
   highlightIndices: [0, 6],
 };
+const table: QuickOpenItem = { id: "audit-table", type: "table", connectionId: "shop", database: "orders", label: "audit", tableName: "audit", searchText: "audit" };
 
 async function flush() {
   await nextTick();
@@ -146,6 +147,62 @@ describe("QuickOpenDialog content sources", () => {
 
   it("shows source failures and truncation without reporting an empty successful search", async () => {
     mocks.state.searchQuery.value = "cleanup";
+    mocks.state.contentSearchError.value = ["Shop connection: access denied"];
+    mocks.state.contentTruncated.value = true;
+    await flush();
+
+    expect(host.querySelector("[data-content-search-error]")?.textContent).toContain("access denied");
+    expect(host.querySelector("[data-content-search-truncated]")?.textContent).toContain("quickOpen.contentTruncated");
+    expect(host.textContent).not.toContain("quickOpen.noResults");
+  });
+
+  it.each([
+    { item: { ...match, contentGroupType: "procedure", objectType: "PROCEDURE" }, badge: "common.procedure" },
+    { item: match, badge: "common.event" },
+    { item: { ...match, contentSource: "saved_query", objectType: undefined, contentGroupType: "saved_query" }, badge: "quickOpen.savedQuery" },
+    { item: { ...match, contentSource: "query_tab", objectType: undefined, contentGroupType: "query_tab" }, badge: "quickOpen.openQuery" },
+  ] as Array<{ item: QuickOpenItem; badge: string }>)("shows a SQL body hit as $badge in ordinary search and opens it on click", async ({ item, badge }) => {
+    props.initialContentMode = false;
+    mocks.state.searchQuery.value = "audit";
+    const bodyHit = { ...item, column: 13, matchText: "audit", highlightIndices: [12, 17] as [number, number] };
+    mocks.state.filteredItems.value = [table, bodyHit];
+    await flush();
+
+    const snippet = host.querySelector<HTMLElement>("[data-content-search-match]")!;
+    expect(host.textContent).toContain(item.label);
+    expect(host.textContent).toContain(badge);
+    expect(host.textContent).not.toContain("content_match");
+    expect(snippet.textContent).toContain("DELETE FROM audit");
+    expect(snippet.querySelector("[data-content-search-line]")?.textContent).toBe("5");
+    expect(snippet.querySelector(".bg-yellow-200")?.textContent).toBe("audit");
+    snippet.closest<HTMLElement>("[data-selected]")!.click();
+    expect(selected).toHaveBeenCalledWith(bodyHit);
+  });
+
+  it("opens the selected SQL body hit with Enter in ordinary search", async () => {
+    props.initialContentMode = false;
+    mocks.state.filteredItems.value = [table, match];
+    await flush();
+
+    host.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }));
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    host.querySelector("input")!.dispatchEvent(enter);
+
+    expect(enter.defaultPrevented).toBe(true);
+    expect(selected).toHaveBeenCalledWith(match);
+    expect(props.open).toBe(false);
+  });
+
+  it("shows progress and incomplete source warnings in ordinary search without premature no results", async () => {
+    props.initialContentMode = false;
+    mocks.state.searchQuery.value = "audit";
+    mocks.state.contentSearching.value = true;
+    await flush();
+
+    expect(host.querySelector("[data-content-search-loading]")?.textContent).toContain("quickOpen.searchingContent");
+    expect(host.textContent).not.toContain("quickOpen.noResults");
+
+    mocks.state.contentSearching.value = false;
     mocks.state.contentSearchError.value = ["Shop connection: access denied"];
     mocks.state.contentTruncated.value = true;
     await flush();

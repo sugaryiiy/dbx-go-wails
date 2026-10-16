@@ -62,6 +62,7 @@ func (s *Server) searchSavedSQL(ctx context.Context, p map[string]any) (savedSQL
 	if limit > 2000 {
 		limit = 2000
 	}
+	firstMatchOnly := boolValue(p, "first_match_only")
 	// Match against the original text so Unicode case folding never changes
 	// the byte offsets used to calculate CodeMirror's UTF-16 positions.
 	pattern, err := regexp.Compile("(?i)" + regexp.QuoteMeta(query))
@@ -69,7 +70,11 @@ func (s *Server) searchSavedSQL(ctx context.Context, p map[string]any) (savedSQL
 		return result, errors.New("Search query is too large or invalid")
 	}
 	appendLine := func(file map[string]any, lineText string, lineNumber int) bool {
-		indices := pattern.FindAllStringIndex(lineText, limit+1-len(result.Matches))
+		candidateLimit := limit + 1 - len(result.Matches)
+		if firstMatchOnly {
+			candidateLimit = 1
+		}
+		indices := pattern.FindAllStringIndex(lineText, candidateLimit)
 		byteOffset, utf16Offset := 0, 0
 		for _, index := range indices {
 			if len(result.Matches) == limit {
@@ -106,6 +111,9 @@ func (s *Server) searchSavedSQL(ctx context.Context, p map[string]any) (savedSQL
 			}
 			if !appendLine(file, strings.TrimSuffix(line, "\r"), lineIndex+1) {
 				return result, nil
+			}
+			if firstMatchOnly && len(result.Matches) > before {
+				break
 			}
 		}
 		// Name matches keep saved queries discoverable when their SQL text

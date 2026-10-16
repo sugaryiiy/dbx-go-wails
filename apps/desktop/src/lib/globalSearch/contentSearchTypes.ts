@@ -5,6 +5,8 @@ export interface ConnectionContentSearchRequest {
   query: string;
   limit?: number;
   exclude_ids?: string[];
+  /** Return one hit per object/query when listing sources alongside name matches. */
+  first_match_only?: boolean;
 }
 
 export interface ObjectContentSearchRequest extends ConnectionContentSearchRequest {

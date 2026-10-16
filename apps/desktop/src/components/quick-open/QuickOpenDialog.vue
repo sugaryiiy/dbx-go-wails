@@ -257,6 +257,10 @@ function getItemIcon(type: string) {
 /** Right badge copy: plugin commands show the source plugin name as provenance; others keep the type label. */
 function getTypeBadge(item: QuickOpenItem): string {
   if (item.type === "plugin_command") return item.pluginName || item.pluginId || "";
+  if (item.type === "content_match") {
+    const sourceType = item.contentSource === "saved_query" ? "saved_query" : item.contentSource === "query_tab" ? "query_tab" : "sql_file";
+    return getTypeLabel(item.contentGroupType || item.objectType?.toLowerCase() || sourceType);
+  }
   return getTypeLabel(item.type);
 }
 
@@ -369,18 +373,18 @@ watch(selectedIndex, async () => {
 
         <!-- Results List -->
         <div ref="listRef" class="max-h-[400px] overflow-y-auto">
+          <div v-if="contentSearchError.length" role="status" class="space-y-1 border-b px-4 py-2 text-xs text-destructive" data-content-search-error>
+            <p>{{ t("quickOpen.contentSearchFailed") }}</p>
+            <p v-for="(error, index) in contentSearchError" :key="index">{{ error }}</p>
+          </div>
+          <div v-if="contentTruncated" role="status" class="border-b px-4 py-2 text-xs text-muted-foreground" data-content-search-truncated>
+            {{ t("quickOpen.contentTruncated") }}
+          </div>
+          <div v-if="contentSearching" role="status" class="px-4 py-2 text-xs text-muted-foreground" data-content-search-loading>
+            {{ t("quickOpen.searchingContent") }}
+          </div>
           <!-- Content search mode: group matches by database object, query, or file. -->
           <template v-if="contentMode">
-            <div v-if="contentSearchError.length" role="status" class="space-y-1 border-b px-4 py-2 text-xs text-destructive" data-content-search-error>
-              <p>{{ t("quickOpen.contentSearchFailed") }}</p>
-              <p v-for="(error, index) in contentSearchError" :key="index">{{ error }}</p>
-            </div>
-            <div v-if="contentTruncated" role="status" class="border-b px-4 py-2 text-xs text-muted-foreground" data-content-search-truncated>
-              {{ t("quickOpen.contentTruncated") }}
-            </div>
-            <div v-if="contentSearching" role="status" class="px-4 py-2 text-xs text-muted-foreground">
-              {{ t("quickOpen.searchingContent") }}
-            </div>
             <div v-if="!contentSearching && contentRows.length === 0 && !contentSearchError.length" class="px-4 py-8 text-center text-muted-foreground">
               <p v-if="!searchQuery.trim()">{{ t("quickOpen.emptyPlaceholder") }}</p>
               <p v-else>{{ t("quickOpen.noResults") }}</p>
@@ -429,7 +433,7 @@ watch(selectedIndex, async () => {
           </template>
 
           <!-- Normal mode -->
-          <div v-else-if="filteredItems.length === 0" class="px-4 py-8 text-center text-muted-foreground">
+          <div v-else-if="filteredItems.length === 0 && !contentSearching && !contentSearchError.length" class="px-4 py-8 text-center text-muted-foreground">
             <p v-if="!searchQuery.trim()">{{ t("quickOpen.emptyPlaceholder") }}</p>
             <p v-else>{{ t("quickOpen.noResults") }}</p>
           </div>
@@ -451,6 +455,15 @@ watch(selectedIndex, async () => {
                     </div>
                     <div v-if="item.description" class="text-xs text-muted-foreground truncate">
                       {{ item.description }}
+                    </div>
+                    <div v-if="item.type === 'content_match' && item.lineText" class="mt-1 flex items-center gap-2 min-w-0 font-mono text-xs" data-content-search-match>
+                      <span v-if="item.line && item.line > 0" class="shrink-0 text-muted-foreground" data-content-search-line>{{ item.line }}</span>
+                      <span class="truncate">
+                        <template v-for="(part, i) in getHighlightedLineParts(item)" :key="i">
+                          <span v-if="part.highlight" class="bg-yellow-200 dark:bg-yellow-800 text-foreground rounded-[0.1875rem] px-0.5 font-semibold">{{ part.text }}</span>
+                          <span v-else>{{ part.text }}</span>
+                        </template>
+                      </span>
                     </div>
                   </div>
                 </div>

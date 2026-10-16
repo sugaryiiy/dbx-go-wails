@@ -39,10 +39,11 @@ type ObjectSourceSearchResult struct {
 }
 
 type objectSourceSearchOptions struct {
-	pattern   *regexp.Regexp
-	wholeWord bool
-	isRegex   bool
-	limit     int
+	pattern        *regexp.Regexp
+	wholeWord      bool
+	isRegex        bool
+	firstMatchOnly bool
+	limit          int
 }
 
 func parseObjectSourceSearch(p map[string]any) (objectSourceSearchOptions, error) {
@@ -54,7 +55,7 @@ func parseObjectSourceSearch(p map[string]any) (objectSourceSearchOptions, error
 	if limit < 1 || limit > 2000 {
 		return objectSourceSearchOptions{}, errors.New("Object source search limit must be between 1 and 2000")
 	}
-	options := objectSourceSearchOptions{wholeWord: boolean(p, "whole_word"), isRegex: boolean(p, "is_regex"), limit: limit}
+	options := objectSourceSearchOptions{wholeWord: boolean(p, "whole_word"), isRegex: boolean(p, "is_regex"), firstMatchOnly: boolean(p, "first_match_only"), limit: limit}
 	if query == "" {
 		return options, nil
 	}
@@ -320,6 +321,9 @@ func postgresSearchableObjectSources(ctx context.Context, db *sql.DB, database, 
 }
 
 func searchObjectSource(source string, object record, options objectSourceSearchOptions, limit int) []ObjectSourceSearchMatch {
+	if options.firstMatchOnly && limit > 1 {
+		limit = 1
+	}
 	matches := []ObjectSourceSearchMatch{}
 	lineStarts := []int{0}
 	for index, character := range source {

@@ -191,6 +191,133 @@ func TestMySQLSearchableObjectsParameterizesDatabase(t *testing.T) {
 	}
 }
 
+func TestMySQLSearchObjectSourcesFindsTableReferencesInBodies(t *testing.T) {
+	connector := &objectSearchConnector{query: func(_ context.Context, statement string, args []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(statement, "information_schema.routines"):
+			if strings.Contains(statement, "orders") || len(args) != 0 {
+				t.Fatalf("table keyword must not filter object names in the catalog: %s %#v", statement, args)
+			}
+			return &objectSearchRows{columns: []string{"object_name", "object_type", "database", "schema"}, values: [][]driver.Value{
+				{"monthly_report", "PROCEDURE", "app", "app"},
+				{"nightly_cleanup", "EVENT", "app", "app"},
+			}}, nil
+		case statement == "SHOW CREATE PROCEDURE `app`.`monthly_report`":
+			return &objectSearchRows{columns: []string{"Create Procedure"}, values: [][]driver.Value{{"CREATE PROCEDURE monthly_report()\nBEGIN\n  SELECT o.id FROM customers c JOIN `app`.`orders` o ON o.customer_id=c.id;\nEND"}}}, nil
+		case statement == "SHOW CREATE EVENT `app`.`nightly_cleanup`":
+			return &objectSearchRows{columns: []string{"Create Event"}, values: [][]driver.Value{{"CREATE EVENT nightly_cleanup ON SCHEDULE EVERY 1 DAY DO\n  DELETE FROM orders WHERE archived=1"}}}, nil
+		default:
+			t.Fatalf("unexpected table reference search SQL: %s", statement)
+			return nil, errors.New("unexpected query")
+		}
+	}}
+	m := objectSearchManager(t, "mysql", "app", connector)
+	raw, err := m.Handle(context.Background(), "/api/schema/search-object-sources", map[string]any{"connection_id": "search", "query": "orders", "whole_word": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := raw.(ObjectSourceSearchResult)
+	if result.Truncated || len(result.Warnings) != 0 || len(result.Matches) != 2 {
+		t.Fatalf("table references were not returned: %#v", result)
+	}
+	for index, expected := range []struct {
+		name, kind, preview string
+		line                int
+	}{
+		{"monthly_report", "PROCEDURE", "JOIN `app`.`orders`", 3},
+		{"nightly_cleanup", "EVENT", "DELETE FROM orders", 2},
+	} {
+		hit := result.Matches[index]
+		if hit.ObjectName != expected.name || hit.ObjectType != expected.kind || hit.Line != expected.line || hit.MatchText != "orders" || !strings.Contains(hit.LineText, expected.preview) {
+			t.Fatalf("table reference lost object identity or SQL preview: %#v", hit)
+		}
+	}
+}
+
+func TestMySQLSearchObjectSourcesFirstMatchPerObject(t *testing.T) {
+	connector := &objectSearchConnector{query: func(_ context.Context, statement string, _ []driver.NamedValue) (driver.Rows, error) {
+		switch {
+		case strings.Contains(statement, "information_schema.routines"):
+			return &objectSearchRows{columns: []string{"object_name", "object_type", "database", "schema"}, values: [][]driver.Value{
+				{"busy_report", "PROCEDURE", "app", "app"},
+				{"nightly_cleanup", "EVENT", "app", "app"},
+			}}, nil
+		case statement == "SHOW CREATE PROCEDURE `app`.`busy_report`":
+			return &objectSearchRows{columns: []string{"Create Procedure"}, values: [][]driver.Value{{"😀 orders_archive\r\n😀 ORDERS\r\n" + strings.Repeat("SELECT orders;\n", 501)}}}, nil
+		case statement == "SHOW CREATE EVENT `app`.`nightly_cleanup`":
+			return &objectSearchRows{columns: []string{"Create Event"}, values: [][]driver.Value{{"DELETE FROM orders"}}}, nil
+		default:
+			t.Fatalf("unexpected first-match search SQL: %s", statement)
+			return nil, errors.New("unexpected query")
+		}
+	}}
+	m := objectSearchManager(t, "mysql", "app", connector)
+	search := func(limit int, firstMatchOnly bool) ObjectSourceSearchResult {
+		t.Helper()
+		raw, err := m.Handle(context.Background(), "/api/schema/search-object-sources", map[string]any{"connection_id": "search", "query": "orders", "whole_word": true, "first_match_only": firstMatchOnly, "limit": limit})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw.(ObjectSourceSearchResult)
+	}
+	result := search(500, true)
+	if len(result.Matches) != 2 || result.Truncated || len(result.Warnings) != 0 {
+		t.Fatalf("repeated occurrences hid a later object: %#v", result)
+	}
+	first, second := result.Matches[0], result.Matches[1]
+	if first.ObjectName != "busy_report" || first.Line != 2 || first.Column != 4 || first.Start != 3 || first.End != 9 || first.MatchText != "ORDERS" || first.LineText != "😀 ORDERS" {
+		t.Fatalf("first valid match lost UTF-16/CRLF positions: %#v", first)
+	}
+	if second.ObjectName != "nightly_cleanup" || second.ObjectType != "EVENT" || second.Line != 1 || second.Column != 13 {
+		t.Fatalf("later object identity or position was lost: %#v", second)
+	}
+	if exact := search(2, true); len(exact.Matches) != 2 || exact.Truncated {
+		t.Fatalf("exact object limit was marked truncated: %#v", exact)
+	}
+	if bounded := search(1, true); len(bounded.Matches) != 1 || !bounded.Truncated || bounded.Matches[0].ObjectName != "busy_report" {
+		t.Fatalf("later matching object must mark truncation: %#v", bounded)
+	}
+	if all := search(500, false); len(all.Matches) != 500 || !all.Truncated || all.Matches[499].ObjectName != "busy_report" {
+		t.Fatalf("full-content search must retain occurrence limits: %#v", all)
+	}
+}
+
+func TestPostgresSearchObjectSourcesFindsTableReferencesInBodies(t *testing.T) {
+	connector := &objectSearchConnector{query: func(_ context.Context, statement string, args []driver.NamedValue) (driver.Rows, error) {
+		if strings.Contains(statement, "AS has_kind") {
+			return &objectSearchRows{columns: []string{"has_kind"}, values: [][]driver.Value{{true}}}, nil
+		}
+		if !strings.Contains(statement, "pg_get_functiondef(p.oid)") || strings.Contains(statement, "orders") || len(args) != 1 || args[0].Value != "app" {
+			t.Fatalf("table keyword must search routine definitions without filtering names: %s %#v", statement, args)
+		}
+		return &objectSearchRows{columns: []string{"object_name", "object_type", "database", "schema", "signature", "source"}, values: [][]driver.Value{
+			{"monthly_report", "PROCEDURE", "app", "billing", "", "CREATE OR REPLACE PROCEDURE billing.monthly_report()\nLANGUAGE plpgsql AS $$\nBEGIN\n  PERFORM o.id FROM billing.customers c JOIN billing.\"orders\" o ON o.customer_id=c.id;\nEND;\n$$"},
+			{"row_count", "FUNCTION", "app", "billing", "", "CREATE OR REPLACE FUNCTION billing.row_count() RETURNS bigint\nLANGUAGE sql AS $$\n  SELECT count(*) FROM billing.orders\n$$"},
+		}}, nil
+	}}
+	m := objectSearchManager(t, "postgres", "app", connector)
+	raw, err := m.Handle(context.Background(), "/api/schema/search-object-sources", map[string]any{"connection_id": "search", "query": "orders", "whole_word": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := raw.(ObjectSourceSearchResult)
+	if result.Truncated || len(result.Warnings) != 0 || len(result.Matches) != 2 {
+		t.Fatalf("table references were not returned: %#v", result)
+	}
+	for index, expected := range []struct {
+		name, kind, preview string
+		line                int
+	}{
+		{"monthly_report", "PROCEDURE", "JOIN billing.\"orders\"", 4},
+		{"row_count", "FUNCTION", "SELECT count(*) FROM billing.orders", 3},
+	} {
+		hit := result.Matches[index]
+		if hit.ObjectName != expected.name || hit.ObjectType != expected.kind || hit.Schema != "billing" || hit.Line != expected.line || hit.MatchText != "orders" || !strings.Contains(hit.LineText, expected.preview) {
+			t.Fatalf("table reference lost routine identity or SQL preview: %#v", hit)
+		}
+	}
+}
+
 func TestPostgresSearchObjectSourcesKeepsOverloadIdentity(t *testing.T) {
 	for _, modern := range []bool{false, true} {
 		t.Run(fmt.Sprint(modern), func(t *testing.T) {
