@@ -117,3 +117,6 @@ dbx-devtest-connections.json
 
 /build/wails/bin/
 /apps/desktop/src/generated/wails/
+
+# Per-platform precompiled binaries are produced by the release flow; never commit them.
+packages/*/bin/
