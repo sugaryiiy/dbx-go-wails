@@ -73,6 +73,7 @@ import { useDataGridActions } from "@/composables/useDataGridActions";
 import type { DataGridSortMode } from "@/lib/dataGrid/dataGridSort";
 import { useTauriEvents } from "@/composables/useTauriEvents";
 import { useCloseActionPrompt, type AppCloseAction, type AppCloseRequestOptions } from "@/composables/useCloseActionPrompt";
+import { isWailsRuntime, wailsApp } from "@/lib/backend/wailsRuntime";
 import { disposeAllSqlServerActivityTraces } from "@/lib/sqlserver/sqlServerActivityTraceRuntime";
 import { useVisibilityChange } from "@/composables/useVisibilityChange";
 import { useExternalSqlFileChanges } from "@/composables/useExternalSqlFileChanges";
@@ -1197,6 +1198,17 @@ const { setupTauriListeners, cleanupTauriListeners } = useTauriEvents({
   refreshPluginWorkbenches,
 });
 const { showCloseActionPrompt, chooseQuit, chooseMinimize, cancelCloseActionPrompt, performCloseAction, setupCloseActionPromptListener, cleanupCloseActionPromptListener } = useCloseActionPrompt({ requestClose: requestAppClose });
+// Keep the native tray / menu bar icon in sync with the desktop setting.
+watch(
+  () => settingsStore.desktopSettings.show_tray_icon,
+  (visible) => {
+    if (!isWailsRuntime()) return;
+    void wailsApp()
+      .SetTrayVisible(visible)
+      .catch(() => {});
+  },
+  { immediate: true },
+);
 useVisibilityChange();
 useWebDavAutoUpload();
 useScheduledDatabaseBackups({ scheduler: true });

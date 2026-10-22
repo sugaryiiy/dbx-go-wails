@@ -19,6 +19,10 @@ export interface WailsApp {
   SetAlwaysOnTop(value: boolean): Promise<void>;
   SetTheme(mode: "light" | "dark" | "system"): Promise<void>;
   Close(): Promise<void>;
+  MarkFrontendReady(): Promise<void>;
+  CompleteAppClose(action: "quit" | "hide"): Promise<void>;
+  RequestAppClose(): Promise<void>;
+  SetTrayVisible(visible: boolean): Promise<void>;
   ClipboardReadText(): Promise<string>;
   ClipboardWriteText(text: string): Promise<void>;
   OpenFile(options: WailsFileDialogOptions): Promise<string[] | null>;
@@ -39,6 +43,20 @@ export interface WailsApp {
 }
 
 type WailsGlobal = { go?: { main?: { App?: WailsApp } } };
+
+export interface WailsRuntimeEvents {
+  EventsOn(eventName: string, callback: (...data: unknown[]) => void): () => void;
+}
+
+type WailsRuntimeGlobal = { runtime?: WailsRuntimeEvents };
+
+// Subscribes to an event emitted by the Go shell through runtime.EventsEmit.
+// Returns an unsubscribe function; outside the Wails runtime it is a no-op.
+export function onWailsEvent(eventName: string, callback: (...data: unknown[]) => void, globalObject: unknown = globalThis): () => void {
+  const runtime = (globalObject as WailsRuntimeGlobal)?.runtime;
+  if (typeof runtime?.EventsOn !== "function") return () => {};
+  return runtime.EventsOn(eventName, callback);
+}
 
 // This intentionally does not change isTauriRuntime: Wails database calls must
 // use the shared HTTP API instead of Tauri's Rust command transport.

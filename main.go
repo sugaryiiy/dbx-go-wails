@@ -35,10 +35,11 @@ func main() {
 		Title: "喜鹊 · MagpieDB", Width: 1440, Height: 900, MinWidth: 960, MinHeight: 640,
 		// Keep the operating system's native title bar until custom titlebar and
 		// detached-window parity are available on every desktop platform.
-		Frameless:   false,
-		AssetServer: &assetserver.Options{Assets: assets, Handler: desktopAPI(backend)},
-		OnStartup:   app.startup,
-		Bind:        []interface{}{app},
+		Frameless:     false,
+		AssetServer:   &assetserver.Options{Assets: assets, Handler: desktopAPI(backend)},
+		OnStartup:     app.startup,
+		OnBeforeClose: app.beforeClose,
+		Bind:          []interface{}{app},
 	})
 	if err != nil {
 		log.Fatal(err)

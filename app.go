@@ -22,12 +22,14 @@ import (
 // App exposes native desktop capabilities only. Database operations continue
 // through the shared Go HTTP handler inside Wails' in-process asset server.
 type App struct {
-	ctx         context.Context
-	alwaysOnTop atomic.Bool
-	backend     http.Handler
-	saveDialog  func(runtime.SaveDialogOptions) (string, error)
-	fileOnce    sync.Once
-	fileGrants  *desktopfiles.Grants
+	ctx           context.Context
+	alwaysOnTop   atomic.Bool
+	frontendReady atomic.Bool
+	trayVisible   atomic.Bool
+	backend       http.Handler
+	saveDialog    func(runtime.SaveDialogOptions) (string, error)
+	fileOnce      sync.Once
+	fileGrants    *desktopfiles.Grants
 }
 
 func desktopAPI(next http.Handler) http.Handler {
@@ -43,7 +45,10 @@ func desktopAPI(next http.Handler) http.Handler {
 	})
 }
 
-func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	installTray(a)
+}
 
 type WindowState struct {
 	Maximized   bool `json:"maximized"`
@@ -67,7 +72,75 @@ func (a *App) SetTheme(mode string) error {
 	setWindowTheme(a.ctx, mode)
 	return nil
 }
-func (a *App) Close()                               { runtime.Quit(a.ctx) }
+func (a *App) Close() { runtime.Quit(a.ctx) }
+
+// MarkFrontendReady is called by the frontend once its close-request listener
+// is installed. Until then a native window close falls back to quitting, so a
+// failed WebView start cannot leave a hidden app waiting forever.
+func (a *App) MarkFrontendReady() { a.frontendReady.Store(true) }
+
+// CompleteAppClose executes the close decision the frontend reached after its
+// own confirmations (unsaved tabs, blocking AI runs, quit-vs-hide choice).
+// "quit" exits the process; "hide" backgrounds the window.
+func (a *App) CompleteAppClose(action string) {
+	switch action {
+	case "quit":
+		runtime.Quit(a.ctx)
+	case "hide":
+		a.hideMainWindow()
+	}
+}
+
+// RequestAppClose asks the frontend to start its close flow, exactly as if
+// the user had clicked the window's native close button.
+func (a *App) RequestAppClose() { a.emitCloseRequested("settings") }
+
+// RequestAppQuit asks the frontend to start its close flow with the quit
+// action preselected. The tray menu's Quit item uses it so quitting from the
+// tray still honours unsaved-tab and AI-run confirmations.
+func (a *App) RequestAppQuit() { a.emitCloseRequested("quit") }
+
+func (a *App) emitCloseRequested(target string) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "dbx-app-close-requested", target)
+}
+
+// SetTrayVisible shows or hides the tray / menu bar icon, driven by the
+// frontend's "show tray icon" desktop setting. Platforms without a tray
+// implementation ignore it.
+func (a *App) SetTrayVisible(visible bool) {
+	a.trayVisible.Store(visible)
+	setTrayVisible(visible)
+}
+
+// beforeClose intercepts the native window close. The frontend owns every
+// close decision, so the shell only forwards the request and keeps the window
+// alive until the frontend answers through CompleteAppClose.
+func (a *App) beforeClose(ctx context.Context) bool {
+	if !a.frontendReady.Load() {
+		return false
+	}
+	runtime.EventsEmit(ctx, "dbx-app-close-requested", "settings")
+	return true
+}
+
+func (a *App) hideMainWindow() {
+	// With a visible tray icon the window can hide completely and be restored
+	// from the tray. Without one, minimise instead so the window always stays
+	// reachable through the Dock or taskbar.
+	if trayAvailable() && a.trayVisible.Load() {
+		runtime.WindowHide(a.ctx)
+		return
+	}
+	runtime.WindowMinimise(a.ctx)
+}
+
+func (a *App) showMainWindow() {
+	runtime.WindowUnminimise(a.ctx)
+	runtime.WindowShow(a.ctx)
+}
 func (a *App) ClipboardReadText() (string, error)   { return runtime.ClipboardGetText(a.ctx) }
 func (a *App) ClipboardWriteText(text string) error { return runtime.ClipboardSetText(a.ctx, text) }
 

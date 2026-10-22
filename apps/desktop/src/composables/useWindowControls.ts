@@ -124,7 +124,9 @@ export function useWindowControls() {
   async function close() {
     if (!isDesktop) return;
     if (isWails) {
-      await wailsApp().Close();
+      // Route through the frontend close flow (unsaved tabs, quit-vs-hide
+      // choice) instead of quitting the process outright.
+      await wailsApp().RequestAppClose();
       return;
     }
     await api.requestAppClose();

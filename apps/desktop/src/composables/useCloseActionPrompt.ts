@@ -1,6 +1,7 @@
 import { ref } from "vue";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isWailsRuntime, onWailsEvent, wailsApp } from "@/lib/backend/wailsRuntime";
 import * as api from "@/lib/backend/api";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -26,6 +27,10 @@ export function useCloseActionPrompt(options: { requestClose: (action: AppCloseA
   }
 
   async function performCloseAction(action: AppCloseAction) {
+    if (isWailsRuntime()) {
+      await wailsApp().CompleteAppClose(action);
+      return;
+    }
     if (!isTauriRuntime()) return;
     await api.completeAppClose(action);
   }
@@ -59,6 +64,18 @@ export function useCloseActionPrompt(options: { requestClose: (action: AppCloseA
   }
 
   function setupCloseActionPromptListener() {
+    if (isWailsRuntime()) {
+      const unlisten = onWailsEvent("dbx-app-close-requested", (target) => {
+        handleCloseRequest(target === "quit" ? "quit" : "settings");
+      });
+      unlistenHandles.push(unlisten);
+      // The Go shell falls back to native Quit until this listener is
+      // installed, so a failed WebView startup cannot strand the app.
+      void wailsApp()
+        .MarkFrontendReady()
+        .catch(() => {});
+      return;
+    }
     if (!isTauriRuntime()) return;
     void import("@tauri-apps/api/event").then(({ listen }) => {
       listen<AppCloseRequestTarget>("dbx-app-close-requested", (event: AppCloseRequestPayload) => {
