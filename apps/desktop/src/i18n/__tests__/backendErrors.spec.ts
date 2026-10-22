@@ -69,6 +69,27 @@ const CASES: { name: string; message: string; key: string; params?: Record<strin
     key: "pluginPlatform.updateDowngradeRejected",
   },
   {
+    name: "plugin update requires closing related connections",
+    message: "Plugin update blocked by active connections: Production S3, Local storage",
+    key: "pluginPlatform.updateBlockedByConnections",
+    params: { labels: "Production S3, Local storage" },
+  },
+  {
+    name: "plugin update waits for active operations",
+    message: "Plugin update blocked by active operations. Please wait for them to finish.",
+    key: "pluginPlatform.updateBlockedByOperations",
+  },
+  {
+    name: "connection admission waits for plugin update",
+    message: "Plugin update is in progress. Please try again after it finishes.",
+    key: "pluginPlatform.updateInProgress",
+  },
+  {
+    name: "DuckDB draining",
+    message: "The previous DuckDB query is still stopping. Please try again shortly.",
+    key: "editor.duckdbDraining",
+  },
+  {
     name: "agent driver missing",
     message: "agent driver mysql is not installed",
     key: "connection.driverNotInstalled",

@@ -83,18 +83,27 @@ const taggedAiCliErrorKeys: Record<string, string> = {
 };
 
 const exactMessageKeys: Record<string, string> = {
+  // No Go producer today, but the plugin update UI is built around these
+  // messages (useComponentUpdates classifies blocked updates by them and the
+  // batch panel spec pins the translations), so the entries stay until that
+  // blocker flow itself is migrated or retired.
+  "Plugin update is in progress. Please try again after it finishes.": "pluginPlatform.updateInProgress",
+  "Plugin update blocked by active operations. Please wait for them to finish.": "pluginPlatform.updateBlockedByOperations",
   [PHOENIX_DRIVER_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
   [PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
 };
 
-// This catalog is audited against the Go/Java backends (2026-10): every pattern
-// below has a live producer in internal/, agents/, or the frontend itself.
-// Rust-era wordings whose producers were deleted with the Rust workspace were
-// removed; do not re-add a pattern without naming its current producer.
+// This catalog is audited against the Go/Java backends (2026-10): every entry
+// below either has a live producer in internal/, agents/, or the frontend
+// itself, or is a contract a live UI flow still pins (noted per entry).
+// Rust-era wordings with neither a producer nor a consumer were removed; do
+// not re-add an entry without naming its producer or consuming flow.
 const patterns: [RegExp, string][] = [
   // Plugin updates (internal/server/plugins_marketplace.go, plugins_package.go)
   [/^Plugin update source changed/, "pluginPlatform.updateSourceChangeRequired"],
   [/^Plugin downgrade requires explicit rollback$/, "pluginPlatform.updateDowngradeRejected"],
+  // Same retained-contract note as the exact plugin messages above.
+  [/^Plugin update blocked by active connections: ([\s\S]+)$/, "pluginPlatform.updateBlockedByConnections"],
 
   // Driver / JRE management (internal/agent/store.go)
   [/^agent driver (.+?) is not installed$/, "connection.driverNotInstalled"],
@@ -113,6 +122,10 @@ const patterns: [RegExp, string][] = [
   // cursor has expired (agents/drivers/mongodb MongoAgent.java).
   [/^(?:Agent RPC error \(-?\d+\): )?Find cursor not found$/, "mongo.import.legacyCursorInvalid"],
 
+  // DuckDB connections remain a supported frontend connection type and the
+  // sidebar export flow's spec pins this draining message's translation.
+  [/^The previous DuckDB query is still stopping\. Please try again shortly\.$/, "editor.duckdbDraining"],
+
   // Filesystem open/reveal failures surface in this shape.
   [/^file does not exist: (.+)$/, "common.fileNotFound"],
 ];
@@ -120,6 +133,7 @@ const patterns: [RegExp, string][] = [
 // Named placeholders for each pattern's capture groups, in capture order.
 // A bare string is shorthand for a single capture group.
 const paramNames: Record<string, string | string[]> = {
+  "pluginPlatform.updateBlockedByConnections": "labels",
   "connection.driverNotInstalled": "driver",
   "connection.jreNotInstalled": "jre",
   "common.fileNotFound": "path",
