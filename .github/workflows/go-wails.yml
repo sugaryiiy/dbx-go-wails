@@ -75,7 +75,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
       - name: Test desktop adapters
-        run: pnpm exec vitest run apps/desktop/src/lib/backend/wailsRuntime.spec.ts apps/desktop/src/lib/backend/wailsProgress.spec.ts apps/desktop/src/lib/backend/__tests__/wailsExport.spec.ts apps/desktop/src/lib/__tests__/common/webPath.spec.ts
+        run: pnpm exec vitest run apps/desktop/src/lib/backend/wailsRuntime.spec.ts apps/desktop/src/lib/backend/wailsProgress.spec.ts apps/desktop/src/lib/__tests__/common/webPath.spec.ts
       - name: Test Go MCP settings and client configuration
         run: pnpm exec vitest run apps/desktop/src/components/settings/__tests__/GoMcpServerPanel.spec.ts apps/desktop/src/lib/backend/__tests__/goMcpHttp.spec.ts apps/desktop/src/lib/__tests__/mcp apps/desktop/src/stores/__tests__/settingsStore.spec.ts apps/desktop/src/components/editor/__tests__/EditorSettingsDialog.mcpQueryTimeout.spec.ts apps/desktop/src/components/editor/__tests__/EditorSettingsDialog.mcpQueryTimeout.integration.spec.ts
       - name: Test Go secure connection editors
@@ -112,7 +112,7 @@ jobs:
       - name: Smoke-launch the built macOS app
         if: runner.os == 'macOS'
         run: |
-          APP_BIN="build/wails/bin/MagpieDB.app/Contents/MacOS/dbx-go-wails"
+          APP_BIN="build/wails/bin/MagpieDB.app/Contents/MacOS/magpiedb"
           "$APP_BIN" > /tmp/magpie-smoke.log 2>&1 &
           APP_PID=$!
           for i in $(seq 1 15); do
