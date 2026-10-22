@@ -18,6 +18,23 @@ env:
   GOFLAGS: -mod=mod
 
 jobs:
+  frontend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+      - run: pnpm --filter dbx... install --frozen-lockfile --force
+      - name: Check generated connection types are in sync
+        run: node scripts/sync-connection-types.mjs --check
+      - name: Run the full desktop test suite
+        run: pnpm exec vitest run apps/desktop/src
+
   backend:
     strategy:
       fail-fast: false
@@ -92,3 +109,31 @@ jobs:
         with:
           name: dbx-go-${{ runner.os }}
           path: build/wails/bin/
+      - name: Smoke-launch the built macOS app
+        if: runner.os == 'macOS'
+        run: |
+          APP_BIN="build/wails/bin/MagpieDB.app/Contents/MacOS/dbx-go-wails"
+          "$APP_BIN" > /tmp/magpie-smoke.log 2>&1 &
+          APP_PID=$!
+          for i in $(seq 1 15); do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              echo "MagpieDB exited during the 15s smoke window"
+              cat /tmp/magpie-smoke.log
+              exit 1
+            fi
+            sleep 1
+          done
+          kill "$APP_PID" 2>/dev/null || true
+          echo "MagpieDB stayed alive for the 15s smoke window"
+      - name: Package the macOS disk image
+        if: runner.os == 'macOS'
+        run: python3 scripts/package-go-macos.py --tag ci-${{ github.sha }} --output build/release/MagpieDB.dmg
+      - name: Upload the macOS disk image
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MagpieDB-macos-dmg
+          path: |
+            build/release/MagpieDB.dmg
+            build/release/MagpieDB.dmg.sha256
+            build/release/MagpieDB.dmg.manifest.json
