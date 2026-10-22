@@ -5719,6 +5719,16 @@ function isPendingJoinKeywordContext(context: SqlCompletionContext): boolean {
   return !context.prefix && context.preferredKeywords.includes("JOIN") && !!context.tableTriggerWord && JOIN_MODIFIERS.has(context.tableTriggerWord);
 }
 
+// Statement suggestions (keywords, and statement snippets above them) rank
+// ahead of tables, which rank ahead of functions. Tables carry a +1000 base
+// and functions +300/+900, so statement-leading keywords need a base boost
+// above those for the group order to hold at equal match quality. The boost
+// is limited to keywords that can open a statement: mid-expression, a
+// function whose name is being typed (e.g. UNIX_TIMESTAMP for "uni") must
+// still outrank a clause keyword such as UNION.
+const KEYWORD_BASE_BOOST = 2000;
+const STATEMENT_LEADING_KEYWORDS = new Set(["select", "with", "insert", "update", "delete", "merge", "replace", "create", "alter", "drop", "truncate", "call", "exec", "execute", "grant", "revoke", "set", "begin", "commit", "rollback", "show", "explain", "describe", "use", "values"]);
+
 function buildKeywordItems(prefix: string, context: SqlCompletionContext, databaseType?: DatabaseType, keywordCase?: SqlKeywordCase): SqlCompletionItem[] {
   const isDml = context.statementKind === "select" || context.statementKind === "insert" || context.statementKind === "update" || context.statementKind === "delete";
   const showDdl = !isDml || context.suggestTables;
@@ -5735,10 +5745,11 @@ function buildKeywordItems(prefix: string, context: SqlCompletionContext, databa
     .map((keyword) => {
       const base = computeBoost(keyword, prefix);
       const freqBoost = HIGH_FREQUENCY_KEYWORDS.has(keyword) ? 100 : 0;
+      const statementBoost = STATEMENT_LEADING_KEYWORDS.has(keyword.toLowerCase()) ? KEYWORD_BASE_BOOST : 0;
       return {
         label: applySqlKeywordCase(keyword, keywordCase),
         type: "keyword" as const,
-        boost: base + freqBoost,
+        boost: base + statementBoost + freqBoost,
       };
     });
 }
@@ -5908,7 +5919,15 @@ function compareCompletionItems(left: SqlCompletionItem, right: SqlCompletionIte
 }
 
 function getTypePriorityBoost(type: SqlCompletionItem["type"]): number {
+  // Keywords rank ahead of schemas and functions here; their lead over
+  // tables is carried by the base boost in buildKeywordItems, since this
+  // priority also has to leave room for expression-context functions and
+  // qualified column suggestions to stay on top in their own contexts.
   switch (type) {
+    case "keyword":
+      return 120;
+    case "snippet":
+      return 40;
     case "column":
       return 180;
     case "table":
@@ -5921,10 +5940,6 @@ function getTypePriorityBoost(type: SqlCompletionItem["type"]): number {
       return 220;
     case "function":
       return 90;
-    case "snippet":
-      return 40;
-    case "keyword":
-      return 0;
   }
 }
 
