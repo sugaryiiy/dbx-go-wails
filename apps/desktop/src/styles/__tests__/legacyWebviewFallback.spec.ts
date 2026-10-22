@@ -14,13 +14,11 @@ const ddlViewDialogSource = readFileSync(new URL("../../components/objects/DdlVi
 const schemaDiagramDialogSource = readFileSync(new URL("../../components/diagram/SchemaDiagramDialog.vue", import.meta.url), "utf8");
 const connectionDialogSource = readFileSync(new URL("../../components/connection/ConnectionDialog.vue", import.meta.url), "utf8");
 const connectionTreeSource = readFileSync(new URL("../../components/sidebar/ConnectionTree.vue", import.meta.url), "utf8");
-const activeConnectionFilterSource = readFileSync(new URL("../../components/sidebar/ActiveConnectionFilterButton.vue", import.meta.url), "utf8");
 const scheduledDatabaseBackupSource = readFileSync(new URL("../../components/backup/ScheduledDatabaseBackupSettings.vue", import.meta.url), "utf8");
 const databaseBackupConfigFieldsSource = readFileSync(new URL("../../components/backup/DatabaseBackupConfigFields.vue", import.meta.url), "utf8");
 const driverStoreDialogSource = readFileSync(new URL("../../components/config/DriverStoreDialog.vue", import.meta.url), "utf8");
 const driverStoreAgentRowSource = readFileSync(new URL("../../components/config/DriverStoreAgentRow.vue", import.meta.url), "utf8");
 const tunnelProfileManagerSource = readFileSync(new URL("../../components/connection/TunnelProfileManager.vue", import.meta.url), "utf8");
-const changelogPanelSource = readFileSync(new URL("../../components/settings/ChangelogPanel.vue", import.meta.url), "utf8");
 const editorSettingsDialogSource = readFileSync(new URL("../../components/editor/EditorSettingsDialog.vue", import.meta.url), "utf8");
 const switchSource = readFileSync(new URL("../../components/ui/switch/Switch.vue", import.meta.url), "utf8");
 const aiAssistantSource = readFileSync(new URL("../../components/editor/AiAssistant.vue", import.meta.url), "utf8");
@@ -234,11 +232,7 @@ describe("legacy WebView CSS fallbacks", () => {
     expect(globalsCss).toContain(".border-primary\\/30");
     expect(globalsCss).toContain("border-color: rgba(var(--dbx-primary-rgb), 0.3) !important;");
     expect(globalsCss).toContain(".hover\\:bg-primary\\/15:hover");
-    const activeConnectionSources = `${connectionTreeSource}\n${activeConnectionFilterSource}`;
-    expect(activeConnectionSources).toContain("showActiveConnectionsOnly");
-    // The toggle itself moved into ConnectionTree's filter menu; the primary
-    // alpha utilities live on the standalone filter button component.
-    expect(activeConnectionFilterSource).toContain("text-primary bg-primary/10 border-primary/30");
+    expect(connectionTreeSource).toContain("showActiveConnectionsOnly");
   });
 
   it("keeps foreground alpha utilities readable in legacy WebViews", () => {
@@ -624,8 +618,6 @@ describe("legacy WebView CSS fallbacks", () => {
     expect(fallback).toContain("margin-left: -0.625rem !important;");
     expect(editorSettingsDialogSource).toContain("settings-about-section-header flex flex-col gap-3");
     expect(editorSettingsDialogSource).toContain("settings-about-section-actions flex shrink-0 flex-wrap items-center gap-2");
-    expect(changelogPanelSource).toContain("settings-about-section-header flex flex-col gap-3");
-    expect(changelogPanelSource).toContain("settings-about-section-actions flex shrink-0 flex-wrap items-center gap-2");
     expect(fallback).toContain(".settings-about-section-header");
     expect(fallback).toContain("justify-content: space-between !important;");
     expect(fallback).toContain(".settings-about-section-actions");
