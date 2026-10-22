@@ -1,19 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import {
-  groupMcpScopeConnections,
-  isMcpPolicyMutationBlocked,
-  matchesMcpSearchQuery,
-  MCP_CAPABILITY_ROWS,
-  MCP_EXECUTION_MODE_COLUMNS,
-  MCP_TOOL_OPTIONS,
-  mcpExecutionModeFromPolicy,
-  mcpPolicyFieldsForExecutionMode,
-  toggleMcpAllowedConnectionId,
-  toggleMcpAllowedToolName,
-  updateMcpAllowedConnectionIds,
-} from "@/lib/mcp/mcpPolicySelection";
+import { groupMcpScopeConnections, isMcpPolicyMutationBlocked, matchesMcpSearchQuery, MCP_CAPABILITY_ROWS, MCP_EXECUTION_MODE_COLUMNS, mcpExecutionModeFromPolicy, mcpPolicyFieldsForExecutionMode, toggleMcpAllowedConnectionId, updateMcpAllowedConnectionIds } from "@/lib/mcp/mcpPolicySelection";
 
 const settingsDialogSource = readFileSync(new URL("../../../components/editor/EditorSettingsDialog.vue", import.meta.url), "utf8");
 
@@ -81,43 +69,6 @@ describe("MCP policy connection selection", () => {
   });
 });
 
-describe("MCP tool permission selection", () => {
-  it("keeps the Salesforce tools individually switchable, writes included", () => {
-    expect(MCP_TOOL_OPTIONS.filter((tool) => tool.name.startsWith("dbx_salesforce_")).map((tool) => [tool.name, tool.labelKey])).toEqual([
-      ["dbx_salesforce_current_user", "settings.mcpToolSalesforceCurrentUser"],
-      ["dbx_salesforce_prepare_write", "settings.mcpToolSalesforcePrepareWrite"],
-      ["dbx_salesforce_apply_write", "settings.mcpToolSalesforceApplyWrite"],
-    ]);
-
-    // An admin can expose reading (identity + SOQL) without handing over the write path.
-    const readOnlySfdc = toggleMcpAllowedToolName(null, "dbx_salesforce_apply_write", false);
-    expect(toggleMcpAllowedToolName(readOnlySfdc, "dbx_salesforce_prepare_write", false)).not.toContain("dbx_salesforce_prepare_write");
-    expect(readOnlySfdc).toContain("dbx_salesforce_current_user");
-  });
-
-  it("keeps batch execution allowed when allow-all becomes an explicit allowlist", () => {
-    const next = toggleMcpAllowedToolName(null, "dbx_send_message", false);
-
-    expect(next).toContain("dbx_execute_batch");
-    expect(next).not.toContain("dbx_send_message");
-  });
-
-  it("keeps Kafka reading independent from message sending", () => {
-    const next = toggleMcpAllowedToolName(null, "dbx_send_message", false);
-    expect(next).toContain("dbx_peek_messages");
-    expect(toggleMcpAllowedToolName(next, "dbx_peek_messages", false)).not.toContain("dbx_peek_messages");
-    expect(toggleMcpAllowedToolName([], "dbx_peek_messages", true)).toEqual(["dbx_peek_messages"]);
-  });
-
-  it("lets batch execution be enabled and disabled independently", () => {
-    expect(toggleMcpAllowedToolName(["dbx_execute_query"], "dbx_execute_batch", true)).toEqual(["dbx_execute_query", "dbx_execute_batch"]);
-    expect(toggleMcpAllowedToolName(["dbx_execute_query", "dbx_execute_batch"], "dbx_execute_batch", false)).toEqual(["dbx_execute_query"]);
-    expect(MCP_TOOL_OPTIONS.find((tool) => tool.name === "dbx_execute_batch")?.labelKey).toBe("settings.mcpToolExecuteBatch");
-    expect(settingsDialogSource.includes("GO_MCP_TOOL_NAMES.map")).toBe(true);
-    expect(settingsDialogSource.includes("toggleGoMcpAllowedToolName(mcpAllowedToolNames.value, name, allowed)")).toBe(true);
-  });
-});
-
 describe("MCP policy settings state", () => {
   it("blocks mutations while loading, saving, or displaying a load error", () => {
     expect(isMcpPolicyMutationBlocked({ loading: true, saving: false, loadError: "" })).toBe(true);
@@ -137,6 +88,8 @@ describe("MCP policy settings state", () => {
     expect(loadingStart).toBeGreaterThan(-1);
     expect(loadingStart).toBeLessThan(policyLoad);
     expect(loadingEnd).toBeGreaterThan(policyLoad);
+    expect(settingsDialogSource.includes("GO_MCP_TOOL_NAMES.map")).toBe(true);
+    expect(settingsDialogSource.includes("toggleGoMcpAllowedToolName(mcpAllowedToolNames.value, name, allowed)")).toBe(true);
   });
 });
 

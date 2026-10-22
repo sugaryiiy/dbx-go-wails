@@ -117,6 +117,3 @@ dbx-devtest-connections.json
 
 /build/wails/bin/
 /apps/desktop/src/generated/wails/
-
-# Keep upstream workflow references disabled outside workflows/.
-!.github/legacy-workflows/

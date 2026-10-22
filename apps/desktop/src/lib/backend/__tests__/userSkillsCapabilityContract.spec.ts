@@ -4,9 +4,7 @@ import { describe, expect, it } from "vitest";
 const tauri = readFileSync(new URL("../tauri.ts", import.meta.url), "utf8");
 const http = readFileSync(new URL("../http.ts", import.meta.url), "utf8");
 const api = readFileSync(new URL("../api.ts", import.meta.url), "utf8");
-const tauriRegistry = readFileSync(new URL("../../../../../../src-tauri/src/lib.rs", import.meta.url), "utf8");
-const webRegistry = readFileSync(new URL("../../../../../../crates/dbx-web/src/main.rs", import.meta.url), "utf8");
-const commandModuleSource = readFileSync(new URL("../../../../../../src-tauri/src/commands/user_skills.rs", import.meta.url), "utf8");
+const goSkills = readFileSync(new URL("../../../../../../internal/server/skills.go", import.meta.url), "utf8");
 
 function functionBody(source: string, operation: string): string {
   const start = source.indexOf(`export async function ${operation}(`);
@@ -19,21 +17,18 @@ describe("user skills transport contract", () => {
   it("routes list/read through the desktop Tauri backend", () => {
     expect(functionBody(tauri, "listUserSkills")).toContain('invoke("list_user_skills"');
     expect(functionBody(tauri, "readUserSkills")).toContain('invoke("read_user_skills"');
-    expect(tauriRegistry).toContain("commands::user_skills::list_user_skills,");
-    expect(tauriRegistry).toContain("commands::user_skills::read_user_skills,");
     expect(api).toContain('listUserSkills = forward("listUserSkills")');
     expect(api).toContain('readUserSkills = forward("readUserSkills")');
   });
 
-  it("keeps the skill service strictly read-only outside its tests", () => {
-    const production = commandModuleSource.slice(0, commandModuleSource.indexOf("#[cfg(test)]"));
-    expect(production).not.toContain("fs::write");
-    expect(production).not.toContain("fs::remove");
-    expect(production).not.toContain("fs::create_dir");
-    expect(production).not.toContain("OpenOptions");
+  it("keeps the Go skill service strictly read-only", () => {
+    expect(goSkills).not.toContain("os.WriteFile");
+    expect(goSkills).not.toContain("os.Remove");
+    expect(goSkills).not.toContain("os.MkdirAll");
+    expect(goSkills).not.toContain("os.Create(");
   });
 
-  it("uses the internal HTTP transport only inside Wails and keeps Rust Web unsupported", () => {
+  it("uses the internal HTTP transport only inside Wails, served by the Go skills endpoints", () => {
     for (const operation of ["listUserSkills", "readUserSkills"]) {
       const body = functionBody(http, operation);
       expect(body).toContain("only available in the desktop app");
@@ -41,8 +36,7 @@ describe("user skills transport contract", () => {
       expect(body.indexOf("if (!isWailsRuntime())")).toBeLessThan(body.indexOf("return post("));
       expect(body).toContain('return post("/api/ai/skills/');
     }
-    expect(webRegistry).not.toContain("user_skills");
-    expect(webRegistry).not.toContain("list_user_skills");
-    expect(webRegistry).not.toContain("read_user_skills");
+    expect(goSkills).toContain('"/api/ai/skills/list"');
+    expect(goSkills).toContain('"/api/ai/skills/read"');
   });
 });

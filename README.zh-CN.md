@@ -74,8 +74,8 @@ go test -mod=mod -race ./internal/... ./cmd/...
 go test -mod=mod -tags desktop .
 ```
 
-默认启动、构建和生效的 GitHub CI 已使用 Go/Wails。旧 Rust 源码与 `legacy:*`
-命令保留作迁移参考，旧工作流移至 `.github/legacy-workflows`，不自动运行。
+默认启动、构建和生效的 GitHub CI 已使用 Go/Wails。旧 Rust 源码、`legacy:*`
+命令与上游旧工作流已在 Go 迁移落地后移除，仍可在 git 历史中查阅。
 
 ## 来源
 

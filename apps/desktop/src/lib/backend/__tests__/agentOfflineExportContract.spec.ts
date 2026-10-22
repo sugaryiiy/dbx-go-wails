@@ -6,8 +6,6 @@ const http = readFileSync(new URL("../http.ts", import.meta.url), "utf8");
 const api = readFileSync(new URL("../api.ts", import.meta.url), "utf8");
 const driverStore = readFileSync(new URL("../../../components/config/DriverStoreDialog.vue", import.meta.url), "utf8");
 const driverStoreAgentRow = readFileSync(new URL("../../../components/config/DriverStoreAgentRow.vue", import.meta.url), "utf8");
-const tauriRegistry = readFileSync(new URL("../../../../../../src-tauri/src/lib.rs", import.meta.url), "utf8");
-const webRegistry = readFileSync(new URL("../../../../../../crates/dbx-web/src/main.rs", import.meta.url), "utf8");
 
 function functionBody(source: string, operation: string): string {
   const start = source.indexOf(`export async function ${operation}(`);
@@ -57,8 +55,6 @@ describe("offline Agent export transport contract", () => {
   it("routes preview and export through the Tauri desktop backend", () => {
     expect(functionBody(tauri, "previewAgentOfflineExport")).toContain('invoke("preview_agent_offline_export")');
     expect(functionBody(tauri, "exportAgentsOffline")).toContain('invoke("export_agents_offline", { path, driverKeys })');
-    expect(tauriRegistry).toContain("commands::agents::preview_agent_offline_export,");
-    expect(tauriRegistry).toContain("commands::agents::export_agents_offline,");
     expect(api).toContain('previewAgentOfflineExport = forward("previewAgentOfflineExport")');
     expect(api).toContain('exportAgentsOffline = forward("exportAgentsOffline")');
   });
@@ -70,9 +66,6 @@ describe("offline Agent export transport contract", () => {
       expect(body).not.toContain("post(");
       expect(body).not.toContain("fetch(");
     }
-    expect(webRegistry).not.toContain("agent-offline-export");
-    expect(webRegistry).not.toContain("preview_agent_offline_export");
-    expect(webRegistry).not.toContain("export_agents_offline");
   });
 
   it("shows export only on Desktop while preserving offline import on Desktop and Web", () => {

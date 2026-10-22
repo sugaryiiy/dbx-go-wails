@@ -1,6 +1,26 @@
 # Go + Wails 迁移状态
 
-更新：2026-10-12。
+更新：2026-10-22。
+
+## 2026-10-22 仓库清理收尾与 agents 评估
+
+Rust 工作区与 Tauri 壳删除后的收尾清理：注解类型对齐测试改对 Go 结构体
+（`internal/server/cache_annotations.go`，解码器同样启用
+DisallowUnknownFields，语义不变）；删除前端 Rust 时代的 32 工具 MCP 清单
+及其开关逻辑，设置界面实际使用的是 `goMcpPolicy` 的 20 工具清单，与 Go
+服务端注册表对齐；删除 `.github/legacy-workflows/` 与失效的
+`.github/scripts/`（仅保留 macOS MCP 签名、agents 版本维护、i18n 解析三组
+在用脚本）；删除已失效的 `build-macos-mcp` 打包脚本（其后端阶段依赖已删除
+的 Rust `dbx-web`）与 Tauri/Win7 安装器模板测试；docs-export 产物目录迁至
+`apps/desktop/src/docs-export/generated`；`wails.json` 的 productVersion 与
+`package.json` 对齐为 0.6.33。
+
+`agents/` 评估结论：**保留**。`internal/agent` 在运行时管理这套 Java 驱动，
+JDBC 类连接（Oracle、SQL Server 及多种国产数据库）依赖它，前端驱动路径与
+发布脚本也引用它，不属于可删除的遗留代码。
+
+DuckDB、TDengine：驱动源码已随瘦身删除，前端连接类型保留；如需恢复，用 Go
+原生驱动重写，不再恢复 Rust 实现。此项不作为 macOS 应用的完成标准。
 
 ## 2026-10-12 常见错误中文提示
 

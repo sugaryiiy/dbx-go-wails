@@ -1,5 +1,4 @@
 // @vitest-environment happy-dom
-import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireUpdateBarrier, assertUpdateSafe } from "../updatePreparation";
 import { openDetachedTabWindow } from "../detachedTabWindow";
@@ -45,11 +44,6 @@ function pendingLookup() {
   return resolve;
 }
 describe("detached window update exclusion", () => {
-  it("grants the capability required to remove never-shown late windows", () => {
-    const capability = JSON.parse(readFileSync("src-tauri/capabilities/default.json", "utf8"));
-    expect(capability.permissions).toContain("core:window:allow-destroy");
-  });
-
   it("blocks update preparation while the asynchronous existing-window lookup is pending", async () => {
     const resolve = pendingLookup();
     const operation = openDetachedTabWindow("one", "SQL");

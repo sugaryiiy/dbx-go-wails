@@ -87,9 +87,8 @@ go test -mod=mod -tags desktop .
 ```
 
 The active GitHub workflow validates Go on Linux/macOS/Windows and builds Wails
-on macOS. Upstream workflows are retained, disabled, in `.github/legacy-workflows`.
-Legacy Rust sources and explicit `legacy:*` scripts are migration references;
-they are not part of the Go runtime or Go build path.
+on macOS. The legacy Rust/Tauri sources and the upstream workflows were
+removed after the Go migration landed; they remain available in git history.
 
 ## Source and license
 

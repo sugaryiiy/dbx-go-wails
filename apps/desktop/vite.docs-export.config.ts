@@ -8,7 +8,7 @@ import { connectionTypesPlugin } from "./viteConnectionTypesPlugin.ts";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const normalizedRepoRoot = repoRoot.replaceAll(path.sep, "/");
-const assetsDir = path.join(repoRoot, "crates/dbx-core/assets");
+const assetsDir = path.join(__dirname, "src/docs-export/generated");
 const fontPath = path.join(__dirname, "public/fonts/geist-latin-wght-normal.woff2");
 
 function sha256(buffer: Buffer | string): string {
@@ -139,7 +139,7 @@ function exportBundlePlugin() {
 export default defineConfig({
   root: __dirname,
   // The app's public/ holds the font files this build inlines. Left on, Vite
-  // would copy all of them into crates/dbx-core/assets beside the bundle.
+  // would copy all of them into the export directory beside the bundle.
   publicDir: false,
   plugins: [connectionTypesPlugin(), vue(), tailwindcss(), exportBundlePlugin()],
   resolve: { alias: { "@": path.resolve(__dirname, "src") } },
