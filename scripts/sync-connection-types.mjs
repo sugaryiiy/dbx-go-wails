@@ -7,7 +7,6 @@ const root = resolve(import.meta.dirname, "..");
 const connectionTypeDirectory = join(root, "plugins", "connection-types");
 const connectionProfileCatalog = join(connectionTypeDirectory, "profiles", "catalog.yaml");
 const dialectDirectory = join(root, "plugins", "dialects");
-const jsonTarget = join(root, "crates", "dbx-core", "assets", "database-drivers.manifest.json");
 const typeTarget = join(root, "apps", "desktop", "src", "types", "generated", "databaseTypes.ts");
 const profileTarget = join(root, "apps", "desktop", "src", "types", "generated", "connectionProfiles.ts");
 const checkOnly = process.argv.includes("--check");
@@ -227,15 +226,6 @@ function duplicateValues(values) {
   return [...new Set(values.filter((value, index) => values.indexOf(value) !== index))];
 }
 
-function publicDescriptor(descriptor) {
-  const { schemaVersion: _schemaVersion, order: _order, rustVariant: _rustVariant, ...publicFields } = descriptor;
-  return publicFields;
-}
-
-function jsonOutput(descriptors) {
-  return `${JSON.stringify({ schemaVersion: 1, drivers: descriptors.map(publicDescriptor) }, null, 2)}\n`;
-}
-
 function typeOutput(descriptors) {
   const values = descriptors.map((descriptor) => `  "${descriptor.dbType}",`).join("\n");
   // "plugin" is the plugin-framework internal connection type: it is not a
@@ -282,7 +272,6 @@ function syncTarget(path, expected) {
 try {
   const descriptors = loadDescriptors();
   const profiles = loadConnectionProfiles(descriptors);
-  syncTarget(jsonTarget, jsonOutput(descriptors));
   syncTarget(typeTarget, typeOutput(descriptors));
   syncTarget(profileTarget, profileTypeOutput(profiles));
   console.log(`${checkOnly ? "Validated" : "Generated"} ${descriptors.length} connection type descriptors and ${profiles.length} connection profiles.`);
