@@ -1,5 +1,5 @@
 import type { DatabaseType } from "@/types/database";
-import driverManifest from "../../../../../crates/dbx-core/assets/database-drivers.manifest.json";
+import driverManifest from "../../types/generated/database-drivers.manifest.json";
 
 export type DatabaseSupportLevel = "connect" | "browse" | "understand" | "operate";
 export type DatabaseRuntimeMode = "native" | "file" | "agent" | "external";

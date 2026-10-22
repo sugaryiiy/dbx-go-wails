@@ -432,7 +432,7 @@ function loadEvent() {
 }
 
 function loadDatabaseCatalog() {
-  const manifestUrl = new URL("../../crates/dbx-core/assets/database-drivers.manifest.json", import.meta.url);
+  const manifestUrl = new URL("../../apps/desktop/src/types/generated/database-drivers.manifest.json", import.meta.url);
   const manifest = JSON.parse(fs.readFileSync(manifestUrl, "utf8"));
   return new Map(manifest.drivers.map((driver) => [driver.dbType, driver.label]));
 }

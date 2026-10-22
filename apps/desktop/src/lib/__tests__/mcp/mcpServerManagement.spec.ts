@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 import { checkMcpServerStatus, installMcpServer, uninstallMcpServer } from "@/lib/backend/http";
 import { GO_MCP_TOOL_NAMES, goMcpToolLabel, toggleGoMcpAllowedToolName } from "@/lib/mcp/goMcpPolicy";
@@ -8,6 +10,18 @@ describe("Go MCP management capabilities", () => {
     expect(goMcpToolLabel("dbx_execute_query", false)).toBe("Execute SQL query");
     expect(goMcpToolLabel("dbx_execute_batch", true)).toBe("原子批量执行 SQL");
     expect(GO_MCP_TOOL_NAMES.map((name) => goMcpToolLabel(name, true)).join(" ")).not.toMatch(/Mongo|Redis|插件/);
+  });
+
+  it("matches the tools registered by the Go MCP server", () => {
+    // Tool definitions live in mcpToolDefinitions (mcp_tools.go) and
+    // mcpObjectToolDefinitions (mcp_objects.go); every "dbx_..." string
+    // literal in those two files is a registered tool name.
+    const registered = new Set<string>();
+    for (const relative of ["internal/server/mcp_tools.go", "internal/server/mcp_objects.go"]) {
+      const source = readFileSync(new URL(`../../../../../../${relative}`, import.meta.url), "utf8");
+      for (const match of source.matchAll(/"(dbx_[a-z0-9_]+)"/g)) registered.add(match[1]);
+    }
+    expect([...GO_MCP_TOOL_NAMES].sort()).toEqual([...registered].sort());
   });
 
   it("reports the built-in service without recommending legacy packages", async () => {

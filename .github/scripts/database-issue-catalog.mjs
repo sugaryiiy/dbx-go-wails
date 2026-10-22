@@ -89,7 +89,7 @@ const supplementalDrivers = [
   { dbType: "mqtt", label: "MQTT", aliases: ["emqx", "hivemq", "mosquitto"] },
 ];
 
-const manifestUrl = new URL("../../crates/dbx-core/assets/database-drivers.manifest.json", import.meta.url);
+const manifestUrl = new URL("../../apps/desktop/src/types/generated/database-drivers.manifest.json", import.meta.url);
 const manifest = JSON.parse(fs.readFileSync(manifestUrl, "utf8"));
 const manifestDbTypes = new Set(manifest.drivers.map((driver) => driver.dbType));
 const supplementalByDbType = new Map(supplementalDrivers.map((driver) => [driver.dbType, driver]));

@@ -15,7 +15,7 @@ COPY apps/desktop/ apps/desktop/
 # regenerates the manifest and generated TS types in place.
 COPY scripts/ scripts/
 COPY plugins/ plugins/
-COPY crates/dbx-core/assets/database-drivers.manifest.json crates/dbx-core/assets/database-drivers.manifest.json
+COPY apps/desktop/src/types/generated/database-drivers.manifest.json crates/dbx-core/assets/database-drivers.manifest.json
 RUN pnpm build
 
 # Stage 2: Cross-compile Rust backend for the requested platform (native, no emulation)

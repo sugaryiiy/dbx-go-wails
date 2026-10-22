@@ -16,7 +16,6 @@ import {
 } from "@/lib/mcp/mcpPolicySelection";
 
 const settingsDialogSource = readFileSync(new URL("../../../components/editor/EditorSettingsDialog.vue", import.meta.url), "utf8");
-const mcpServerSource = readFileSync(new URL("../../../../../../crates/dbx-mcp/src/server.rs", import.meta.url), "utf8");
 
 describe("MCP execution permission selection", () => {
   it("maps the persisted policy to the three UI modes", () => {
@@ -83,12 +82,6 @@ describe("MCP policy connection selection", () => {
 });
 
 describe("MCP tool permission selection", () => {
-  it("lists every tool registered by the MCP server", () => {
-    const registeredToolNames = [...mcpServerSource.matchAll(/name\s*=\s*"(dbx_[^"]+)"/g)].map((match) => match[1]).sort();
-
-    expect(MCP_TOOL_OPTIONS.map((tool) => tool.name).sort()).toEqual(registeredToolNames);
-  });
-
   it("keeps the Salesforce tools individually switchable, writes included", () => {
     expect(MCP_TOOL_OPTIONS.filter((tool) => tool.name.startsWith("dbx_salesforce_")).map((tool) => [tool.name, tool.labelKey])).toEqual([
       ["dbx_salesforce_current_user", "settings.mcpToolSalesforceCurrentUser"],

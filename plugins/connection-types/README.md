@@ -18,7 +18,7 @@ pnpm generate:connection-types
 
 The generator updates these derived files:
 
-- `crates/dbx-core/assets/database-drivers.manifest.json`
+- `apps/desktop/src/types/generated/database-drivers.manifest.json`
 - `apps/desktop/src/types/generated/databaseTypes.ts`
 - `apps/desktop/src/types/generated/connectionProfiles.ts`
 
