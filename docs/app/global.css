@@ -22,23 +22,6 @@
     opacity 0.22s ease;
 }
 
-/* 文档页右下角赞助悬浮卡片入场动画 */
-
-@keyframes sponsor-card-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.sponsor-card-in {
-  animation: sponsor-card-in 0.3s ease-out both;
-}
-
 @theme {
   --color-landing-bg: #161616;
   --color-landing-ink: #ededf0;
@@ -1620,8 +1603,7 @@ a {
     scrollbar-width: none;
   }
 
-  .landing-testimonial-marquee::-webkit-scrollbar,
-  .landing-sponsor-grid::-webkit-scrollbar {
+  .landing-testimonial-marquee::-webkit-scrollbar {
     display: none;
   }
 
@@ -1656,24 +1638,7 @@ a {
     display: none;
   }
 
-  .landing-sponsor-grid {
-    display: flex;
-    gap: 12px;
-    margin-right: -18px;
-    margin-left: -18px;
-    padding-right: 18px;
-    padding-left: 18px;
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
-    scroll-padding-inline: 18px;
-    scroll-snap-type: inline mandatory;
-    scrollbar-width: none;
-  }
 
-  .landing-sponsor-card {
-    flex: 0 0 min(84vw, 330px);
-    scroll-snap-align: center;
-  }
 
   .landing-final-link {
     min-height: 44px;

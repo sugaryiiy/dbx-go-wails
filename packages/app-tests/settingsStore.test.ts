@@ -6,7 +6,6 @@ import { DEFAULT_TABLE_COLUMN_TEMPLATE_FIELDS } from "../../apps/desktop/src/lib
 import { DEFAULT_DATA_GRID_FONT_FAMILY, DEFAULT_UI_FONT_FAMILY, SYSTEM_UI_FONT_FAMILY } from "../../apps/desktop/src/lib/app/appFonts.ts";
 import { tableOpenPageLimit } from "../../apps/desktop/src/lib/table/tableOpenPageLimit.ts";
 import {
-  AI_PROVIDER_PARTNER_PRESETS,
   AI_PROVIDER_PRESETS,
   DEFAULT_EDITOR_SETTINGS,
   EXECUTE_MODE_CURRENT_DEFAULT_VERSION,
@@ -1042,20 +1041,8 @@ test("AI provider presets include common hosted and local providers", () => {
   assert.ok(Object.keys(AI_PROVIDER_PRESETS).indexOf("codex-cli") < Object.keys(AI_PROVIDER_PRESETS).indexOf("pi-agent-cli"));
 });
 
-test("AI partner presets reuse a supported runtime adapter", () => {
-  const jalapeno = AI_PROVIDER_PARTNER_PRESETS.find((preset) => preset.id === "jalapeno-cloud");
-
-  assert.ok(jalapeno);
-  assert.equal(jalapeno.provider, "openai-compatible");
-  assert.equal(jalapeno.endpoint, "https://api.jalapeno-cloud.ai/v1");
-  assert.ok(jalapeno.model);
-  assert.ok(jalapeno.models.some(({ name }) => name === jalapeno.model));
-  assert.equal(jalapeno.requiresApiKey, true);
-  assert.equal(jalapeno.websiteUrl, "https://www.jalapeno-cloud.ai/dbx");
-  assert.equal(jalapeno.apiKeyUrl, "https://www.jalapeno-cloud.ai/dbx");
-  assert.equal(getAiProviderPreset("openai-compatible", "https://api.jalapeno-cloud.ai/v1/").label, "Jalapeno Cloud");
-  assert.equal(getAiProviderPresetId("openai-compatible", "https://api.jalapeno-cloud.ai/v1/"), "jalapeno-cloud");
-  assert.equal(getAiProviderPreset("openai-compatible", "https://api.example.com/v1").label, "OpenAI Compatible");
+test("AI provider preset resolution returns the generic preset for a provider", () => {
+  assert.equal(getAiProviderPreset("openai-compatible").label, "OpenAI Compatible");
 });
 
 test("normalizes legacy AI config and fills provider defaults", () => {

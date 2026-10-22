@@ -2,7 +2,6 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isProxy } from "vue";
 import {
-  AI_PROVIDER_PARTNER_PRESETS,
   AI_PROVIDER_PRESETS,
   DEFAULT_CUSTOM_THEMES,
   DEFAULT_CUSTOM_THEME_COLORS,
@@ -1092,24 +1091,6 @@ describe("settingsStore AI API key normalization", () => {
     });
     expect(normalizeAiConfig({ endpoint: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4.6" }).provider).toBe("zhipu");
     expect(normalizeAiConfig({ endpoint: "https://api.z.ai/api/paas/v4", model: "glm-5.2" }).provider).toBe("zhipu");
-  });
-
-  it("provides the current partner default models", () => {
-    expect(AI_PROVIDER_PARTNER_PRESETS.find((preset) => preset.id === "jalapeno-cloud")).toMatchObject({
-      model: "GLM-5.3",
-      models: [{ name: "GLM-5.3" }, { name: "DeepSeek-V4-Pro" }, { name: "MiniMax-M3" }],
-    });
-    expect(AI_PROVIDER_PARTNER_PRESETS.find((preset) => preset.id === "hualong-ai")).toMatchObject({
-      model: "deepseek-v4.1-flash",
-      models: [{ name: "deepseek-v4.1-flash" }],
-    });
-    expect(AI_PROVIDER_PARTNER_PRESETS.find((preset) => preset.id === "aicodemirror")).toMatchObject({
-      endpoint: "https://api.aicodemirror.ai/v1",
-      provider: "openai-compatible",
-      authMethod: "bearer",
-      requiresApiKey: true,
-      websiteUrl: "https://www.aicodemirror.ai/",
-    });
   });
 
   it("uses the mainland MiniMax endpoint only for new zh-CN presets", () => {

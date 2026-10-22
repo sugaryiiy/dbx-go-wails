@@ -3313,10 +3313,10 @@ async function refreshAppSupportInfo() {
       ...new Set(
         settingsStore.aiConfigs
           .filter((config) => {
-            const preset = getAiProviderPreset(config.provider, config.endpoint);
+            const preset = getAiProviderPreset(config.provider);
             return config.endpoint.trim() && config.model.trim() && (!preset.requiresApiKey || config.apiKey.trim());
           })
-          .map((config) => getAiProviderPreset(config.provider, config.endpoint).label),
+          .map((config) => getAiProviderPreset(config.provider).label),
       ),
     ].sort();
     appSupportInfo.value = { ...info, databaseTypes, localDriverVersions, aiProviders };
@@ -5257,8 +5257,8 @@ function aiSelectProvider(presetId: string) {
   aiEditApiKey.value = "";
   aiEditAuthMethod.value = preset.authMethod;
   aiEditEndpoint.value = getAiProviderPresetDefaultEndpoint(preset, locale.value);
-  aiEditModel.value = preset.group === "partner" ? preset.model : "";
-  aiEditLegacyModels.value = preset.group === "partner" ? [...(preset.models ?? [])] : [];
+  aiEditModel.value = "";
+  aiEditLegacyModels.value = [];
   aiEditApiStyle.value = preset.apiStyle;
   aiEditCustomHeaderRows.value = [];
   aiEditSkipTlsVerify.value = false;
@@ -5289,7 +5289,7 @@ function aiEnterEditMode(configId?: string) {
     if (config) {
       aiEditConfigName.value = config.name;
       aiEditProvider.value = config.provider;
-      aiEditProviderPresetId.value = getAiProviderPresetId(config.provider, config.endpoint);
+      aiEditProviderPresetId.value = getAiProviderPresetId(config.provider);
       aiEditApiKey.value = config.apiKey;
       aiEditAuthMethod.value = config.authMethod;
       aiEditEndpoint.value = config.endpoint;
@@ -5372,7 +5372,7 @@ async function applyPendingAiConfigDeepLinkDraft() {
   aiEnterEditMode();
   aiEditConfigName.value = draft.name;
   aiEditProvider.value = draft.provider;
-  aiEditProviderPresetId.value = getAiProviderPresetId(draft.provider, draft.endpoint);
+  aiEditProviderPresetId.value = getAiProviderPresetId(draft.provider);
   aiEditApiKey.value = "";
   aiEditAuthMethod.value = draft.authMethod;
   aiEditEndpoint.value = draft.endpoint;
@@ -9250,7 +9250,7 @@ LIMIT 100;</pre
                 <div v-else class="space-y-2">
                   <div v-for="config in displayedAiConfigs" :key="config.id" class="flex items-center justify-between rounded-md border p-3" :class="{ 'border-primary bg-primary/5': config.isDefault }">
                     <div class="flex items-center gap-3">
-                      <AiProviderLogo :provider="config.provider" :label="getAiProviderPreset(config.provider, config.endpoint).label" :icon-slug="getAiProviderPreset(config.provider, config.endpoint).iconSlug" :icon-path="getAiProviderPreset(config.provider, config.endpoint).iconPath" />
+                      <AiProviderLogo :provider="config.provider" :label="getAiProviderPreset(config.provider).label" :icon-slug="getAiProviderPreset(config.provider).iconSlug" :icon-path="getAiProviderPreset(config.provider).iconPath" />
                       <div>
                         <div class="flex items-center gap-2">
                           <span class="text-sm font-medium">{{ config.name }}</span>
@@ -9259,7 +9259,7 @@ LIMIT 100;</pre
                           </Badge>
                         </div>
                         <div class="text-xs text-muted-foreground">
-                          {{ getAiProviderPreset(config.provider, config.endpoint).label }}
+                          {{ getAiProviderPreset(config.provider).label }}
                         </div>
                       </div>
                     </div>

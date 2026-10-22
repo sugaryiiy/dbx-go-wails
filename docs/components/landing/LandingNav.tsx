@@ -15,7 +15,6 @@ const i18n = {
     plugins: "Plugins",
     changelog: "Changelog",
     community: "Community",
-    sponsors: "Sponsors",
     contributors: "Contributors",
     drivers: "Offline Drivers",
     langLabel: "Switch language",
@@ -29,7 +28,6 @@ const i18n = {
     plugins: "插件",
     changelog: "更新日志",
     community: "交流群",
-    sponsors: "赞助商",
     contributors: "贡献者",
     drivers: "离线驱动",
     langLabel: "切换语言",
@@ -39,7 +37,7 @@ const i18n = {
   },
 };
 
-export function LandingNav({ lang, active }: { lang: DocsLang; active?: "home" | "databases" | "changelog" | "community" | "issue" | "sponsors" | "contributors" | "drivers" | "plugins" | "privacy" }) {
+export function LandingNav({ lang, active }: { lang: DocsLang; active?: "home" | "databases" | "changelog" | "community" | "issue" | "contributors" | "drivers" | "plugins" | "privacy" }) {
   const ref = useRef<HTMLElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const t = i18n[lang];
@@ -50,7 +48,6 @@ export function LandingNav({ lang, active }: { lang: DocsLang; active?: "home" |
     changelog: `/${otherLang}/changelog`,
     community: `/${otherLang}/community`,
     issue: `/${otherLang}/issue`,
-    sponsors: `/${otherLang}/sponsors`,
     contributors: `/${otherLang}/contributors`,
     drivers: `/${otherLang}/drivers`,
     privacy: `/${otherLang}/privacy`,
@@ -62,7 +59,6 @@ export function LandingNav({ lang, active }: { lang: DocsLang; active?: "home" |
     { id: "plugins", href: `/${lang}/plugins`, label: t.plugins, tabletHidden: false },
     { id: "changelog", href: `/${lang}/changelog`, label: t.changelog, tabletHidden: false },
     { id: "community", href: `/${lang}/community`, label: t.community, tabletHidden: false },
-    { id: "sponsors", href: `/${lang}/sponsors`, label: t.sponsors, tabletHidden: true },
     { id: "contributors", href: `/${lang}/contributors`, label: t.contributors, tabletHidden: true },
     { id: "drivers", href: `/${lang}/drivers`, label: t.drivers, tabletHidden: false },
   ] as const;
