@@ -1,29 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  invoke: vi.fn(),
-}));
-
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: mocks.invoke,
-}));
-
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(),
-}));
-
-describe("listDialectDataTypes backend adapters", () => {
+describe("listDialectDataTypes backend adapter", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
-  });
-
-  it("uses the Tauri dialect command", async () => {
-    mocks.invoke.mockResolvedValue(["INTEGER", "TEXT"]);
-    const { listDialectDataTypes } = await import("@/lib/backend/tauri");
-
-    await expect(listDialectDataTypes("PostgreSQL")).resolves.toEqual(["INTEGER", "TEXT"]);
-    expect(mocks.invoke).toHaveBeenCalledWith("list_dialect_data_types", { dialectName: "PostgreSQL" });
   });
 
   it("uses the matching Web dialect route", async () => {

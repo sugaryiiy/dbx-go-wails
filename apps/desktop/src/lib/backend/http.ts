@@ -4,7 +4,7 @@ import type { UserSkillRootSettings, UserSkillsListResult, UserSkillsReadResult 
 import type { SampleWorkspace } from "@/types/workspace";
 import type { ConnectionContentSearchRequest, ObjectContentSearchRequest, ObjectContentSearchMatch, SavedQueryContentSearchMatch, ContentSearchResult } from "@/lib/globalSearch/contentSearchTypes";
 import type { DatabaseBackupCommand, DatabaseBackupBackgroundStatus } from "@/lib/backup/backgroundDatabaseBackup";
-import type { PluginUiStorageItemRef, SyncCatalogItem, SyncSelection, SyncSnapshotCatalog } from "@/lib/backend/backendTypes";
+import type { LocalBackupExportSummary, LocalBackupImportResult, PluginUiStorageItemRef, SyncCatalogItem, SyncSelection, SyncSnapshotCatalog } from "@/lib/backend/backendTypes";
 
 export function databaseBackupCommand<T = unknown>(command: DatabaseBackupCommand): Promise<T> {
   return post("/api/database-backups", command);
@@ -1431,7 +1431,7 @@ export async function collectDocsSnapshot(connectionId: string, database: string
 }
 
 // HTTP snapshot transport is request/response; its progress remains indeterminate.
-export async function collectDocsSnapshotForExport(connectionId: string, database: string, schemas: string[], tables: string[], _onProgress: (progress: import("./tauri").DocsCollectProgress) => void): Promise<SchemaSnapshot> {
+export async function collectDocsSnapshotForExport(connectionId: string, database: string, schemas: string[], tables: string[], _onProgress: (progress: import("./backendTypes").DocsCollectProgress) => void): Promise<SchemaSnapshot> {
   return post("/api/docs/snapshot", { connectionId, database, schemas, tables, projectName: database, maxConcurrentTables: 2 });
 }
 
@@ -2670,15 +2670,15 @@ export async function cloudSyncLocalCatalog(editorSettings?: unknown): Promise<S
   return post("/api/cloud-sync/catalog/local", { editorSettings });
 }
 
-export async function localBackupExport(): Promise<never> {
+export async function localBackupExport(_path: string, _editorSettings: unknown, _secretsPassphrase: string | undefined, _selection: SyncSelection): Promise<LocalBackupExportSummary> {
   throw new Error("Local backup is available only in MagpieDB Desktop.");
 }
 
-export async function localBackupInspect(): Promise<never> {
+export async function localBackupInspect(_path: string, _secretsPassphrase?: string): Promise<SyncSnapshotCatalog> {
   throw new Error("Local backup is available only in MagpieDB Desktop.");
 }
 
-export async function localBackupImport(): Promise<never> {
+export async function localBackupImport(_path: string, _secretsPassphrase: string | undefined, _restoreSecrets: boolean, _selection: SyncSelection): Promise<LocalBackupImportResult> {
   throw new Error("Local backup is available only in MagpieDB Desktop.");
 }
 
@@ -4063,13 +4063,13 @@ export async function etcdHistory(
 export async function etcdStatus(connectionId: string): Promise<KvStatusResponse> {
   return post("/api/etcd/status", { connectionId });
 }
-export async function etcdPreflight(connectionId: string, action: string, params: Record<string, unknown>): Promise<import("./tauri").EtcdPreflightResponse> {
+export async function etcdPreflight(connectionId: string, action: string, params: Record<string, unknown>): Promise<import("./backendTypes").EtcdPreflightResponse> {
   return post("/api/etcd/preflight", { connectionId, request: { action, params } });
 }
-export async function etcdCompact(connectionId: string, revision: KvInt64, approval: import("./tauri").EtcdDangerousApproval): Promise<{ revision: KvInt64 }> {
+export async function etcdCompact(connectionId: string, revision: KvInt64, approval: import("./backendTypes").EtcdDangerousApproval): Promise<{ revision: KvInt64 }> {
   return post("/api/etcd/compact", { connectionId, revision, ...approval });
 }
-export async function etcdDefrag(connectionId: string, endpoints: string[], approval: import("./tauri").EtcdDangerousApproval): Promise<EtcdDefragResponse> {
+export async function etcdDefrag(connectionId: string, endpoints: string[], approval: import("./backendTypes").EtcdDangerousApproval): Promise<EtcdDefragResponse> {
   return post("/api/etcd/defrag", { connectionId, endpoints, ...approval });
 }
 export async function etcdWatchStart(connectionId: string, request: EtcdWatchStartRequest): Promise<EtcdWatchStartResponse> {
@@ -4084,10 +4084,10 @@ export async function etcdWatchStop(connectionId: string, watchId: string): Prom
 export async function etcdLeaseList(connectionId: string, limit = 100, continuation?: string | null): Promise<EtcdLeaseListResponse> {
   return post("/api/etcd/lease/list", { connectionId, limit, continuation: continuation ?? null });
 }
-export async function etcdLeaseCall<T = unknown>(connectionId: string, operation: "get" | "grant" | "keepalive" | "revoke", params: Record<string, unknown>, approval?: import("./tauri").EtcdDangerousApproval): Promise<T> {
+export async function etcdLeaseCall<T = unknown>(connectionId: string, operation: "get" | "grant" | "keepalive" | "revoke", params: Record<string, unknown>, approval?: import("./backendTypes").EtcdDangerousApproval): Promise<T> {
   return post("/api/etcd/lease/call", { connectionId, operation, params, ...approval });
 }
-export async function etcdAuthCall<T = unknown>(connectionId: string, operation: string, params: Record<string, unknown>, approval?: import("./tauri").EtcdDangerousApproval): Promise<T> {
+export async function etcdAuthCall<T = unknown>(connectionId: string, operation: string, params: Record<string, unknown>, approval?: import("./backendTypes").EtcdDangerousApproval): Promise<T> {
   return post("/api/etcd/auth/call", { connectionId, operation, params, ...approval });
 }
 
@@ -5596,7 +5596,7 @@ export * from "@/lib/backend/mqtt-http";
 // Plugin local file streaming (native dialogs / OS drops are Tauri-only)
 // ---------------------------------------------------------------------------
 
-import type { PluginDroppedFilesResult, PluginLocalFileChunk, PluginLocalFileHandle, PluginLocalFileWriteResult } from "./tauri";
+import type { PluginDroppedFilesResult, PluginLocalFileChunk, PluginLocalFileHandle, PluginLocalFileWriteResult } from "./backendTypes";
 
 export async function openDroppedPluginLocalFiles(_pluginId: string, _paths: string[]): Promise<PluginDroppedFilesResult> {
   throw new Error("Plugin local file access is not available in the web backend");

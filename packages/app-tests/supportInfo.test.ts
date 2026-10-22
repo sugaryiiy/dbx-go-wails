@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "vitest";
 import { buildAppSupportInfoRows, formatAppSupportInfoForClipboard, formatSupportInfoOperatingSystem, normalizeSupportInfoVersion, windowsMarketingName } from "../../apps/desktop/src/lib/app/supportInfo.ts";
 import type { AppSupportInfoLabels } from "../../apps/desktop/src/lib/app/supportInfo.ts";
-import type { AppSupportInfo } from "../../apps/desktop/src/lib/backend/tauri.ts";
+import type { AppSupportInfo } from "../../apps/desktop/src/lib/backend/backendTypes.ts";
 
 const labels: AppSupportInfoLabels = {
   appVersion: "DBX Version",

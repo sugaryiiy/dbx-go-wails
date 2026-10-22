@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startQueryResultExport } from "../http";
-import type { QueryResultExportRequest, TableExportProgress } from "../tauri";
+import type { QueryResultExportRequest, TableExportProgress } from "../backendTypes";
 
 afterEach(() => vi.unstubAllGlobals());
 

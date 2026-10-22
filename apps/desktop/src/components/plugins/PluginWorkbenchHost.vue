@@ -103,18 +103,18 @@ function resolveAiGenerationConfirm(allowed: boolean): void {
 }
 
 const aiCompletion = createPluginAiCompletion({
-  load: () => import("@/lib/backend/tauri").then((api) => api.loadAiConfigs()),
-  discover: (config) => import("@/lib/backend/tauri").then((api) => api.aiListModels(config)),
-  complete: (request) => import("@/lib/backend/tauri").then((api) => api.aiComplete(request)),
+  load: () => import("@/lib/backend/api").then((api) => api.loadAiConfigs()),
+  discover: (config) => import("@/lib/backend/api").then((api) => api.aiListModels(config)),
+  complete: (request) => import("@/lib/backend/api").then((api) => api.aiComplete(request)),
   // E1: ride the desktop streaming pipeline (ai_stream + per-session cancel
   // registry). Only wired here, so the bridge advertises aiCompletionStream
   // on desktop hosts and leaves it off elsewhere.
   stream: async (sessionId, request, onChunk) => {
-    const { aiStream } = await tauriFileApi();
+    const { aiStream } = await backendFileApi();
     await aiStream(sessionId, request, onChunk);
   },
   cancel: async (sessionId) => {
-    const { aiCancelStream } = await tauriFileApi();
+    const { aiCancelStream } = await backendFileApi();
     return await aiCancelStream(sessionId);
   },
   confirm: async (pluginName, model, preview) => {
@@ -192,10 +192,10 @@ function parseHandleId(handleId: string): { source: "tauri" | "web"; rawId: stri
   throw new Error("Unknown file handle");
 }
 
-/** Loaded lazily: the static tauri module drags side-effectful imports (i18n boot)
+/** Loaded lazily: the static backend module drags side-effectful imports (i18n boot)
  *  into specs that mock the whole backend layer. */
-async function tauriFileApi() {
-  return import("@/lib/backend/tauri");
+async function backendFileApi() {
+  return import("@/lib/backend/api");
 }
 
 // OS drops are the one flow where the renderer still names a path: the native
@@ -205,7 +205,7 @@ async function tauriFileApi() {
 // Rust side, with `truncated` flagging any cap cutoff and a `dropId` grouping
 // the entries of this one drop.
 async function openDroppedPluginFiles(pluginId: string, paths: string[]): Promise<{ dropId: string; truncated: boolean; files: PluginFileHandleMeta[] }> {
-  const { openDroppedPluginLocalFiles } = await tauriFileApi();
+  const { openDroppedPluginLocalFiles } = await backendFileApi();
   const result = await openDroppedPluginLocalFiles(pluginId, paths);
   const files = result.files.map((handle) => {
     openTauriHandles.set(handle.handleId, pluginId);
@@ -220,7 +220,7 @@ async function pickPluginFiles(pluginId: string, options: PluginPickFilesOptions
   if (isTauriRuntime()) {
     // The native dialog is opened on the Rust side: paths never round-trip
     // through renderer-controlled arguments, the handles are the only result.
-    const { pickPluginLocalFiles } = await tauriFileApi();
+    const { pickPluginLocalFiles } = await backendFileApi();
     const files: PluginFileHandleMeta[] = [];
     for (const handle of await pickPluginLocalFiles(pluginId, options.multiple === true)) {
       // Track read AND write handles: unmount must reclaim both (leaked fds
@@ -261,7 +261,7 @@ async function pickPluginFiles(pluginId: string, options: PluginPickFilesOptions
 async function readPluginFileChunkById(pluginId: string, handleId: string, offset: number, length?: number): Promise<PluginFileReadChunk> {
   const parsed = parseHandleId(handleId);
   if (parsed.source === "tauri") {
-    const { readPluginLocalFileChunk } = await tauriFileApi();
+    const { readPluginLocalFileChunk } = await backendFileApi();
     return readPluginLocalFileChunk(pluginId, parsed.rawId, offset, length);
   }
   const file = webPickedFiles.get(handleId);
@@ -282,7 +282,7 @@ function webStorageKey(pluginId: string, key: string): string {
 
 async function getPluginStorage(pluginId: string, key: string): Promise<unknown> {
   if (isTauriRuntime()) {
-    const { getPluginUiStorage } = await tauriFileApi();
+    const { getPluginUiStorage } = await backendFileApi();
     return getPluginUiStorage(pluginId, key);
   }
   const raw = localStorage.getItem(webStorageKey(pluginId, key));
@@ -291,7 +291,7 @@ async function getPluginStorage(pluginId: string, key: string): Promise<unknown>
 
 async function setPluginStorage(pluginId: string, key: string, value: unknown): Promise<void> {
   if (isTauriRuntime()) {
-    const { setPluginUiStorage } = await tauriFileApi();
+    const { setPluginUiStorage } = await backendFileApi();
     return setPluginUiStorage(pluginId, key, value);
   }
   localStorage.setItem(webStorageKey(pluginId, key), JSON.stringify(value === undefined ? null : value));
@@ -299,7 +299,7 @@ async function setPluginStorage(pluginId: string, key: string, value: unknown): 
 
 async function deletePluginStorage(pluginId: string, key: string): Promise<void> {
   if (isTauriRuntime()) {
-    const { deletePluginUiStorage } = await tauriFileApi();
+    const { deletePluginUiStorage } = await backendFileApi();
     return deletePluginUiStorage(pluginId, key);
   }
   localStorage.removeItem(webStorageKey(pluginId, key));
@@ -311,7 +311,7 @@ async function beginPluginFileSave(pluginId: string, request: { name?: string; c
     // write handle; only the suggested file name crosses the bridge. Track it
     // in openTauriHandles: a beginSave the plugin abandons must still be
     // reclaimed on unmount instead of burning the shared registry quota.
-    const { savePluginLocalFileAs } = await tauriFileApi();
+    const { savePluginLocalFileAs } = await backendFileApi();
     const handle = await savePluginLocalFileAs(pluginId, request.name || "download.bin");
     if (!handle) return null;
     openTauriHandles.set(handle.handleId, pluginId);
@@ -325,7 +325,7 @@ async function beginPluginFileSave(pluginId: string, request: { name?: string; c
 async function writePluginFileChunkById(pluginId: string, handleId: string, offset: number, bytes: Uint8Array): Promise<PluginFileWriteResult> {
   const parsed = parseHandleId(handleId);
   if (parsed.source === "tauri") {
-    const { writePluginLocalFileChunk } = await tauriFileApi();
+    const { writePluginLocalFileChunk } = await backendFileApi();
     return writePluginLocalFileChunk(pluginId, parsed.rawId, offset, encodeBytesBase64(bytes));
   }
   const buffer = webSaveBuffers.get(handleId);
@@ -337,7 +337,7 @@ async function writePluginFileChunkById(pluginId: string, handleId: string, offs
 async function finishPluginFileSave(pluginId: string, handleId: string): Promise<void> {
   const parsed = parseHandleId(handleId);
   if (parsed.source === "tauri") {
-    const { closePluginLocalFile } = await tauriFileApi();
+    const { closePluginLocalFile } = await backendFileApi();
     await closePluginLocalFile(pluginId, parsed.rawId);
     // Drop local tracking only after the close succeeded: a failed flush
     // leaves the Rust entry alive, and the map is what unmount cleanup uses
@@ -367,7 +367,7 @@ async function finishPluginFileSave(pluginId: string, handleId: string): Promise
 async function closePluginFileHandleById(pluginId: string, handleId: string): Promise<void> {
   const parsed = parseHandleId(handleId);
   if (parsed.source === "tauri") {
-    const { closePluginLocalFile } = await tauriFileApi();
+    const { closePluginLocalFile } = await backendFileApi();
     await closePluginLocalFile(pluginId, parsed.rawId);
     openTauriHandles.delete(parsed.rawId);
     return;
@@ -380,7 +380,7 @@ function disposeLocalFileHandles(): void {
   // Close exactly the handles THIS instance opened, with the plugin id that
   // opened them — a sibling workbench of the same plugin keeps its own.
   for (const [handleId, pluginId] of openTauriHandles)
-    void tauriFileApi()
+    void backendFileApi()
       .then(({ closePluginLocalFile }) => closePluginLocalFile(pluginId, handleId))
       .catch(() => undefined);
   openTauriHandles.clear();
@@ -454,7 +454,7 @@ function onHostFileDrop(event: Event): void {
         // exactly these late arrivals — a closeAll here would also kill the
         // same plugin's handles in a freshly rebuilt workbench.
         const rawIds = files.map((file) => file.handleId.replace(new RegExp(`^${tauriHandlePrefix}`), ""));
-        void tauriFileApi().then(({ closePluginLocalFile }) => {
+        void backendFileApi().then(({ closePluginLocalFile }) => {
           for (const rawId of rawIds) closePluginLocalFile(pluginId, rawId).catch(() => undefined);
         });
         return;
@@ -555,8 +555,8 @@ function createBridge() {
       confirmClipboardRead: isTauriRuntime()
         ? (_pluginId, pluginName) => import("@tauri-apps/plugin-dialog").then(({ ask }) => ask(t("pluginPlatform.clipboardReadConsent", { name: pluginName }), { title: t("pluginPlatform.clipboardReadConsentTitle"), kind: "warning" }).then((allowed) => allowed === true))
         : undefined,
-      openMedia: isTauriRuntime() ? (pluginId, method, params) => tauriFileApi().then(({ openPluginMedia }) => openPluginMedia(pluginId, method, params)) : undefined,
-      closeMedia: isTauriRuntime() ? (pluginId, token) => tauriFileApi().then(({ closePluginMedia }) => closePluginMedia(pluginId, token)) : undefined,
+      openMedia: isTauriRuntime() ? (pluginId, method, params) => backendFileApi().then(({ openPluginMedia }) => openPluginMedia(pluginId, method, params)) : undefined,
+      closeMedia: isTauriRuntime() ? (pluginId, token) => backendFileApi().then(({ closePluginMedia }) => closePluginMedia(pluginId, token)) : undefined,
       pickFiles: (pluginId, options) => pickPluginFiles(pluginId, options),
       readFileChunk: (pluginId, handleId, offset, length) => readPluginFileChunkById(pluginId, handleId, offset, length),
       beginFileSave: (pluginId, request) => beginPluginFileSave(pluginId, request),

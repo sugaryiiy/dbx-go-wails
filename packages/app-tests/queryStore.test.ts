@@ -14,7 +14,7 @@ import { useQueryStore } from "../../apps/desktop/src/stores/queryStore.ts";
 import { useSavedSqlStore } from "../../apps/desktop/src/stores/savedSqlStore.ts";
 import { useSettingsStore } from "../../apps/desktop/src/stores/settingsStore.ts";
 import type { ConnectionConfig } from "../../apps/desktop/src/types/database.ts";
-import type { HistoryEntry } from "../../apps/desktop/src/lib/backend/tauri.ts";
+import type { HistoryEntry } from "../../apps/desktop/src/lib/backend/backendTypes.ts";
 import type { QueryResult } from "../../apps/desktop/src/types/database.ts";
 
 afterEach(() => {

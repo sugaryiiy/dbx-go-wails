@@ -1,21 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
-
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
 describe("offline Agent and standalone JRE import", () => {
-  it("returns separate driver and JRE counts from the desktop command", async () => {
-    const { importAgentsFromZip } = await import("../tauri");
-    mocks.invoke.mockResolvedValue({ count: 0, jreCount: 1 });
-    expect(await importAgentsFromZip("/tmp/renamed.tar.zst", "import-1")).toEqual({ count: 0, jreCount: 1 });
-    expect(mocks.invoke).toHaveBeenCalledWith("import_agents_from_zip", { path: "/tmp/renamed.tar.zst", operationId: "import-1" });
-  });
-
   it("uploads standalone JRE packages and preserves both result counts", async () => {
     const failures = [{ key: "21", is_jre: true, error: "Failed to extract JRE archive: Access is denied. (os error 5)" }];
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ count: 0, jreCount: 1, failures })));

@@ -17,14 +17,21 @@ const mocks = vi.hoisted(() => ({
   openPluginWorkbench: vi.fn(),
 }));
 
-vi.mock("@/lib/backend/tauri", () => ({
+vi.mock("@/lib/backend/api", () => ({
   openDroppedPluginLocalFiles: mocks.openDroppedPluginLocalFiles,
   readPluginLocalFileChunk: mocks.readPluginLocalFileChunk,
   writePluginLocalFileChunk: mocks.writePluginLocalFileChunk,
   closePluginLocalFile: mocks.closePluginLocalFile,
-}));
-
-vi.mock("@/lib/backend/api", () => ({
+  loadAiConfigs: vi.fn(),
+  aiListModels: vi.fn(),
+  aiComplete: vi.fn(),
+  aiStream: vi.fn(),
+  aiCancelStream: vi.fn(),
+  pickPluginLocalFiles: vi.fn(),
+  savePluginLocalFileAs: vi.fn(),
+  getPluginUiStorage: vi.fn(),
+  setPluginUiStorage: vi.fn(),
+  deletePluginUiStorage: vi.fn(),
   invokePlugin: vi.fn(),
   notifyPlugin: vi.fn(),
   sendPluginBinary: vi.fn(),

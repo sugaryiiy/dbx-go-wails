@@ -1,5 +1,4 @@
-import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
-import type * as TauriModule from "@/lib/backend/tauri";
+import type * as HttpModule from "@/lib/backend/http";
 import { appendDebugLog } from "@/lib/backend/debugLog";
 import type { AiConfigItem } from "@/types/ai";
 
@@ -7,13 +6,13 @@ import type { AiConfigItem } from "@/types/ai";
 // Lazy backend resolution (avoids top-level await)
 // ---------------------------------------------------------------------------
 
-type Backend = typeof TauriModule;
+type Backend = typeof HttpModule;
 
 let _backend: Backend | null = null;
 
 async function getBackend(): Promise<Backend> {
   if (_backend) return _backend;
-  _backend = isTauriRuntime(globalThis) ? await import("@/lib/backend/tauri") : await import("@/lib/backend/http");
+  _backend = await import("@/lib/backend/http");
   return _backend;
 }
 
@@ -22,10 +21,9 @@ async function getBackend(): Promise<Backend> {
 // ---------------------------------------------------------------------------
 
 function forward<K extends keyof Backend>(name: K): Backend[K] {
-  // SAFETY: the resolved module is one of exactly two implementations of the same
-  // surface — `http.ts` imports its request/response types from `tauri.ts` on
-  // purpose, so both transports are kept signature-compatible by construction.
-  // TypeScript cannot express that cross-module equivalence, hence the cast.
+  // SAFETY: the resolved module is `http.ts`, whose surface `Backend` is
+  // derived from directly, so the forwarded signatures match by construction.
+  // TypeScript cannot express the generic indexed call, hence the cast.
   return (async (...args: unknown[]) => {
     const startedAt = performance.now();
     const operation = String(name);
@@ -109,6 +107,17 @@ export const listActivePlugins = forward("listActivePlugins");
 export const stopPlugin = forward("stopPlugin");
 export const invokePlugin = forward("invokePlugin");
 export const invokePluginConnectionAction = forward("invokePluginConnectionAction");
+export const openDroppedPluginLocalFiles = forward("openDroppedPluginLocalFiles");
+export const pickPluginLocalFiles = forward("pickPluginLocalFiles");
+export const readPluginLocalFileChunk = forward("readPluginLocalFileChunk");
+export const writePluginLocalFileChunk = forward("writePluginLocalFileChunk");
+export const closePluginLocalFile = forward("closePluginLocalFile");
+export const savePluginLocalFileAs = forward("savePluginLocalFileAs");
+export const openPluginMedia = forward("openPluginMedia");
+export const closePluginMedia = forward("closePluginMedia");
+export const getPluginUiStorage = forward("getPluginUiStorage");
+export const setPluginUiStorage = forward("setPluginUiStorage");
+export const deletePluginUiStorage = forward("deletePluginUiStorage");
 export const notifyPlugin = forward("notifyPlugin");
 export const sendPluginBinary = forward("sendPluginBinary");
 export const listPluginFilesystemEntries = forward("listPluginFilesystemEntries");
@@ -971,7 +980,7 @@ export const loadTableVGroups = forward("loadTableVGroups");
 export const deleteTableVGroupsForConnection = forward("deleteTableVGroupsForConnection");
 
 // ---------------------------------------------------------------------------
-// Re-export all types from tauri.ts (shared between both backends)
+// Re-export all backend contract types from backendTypes.ts
 // ---------------------------------------------------------------------------
 
 export type { AiConfigItem };
@@ -1153,7 +1162,7 @@ export type {
   GlobalSearchRequest,
   GlobalSearchMatch,
   GlobalSearchSettings,
-} from "@/lib/backend/tauri";
+} from "@/lib/backend/backendTypes";
 
 // MQTT
 export const mqttGetBrokerInfo = forward("mqttGetBrokerInfo");

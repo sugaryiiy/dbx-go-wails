@@ -19,7 +19,7 @@ import { formatSqlInsert, formatTsv } from "@/lib/export/exportFormats";
 import { showSqlInsertModeDialog, type SqlExportColumnSelection, type SqlExportOptions, type SqlInsertMode } from "@/lib/export/sqlInsertMode";
 import { resolveSqlExportColumnIndexes, sqlExportColumnChoices } from "@/lib/export/sqlExportColumns";
 import { summarizeExportRows } from "@/lib/export/exportDiagnostics";
-import { appendDebugLog, appendNativeProcessMemoryLog, getBrowserMemorySnapshot, isDebugLoggingEnabled } from "@/lib/backend/debugLog";
+import { appendDebugLog, getBrowserMemorySnapshot, isDebugLoggingEnabled } from "@/lib/backend/debugLog";
 import { uuid } from "@/lib/common/utils";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { csvNullLiteralForMode } from "@/lib/export/csvNullMode";
@@ -1602,7 +1602,7 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
     await runExclusiveExport(async () => {
       const exportId = uuid();
       const exportStartedAt = performance.now();
-      const logExportStage = (stage: string, details: Record<string, unknown> = {}, sampleNativeMemory = false) => {
+      const logExportStage = (stage: string, details: Record<string, unknown> = {}) => {
         if (!isDebugLoggingEnabled()) return;
         appendDebugLog("info", `[DBX][export:sql:${stage}]`, {
           exportId,
@@ -1610,20 +1610,15 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
           ...details,
           browserMemory: getBrowserMemorySnapshot(),
         });
-        if (sampleNativeMemory) void appendNativeProcessMemoryLog(`export-sql-${stage}`, { exportId });
       };
 
-      logExportStage(
-        "start",
-        {
-          context: context.value,
-          databaseType: databaseType.value,
-          exportAllRows: rowIds === undefined,
-          requestedRowCount: rowIds?.length ?? null,
-          hasCompleteLocalResult: hasCompleteLocalResult?.value ?? null,
-        },
-        true,
-      );
+      logExportStage("start", {
+        context: context.value,
+        databaseType: databaseType.value,
+        exportAllRows: rowIds === undefined,
+        requestedRowCount: rowIds?.length ?? null,
+        hasCompleteLocalResult: hasCompleteLocalResult?.value ?? null,
+      });
       const selectedSqlExportOptions = (await showSqlInsertModeDialog({ allowSplit: rowIds === undefined && context.value === "table-data", columns: sqlExportChoices(rowIds === undefined) })) as SqlExportOptions | SqlInsertMode | null;
       if (selectedSqlExportOptions === null) {
         logExportStage("cancelled", { stage: "insert-mode-dialog" });
@@ -1653,15 +1648,11 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
 
         // Step 3: fallback — local export (Web and edge-case scenarios)
         const result = await resultToExport(rowIds, undefined, true, false);
-        logExportStage(
-          "result-ready",
-          {
-            columns: result.columns.length,
-            rows: result.rows.length,
-            values: isDebugLoggingEnabled() ? summarizeExportRows(result.rows) : undefined,
-          },
-          true,
-        );
+        logExportStage("result-ready", {
+          columns: result.columns.length,
+          rows: result.rows.length,
+          values: isDebugLoggingEnabled() ? summarizeExportRows(result.rows) : undefined,
+        });
 
         logExportStage("row-remap-start");
         const exportData = sqlInsertExportData(result, sqlExportOptions.selectedColumns);
@@ -1686,14 +1677,10 @@ export function useDataGridExport(options: UseDataGridExportOptions) {
           insertMode,
           excludeColumns: sqlExportExcludedColumns(),
         });
-        logExportStage(
-          "sql-build-done",
-          {
-            sqlChars: content.length,
-          },
-          true,
-        );
-        logExportStage("save-start", { contentChars: content.length }, true);
+        logExportStage("sql-build-done", {
+          sqlChars: content.length,
+        });
+        logExportStage("save-start", { contentChars: content.length });
         await saveTextFile(content, exportFileName(tableMeta.value?.tableName || "export", "sql", { preferFallback: true }), "SQL", "sql", { exportId, operation: "sql-insert-all" });
         logExportStage("done", { contentChars: content.length });
         toast(t("grid.exported"));

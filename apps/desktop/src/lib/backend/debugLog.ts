@@ -20,13 +20,6 @@ export interface BrowserMemorySnapshot {
   hardwareConcurrency?: number;
 }
 
-export interface NativeProcessMemorySnapshot {
-  residentBytes: number;
-  virtualBytes: number;
-  totalMemoryBytes: number;
-  usedMemoryBytes: number;
-}
-
 let installed = false;
 let originalConsole: Partial<Record<DebugLogLevel, (...args: unknown[]) => void>> = {};
 
@@ -205,17 +198,6 @@ export function getBrowserMemorySnapshot(): BrowserMemorySnapshot {
   return snapshot;
 }
 
-export async function appendNativeProcessMemoryLog(event: string, context: Record<string, unknown> = {}) {
-  if (!isDebugLoggingEnabled() || !isTauriRuntimeLike()) return;
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const memory = await invoke<NativeProcessMemorySnapshot>("get_process_memory_info");
-    appendDebugLog("info", `[DBX][native-memory:${event}]`, { ...context, ...memory });
-  } catch (error) {
-    appendDebugLog("warn", `[DBX][native-memory:${event}:error]`, { ...context, error });
-  }
-}
-
 export function setDebugLoggingEnabled(enabled: boolean) {
   safeLocalStorageSet(DEBUG_LOG_ENABLED_KEY, enabled ? "1" : "0");
   if (enabled) {
@@ -249,17 +231,6 @@ export function getDebugLogText(): string {
 export async function downloadDebugLogs() {
   const text = await getDebugLogBundleText();
   const filename = `dbx-debug-log-${formatLocalTimestampForFilename()}.txt`;
-  if (typeof window !== "undefined" && isTauriRuntimeLike()) {
-    const [{ save }, { writeTextFile }] = await Promise.all([import("@tauri-apps/plugin-dialog"), import("@tauri-apps/plugin-fs")]);
-    const path = await save({
-      defaultPath: filename,
-      filters: [{ name: "Text", extensions: ["txt", "log"] }],
-    });
-    if (!path) return false;
-    await writeTextFile(path, text);
-    return true;
-  }
-
   const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -271,22 +242,7 @@ export async function downloadDebugLogs() {
 }
 
 export async function getDebugLogBundleText(): Promise<string> {
-  const sections = [getDebugLogText()];
-  const nativeLogs = await loadNativeDebugLogs().catch((error) => `Failed to load native logs: ${formatValue(error)}`);
-  if (nativeLogs) {
-    sections.push(["", "===== Native / Tauri logs =====", nativeLogs].join("\n"));
-  }
-  return sections.join("\n");
-}
-
-async function loadNativeDebugLogs(): Promise<string> {
-  if (!isTauriRuntimeLike()) return "";
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<string>("load_native_debug_logs");
-}
-
-function isTauriRuntimeLike(): boolean {
-  return "__TAURI_INTERNALS__" in globalThis || "__TAURI__" in globalThis;
+  return getDebugLogText();
 }
 
 export function installDebugLogCapture() {

@@ -8,8 +8,7 @@ const mocks = vi.hoisted(() => ({
   upgradeAllAgents: vi.fn(),
   reinstallJre: vi.fn(),
 }));
-vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => true }));
-vi.mock("@/lib/backend/tauri", () => mocks);
+vi.mock("@/lib/backend/http", () => mocks);
 vi.mock("@/lib/backend/debugLog", () => ({ appendDebugLog: vi.fn() }));
 
 const settings = { editorSettings: { updateDownloadSource: "github" } };

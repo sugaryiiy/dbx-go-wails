@@ -1,53 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  invoke: vi.fn(),
-}));
-
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: mocks.invoke,
-}));
-
 const nsRoot = { tenant: "_rabbitmq", namespace: "/" };
-
-describe("mq client connections/channels tauri API", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it("invokes mq_list_client_connections with the namespace ref", async () => {
-    const { mqListClientConnections } = await import("@/lib/backend/mq-tauri");
-    mocks.invoke.mockResolvedValue([{ name: "192.168.1.10:51000 -> 192.168.1.126:5672", user: "jjsd", peerHost: "192.168.1.10", peerPort: 51000, state: "running", channels: 2 }]);
-
-    const result = await mqListClientConnections("conn-1", nsRoot);
-
-    expect(mocks.invoke).toHaveBeenCalledWith("mq_list_client_connections", { connectionId: "conn-1", ns: nsRoot });
-    expect(result).toHaveLength(1);
-    expect(result[0]?.peerHost).toBe("192.168.1.10");
-  });
-
-  it("invokes mq_list_client_channels with optional connection filter", async () => {
-    const { mqListClientChannels } = await import("@/lib/backend/mq-tauri");
-    mocks.invoke.mockResolvedValue([{ name: "conn (1)", state: "running", prefetch: 10, messagesUnacked: 0, consumerCount: 1 }]);
-
-    const result = await mqListClientChannels("conn-1", nsRoot, "conn");
-    expect(mocks.invoke).toHaveBeenCalledWith("mq_list_client_channels", { connectionId: "conn-1", ns: nsRoot, connection: "conn" });
-    expect(result[0]?.consumerCount).toBe(1);
-
-    await mqListClientChannels("conn-1", nsRoot);
-    expect(mocks.invoke).toHaveBeenCalledWith("mq_list_client_channels", { connectionId: "conn-1", ns: nsRoot, connection: undefined });
-  });
-
-  it("invokes mq_close_client_connection with the connection name", async () => {
-    const { mqCloseClientConnection } = await import("@/lib/backend/mq-tauri");
-    mocks.invoke.mockResolvedValue(undefined);
-
-    await mqCloseClientConnection("conn-1", nsRoot, "192.168.1.10:51000 -> 192.168.1.126:5672");
-
-    expect(mocks.invoke).toHaveBeenCalledWith("mq_close_client_connection", { connectionId: "conn-1", ns: nsRoot, name: "192.168.1.10:51000 -> 192.168.1.126:5672" });
-  });
-});
 
 describe("mq client connections/channels HTTP API", () => {
   beforeEach(() => {

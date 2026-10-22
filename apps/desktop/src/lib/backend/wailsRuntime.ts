@@ -29,9 +29,9 @@ export interface WailsApp {
   SaveFile(options: WailsFileDialogOptions): Promise<string>;
   SaveFileBytes(defaultFilename: string, contentBase64: string): Promise<string>;
   SaveQueryResultExport(exportId: string, defaultFilename: string): Promise<string>;
-  ReadExternalSQL(path: string, maxBytes: number): Promise<import("./tauri").ExternalSqlFileSnapshot>;
-  InspectExternalSQL(path: string): Promise<import("./tauri").ExternalSqlFileStatus>;
-  WriteExternalSQL(path: string, content: string, options: { expectedContentHash?: string; expectedMissing?: boolean }): Promise<import("./tauri").ExternalSqlFileWriteResult>;
+  ReadExternalSQL(path: string, maxBytes: number): Promise<import("./backendTypes").ExternalSqlFileSnapshot>;
+  InspectExternalSQL(path: string): Promise<import("./backendTypes").ExternalSqlFileStatus>;
+  WriteExternalSQL(path: string, content: string, options: { expectedContentHash?: string; expectedMissing?: boolean }): Promise<import("./backendTypes").ExternalSqlFileWriteResult>;
   SaveExternalSQL(name: string, content: string, extension: string): Promise<{ path: string; version: import("@/types/database").ExternalSqlFileVersion } | null>;
   ListSQLFiles(root: string, filter: string): Promise<import("./http").SqlFileEntry[]>;
   CreateSQLFile(root: string, directory: string, name: string): Promise<string>;

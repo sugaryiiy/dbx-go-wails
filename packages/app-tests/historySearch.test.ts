@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "vitest";
 import { historyConnectionHasSelectedDatabase } from "../../apps/desktop/src/lib/history/historySearch.ts";
-import type { HistoryConnectionFilter, HistoryDatabaseFilter } from "../../apps/desktop/src/lib/backend/tauri.ts";
+import type { HistoryConnectionFilter, HistoryDatabaseFilter } from "../../apps/desktop/src/lib/backend/backendTypes.ts";
 
 test("database selections narrow only their owning connection", () => {
   const primary: HistoryConnectionFilter = { connection_id: "conn-a", connection_name: "Primary" };

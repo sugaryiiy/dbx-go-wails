@@ -11,7 +11,7 @@ import { uuid } from "@/lib/common/utils";
 import { connectionFilePath, defaultSqliteBackupFileName, isMemorySqlitePath, sqliteBackupSourcePath } from "@/lib/connection/connectionFile";
 import { hasEnabledTransportLayers } from "@/lib/backend/connectionTransport";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
-import { revealPathInFileManager } from "@/lib/backend/tauri";
+import { revealPathInFileManager } from "@/lib/backend/api";
 import { canConfigureVisibleSchemasForTreeNode } from "@/lib/database/databaseFeatureSupport";
 import { canCloseSidebarDatabaseConnection } from "@/lib/sidebar/sidebarDatabaseOpenState";
 import { selectedConnectionDeleteTargets, selectedConnectionDisconnectTargets, selectedConnectionDuplicateTargets, selectedConnectionGroupDeleteTargets, selectedConnectionMoveTargets } from "@/lib/sidebar/sidebarConnectionSelection";

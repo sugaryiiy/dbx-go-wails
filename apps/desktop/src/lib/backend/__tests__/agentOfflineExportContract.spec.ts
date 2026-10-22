@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const tauri = readFileSync(new URL("../tauri.ts", import.meta.url), "utf8");
 const http = readFileSync(new URL("../http.ts", import.meta.url), "utf8");
 const api = readFileSync(new URL("../api.ts", import.meta.url), "utf8");
 const driverStore = readFileSync(new URL("../../../components/config/DriverStoreDialog.vue", import.meta.url), "utf8");
@@ -52,9 +51,7 @@ function buttonTagsForClick(handler: string): string[] {
 }
 
 describe("offline Agent export transport contract", () => {
-  it("routes preview and export through the Tauri desktop backend", () => {
-    expect(functionBody(tauri, "previewAgentOfflineExport")).toContain('invoke("preview_agent_offline_export")');
-    expect(functionBody(tauri, "exportAgentsOffline")).toContain('invoke("export_agents_offline", { path, driverKeys })');
+  it("forwards preview and export through the api layer", () => {
     expect(api).toContain('previewAgentOfflineExport = forward("previewAgentOfflineExport")');
     expect(api).toContain('exportAgentsOffline = forward("exportAgentsOffline")');
   });

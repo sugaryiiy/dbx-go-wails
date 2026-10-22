@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const tauri = readFileSync(new URL("../tauri.ts", import.meta.url), "utf8");
 const http = readFileSync(new URL("../http.ts", import.meta.url), "utf8");
 const api = readFileSync(new URL("../api.ts", import.meta.url), "utf8");
 const goSkills = readFileSync(new URL("../../../../../../internal/server/skills.go", import.meta.url), "utf8");
@@ -14,9 +13,7 @@ function functionBody(source: string, operation: string): string {
 }
 
 describe("user skills transport contract", () => {
-  it("routes list/read through the desktop Tauri backend", () => {
-    expect(functionBody(tauri, "listUserSkills")).toContain('invoke("list_user_skills"');
-    expect(functionBody(tauri, "readUserSkills")).toContain('invoke("read_user_skills"');
+  it("forwards list/read through the api layer", () => {
     expect(api).toContain('listUserSkills = forward("listUserSkills")');
     expect(api).toContain('readUserSkills = forward("readUserSkills")');
   });
