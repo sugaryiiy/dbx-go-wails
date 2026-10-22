@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/agent"
+	"github.com/sugaryiiy/magpiedb/internal/agent"
 )
 
 func init() {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/agent"
+	"github.com/sugaryiiy/magpiedb/internal/agent"
 )
 
 func (m *Manager) SetAgentStore(store *agent.Store) { m.mu.Lock(); m.agentStore = store; m.mu.Unlock() }

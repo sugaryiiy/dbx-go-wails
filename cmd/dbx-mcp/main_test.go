@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sugaryiiy/dbx-go-wails/internal/mcpbridge"
-	"github.com/sugaryiiy/dbx-go-wails/internal/server"
+	"github.com/sugaryiiy/magpiedb/internal/mcpbridge"
+	"github.com/sugaryiiy/magpiedb/internal/server"
 )
 
 // The helper executes the actual CLI entrypoint in a subprocess so stdout

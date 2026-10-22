@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sugaryiiy/dbx-go-wails/internal/mcpbridge"
+	"github.com/sugaryiiy/magpiedb/internal/mcpbridge"
 )
 
 // A canceled database operation may still need to close its connection and

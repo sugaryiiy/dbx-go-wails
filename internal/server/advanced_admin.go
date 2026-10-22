@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 func adminObjectKind(value string) (string, error) {

@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 // splitSQLiteDefinition separates top-level column/constraint definitions,

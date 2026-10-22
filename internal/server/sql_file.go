@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 // This deliberately recognizes only direct single-target table statements.

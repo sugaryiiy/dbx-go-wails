@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 // compare helpers normalize typed metadata and JSON request objects alike.

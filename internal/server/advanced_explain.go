@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 func advancedExplainDialect(kind string) string {

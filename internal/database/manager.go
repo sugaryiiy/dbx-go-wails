@@ -20,7 +20,7 @@ import (
 	mysql "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
-	"github.com/sugaryiiy/dbx-go-wails/internal/agent"
+	"github.com/sugaryiiy/magpiedb/internal/agent"
 	_ "modernc.org/sqlite"
 )
 

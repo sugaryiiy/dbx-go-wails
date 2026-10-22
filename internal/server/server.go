@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/agent"
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/agent"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 type Options struct {

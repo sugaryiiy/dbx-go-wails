@@ -1,4 +1,4 @@
-# DBX Go + Wails
+# MagpieDB
 
 保留 Vue 3 界面，使用 Go 主后端和 Wails 桌面壳。新的启动和构建入口不需要
 Rust、Cargo 或 Tauri，桌面应用也不需要另起后台服务。
@@ -19,7 +19,7 @@ pnpm dev:wails     # 调试构建后启动原生应用，不含热重载
 pnpm build:wails   # 构建桌面应用
 ```
 
-macOS 产物：`build/wails/bin/DBX Go.app`，要求 macOS 13+。
+macOS 产物：`build/wails/bin/MagpieDB.app`，要求 macOS 13+。
 Web 开发默认地址：`http://127.0.0.1:5174`。
 本地登录密码保存在 `.dbx-dev/go/login-password`。
 可用 `DBX_GO_PORT`、`DBX_GO_BACKEND_PORT`、`DBX_GO_DATA_DIR` 调整开发配置。
@@ -46,8 +46,8 @@ pnpm build:go
 - 可重复使用的 SQLite 示例库。
 - CSV/TSV/XLSX 参数化事务导入；CSV/XLSX/JSON/文本查询导出及进度、取消。
 - 有主键表格增删改、复制 INSERT/UPDATE 和补偿 SQL。
-- Wails 原生窗口控制、文本剪贴板、文件对话框和导出保存。
-- Go MCP：13 个数据库工具、HTTP/stdio、连接和工具授权、Token 认证及查询审计。
+- Wails 原生窗口控制、文本剪贴板、文件对话框和导出保存；macOS 菜单栏托盘，以及带未保存提醒的退出/隐藏关闭流程。
+- Go MCP：20 个数据库工具、HTTP/stdio、连接和工具授权、Token 认证及查询审计。
 
 SQLite 已做真实数据库与 HTTP 集成测试；MySQL 8.4、PostgreSQL 17 已通过直连 TLS、
 单跳/双跳 SSH 的 CRUD、回滚、只读及取消实库验证，也通过 MCP TLS 验证。

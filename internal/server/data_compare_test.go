@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 func TestDataComparisonAppliesExactDifference(t *testing.T) {

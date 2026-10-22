@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sugaryiiy/dbx-go-wails/internal/mcpbridge"
+	"github.com/sugaryiiy/magpiedb/internal/mcpbridge"
 )
 
 var objectMCPTools = []string{

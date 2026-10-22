@@ -14,8 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
-	"github.com/sugaryiiy/dbx-go-wails/internal/desktopfiles"
+	"github.com/sugaryiiy/magpiedb/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/desktopfiles"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 

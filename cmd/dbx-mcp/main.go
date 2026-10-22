@@ -12,8 +12,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/mcpbridge"
-	"github.com/sugaryiiy/dbx-go-wails/internal/server"
+	"github.com/sugaryiiy/magpiedb/internal/mcpbridge"
+	"github.com/sugaryiiy/magpiedb/internal/server"
 )
 
 func main() {

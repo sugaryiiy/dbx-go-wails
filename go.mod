@@ -1,4 +1,4 @@
-module github.com/sugaryiiy/dbx-go-wails
+module github.com/sugaryiiy/magpiedb
 
 go 1.25.0
 

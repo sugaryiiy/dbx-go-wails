@@ -1,7 +1,7 @@
 {
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "MagpieDB",
-  "outputfilename": "dbx-go-wails",
+  "outputfilename": "magpiedb",
   "frontend:dir": ".",
   "frontend:install": "",
   "frontend:build": "node node_modules/vite/bin/vite.js build --config apps/desktop/vite.config.ts --mode wails",

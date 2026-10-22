@@ -15,8 +15,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
-	"github.com/sugaryiiy/dbx-go-wails/internal/mcpbridge"
+	"github.com/sugaryiiy/magpiedb/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/mcpbridge"
 )
 
 type mcpBackend struct{ s *Server }

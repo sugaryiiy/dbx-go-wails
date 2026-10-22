@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/server"
+	"github.com/sugaryiiy/magpiedb/internal/server"
 )
 
 func main() {

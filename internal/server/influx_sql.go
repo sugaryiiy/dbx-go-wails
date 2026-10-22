@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 func influxPreviewOptions(o map[string]any, count bool) database.InfluxPreviewOptions {

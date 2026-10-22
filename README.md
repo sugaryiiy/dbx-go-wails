@@ -1,4 +1,4 @@
-# DBX Go + Wails
+# MagpieDB
 
 A Vue 3 database workbench with a native Go backend and a Wails desktop shell.
 The Go entry points run without Cargo, Rust, Tauri, or an external backend process.
@@ -19,7 +19,7 @@ pnpm dev:wails      # debug build + native launch (no hot reload)
 pnpm build:wails    # native desktop application
 ```
 
-On macOS the application is generated at `build/wails/bin/DBX Go.app` (macOS 13+).
+On macOS the application is generated at `build/wails/bin/MagpieDB.app` (macOS 13+).
 The development web UI defaults to `http://127.0.0.1:5174`; its generated local
 login password is in `.dbx-dev/go/login-password`. `DBX_GO_PORT`,
 `DBX_GO_BACKEND_PORT` and `DBX_GO_DATA_DIR` customize the development instance.
@@ -53,8 +53,9 @@ separate from both Rust DBX and any concurrently running Go instance.
 - CSV/TSV/XLSX import with transactional parameterized writes; CSV/XLSX/JSON/text
   query export, progress and cancellation.
 - Primary-key-based data grid edits, copied INSERT/UPDATE SQL and rollback SQL.
-- Native Wails window controls, text clipboard, file dialogs and export saving.
-- Go MCP with 13 database tools, Streamable HTTP/stdio, connection permissions,
+- Native Wails window controls, text clipboard, file dialogs and export saving,
+  plus a macOS menu-bar tray and a quit/hide close flow with unsaved-work prompts.
+- Go MCP with 20 database tools, Streamable HTTP/stdio, connection permissions,
   bearer tokens and query auditing. See [MCP setup](docs/go-mcp.md).
 
 SQLite has real integration and HTTP round-trip coverage. Live MySQL 8.4 and

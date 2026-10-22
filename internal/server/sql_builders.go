@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 func quoteSQLName(value, kind string) string {

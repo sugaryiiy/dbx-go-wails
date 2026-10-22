@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
-	"github.com/sugaryiiy/dbx-go-wails/internal/mcpbridge"
+	"github.com/sugaryiiy/magpiedb/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/mcpbridge"
 )
 
 var mcpObjectTypes = []string{"TABLE", "VIEW", "MATERIALIZED_VIEW", "FUNCTION", "PROCEDURE", "TRIGGER", "EVENT", "SEQUENCE"}

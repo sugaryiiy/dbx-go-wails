@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
-	"github.com/sugaryiiy/dbx-go-wails/internal/database"
+	"github.com/sugaryiiy/magpiedb/internal/database"
 )
 
 func TestMySQLObjectSourceBuildKeepsCompoundDefinition(t *testing.T) {

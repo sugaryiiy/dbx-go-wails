@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sugaryiiy/dbx-go-wails/internal/mcpbridge"
+	"github.com/sugaryiiy/magpiedb/internal/mcpbridge"
 )
 
 type MCPHTTPSettings struct {
