@@ -3,6 +3,7 @@ import { createSemanticSelectionRangeIndex, type SemanticSelectionContext, type 
 const WORD_CHARACTER = /[\p{L}\p{N}\p{M}_$]/u;
 const QUOTE_PAIRS: Readonly<Record<string, string>> = { "'": "'", '"': '"', "`": "`" };
 const BRACKET_PAIRS: Readonly<Record<string, string>> = { "(": ")", "[": "]", "{": "}" };
+const OPEN_FOR_CLOSE: Readonly<Record<string, string>> = { ")": "(", "]": "[", "}": "{" };
 const CLOSING_BRACKETS = new Set(Object.values(BRACKET_PAIRS));
 
 function addRange(ranges: SemanticSelectionRange[], from: number, to: number) {
@@ -62,7 +63,7 @@ function scanBracketRanges(doc: string, ranges: SemanticSelectionRange[]) {
       continue;
     }
     if (!CLOSING_BRACKETS.has(character)) continue;
-    const expectedOpen = Object.entries(BRACKET_PAIRS).find(([, close]) => close === character)?.[0];
+    const expectedOpen = OPEN_FOR_CLOSE[character];
     if (stack[stack.length - 1]?.open !== expectedOpen) continue;
     const opening = stack.pop();
     if (!opening) continue;
@@ -71,15 +72,25 @@ function scanBracketRanges(doc: string, ranges: SemanticSelectionRange[]) {
   }
 }
 
+function isWordCharacter(character: string): boolean {
+  const code = character.charCodeAt(0);
+  if (code < 128) {
+    // ASCII fast path: letters, digits, "_" and "$" are the only ASCII
+    // matches of WORD_CHARACTER; everything else defers to the regex.
+    return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 36;
+  }
+  return WORD_CHARACTER.test(character);
+}
+
 function scanAllWordRanges(doc: string, ranges: SemanticSelectionRange[]) {
   let index = 0;
   while (index < doc.length) {
-    if (!WORD_CHARACTER.test(doc[index] ?? "")) {
+    if (!isWordCharacter(doc[index] ?? "")) {
       index += 1;
       continue;
     }
     const start = index;
-    while (index < doc.length && WORD_CHARACTER.test(doc[index] ?? "")) index += 1;
+    while (index < doc.length && isWordCharacter(doc[index] ?? "")) index += 1;
     addRange(ranges, start, index);
   }
 }

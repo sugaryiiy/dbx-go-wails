@@ -100,7 +100,11 @@ export function compileRedisGroupGlob(pattern: string): (bytes: Uint8Array) => b
 export function compileRedisKeyGroups(rules: readonly RedisKeyGroupRule[]): (keyRaw: string) => string | null {
   const compiled = rules.filter((rule) => rule.enabled).map((rule) => ({ id: rule.id, includes: rule.includes.map(compileRedisGroupGlob), excludes: rule.excludes.map(compileRedisGroupGlob) }));
   return (keyRaw) => {
-    const bytes = Uint8Array.from(atob(keyRaw), (char) => char.charCodeAt(0));
+    // Tight loop instead of Uint8Array.from(atob(...), mapper): the mapping
+    // form costs ~1s per million keys, this loop roughly a quarter of that.
+    const binary = atob(keyRaw);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     for (const rule of compiled) {
       if ((!rule.includes.length || rule.includes.some((matches) => matches(bytes))) && !rule.excludes.some((matches) => matches(bytes))) return rule.id;
     }

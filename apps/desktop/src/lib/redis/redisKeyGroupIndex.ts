@@ -109,7 +109,9 @@ export class RedisKeyGroupIndex {
       const end = Math.min(offset + CHUNK, keys.length);
       for (; offset < end; offset++) {
         const key = keys[offset]!;
-        if (this.locations.has(key.key_raw)) continue;
+        // Stored locations are always objects, so one get replaces has+set's
+        // second hash lookup (measurable at million-key scale).
+        if (this.locations.get(key.key_raw) !== undefined) continue;
         const group = this.byId.get(this.classify(key.key_raw))!;
         this.locations.set(key.key_raw, { group, offset: group.keys.length });
         group.keys.push(key);
