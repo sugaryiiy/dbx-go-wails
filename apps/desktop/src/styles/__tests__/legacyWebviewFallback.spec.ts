@@ -236,7 +236,8 @@ describe("legacy WebView CSS fallbacks", () => {
     expect(globalsCss).toContain(".hover\\:bg-primary\\/15:hover");
     const activeConnectionSources = `${connectionTreeSource}\n${activeConnectionFilterSource}`;
     expect(activeConnectionSources).toContain("showActiveConnectionsOnly");
-    expect(connectionTreeSource).toContain("text-primary bg-primary/10 border-primary/30");
+    // The toggle itself moved into ConnectionTree's filter menu; the primary
+    // alpha utilities live on the standalone filter button component.
     expect(activeConnectionFilterSource).toContain("text-primary bg-primary/10 border-primary/30");
   });
 
