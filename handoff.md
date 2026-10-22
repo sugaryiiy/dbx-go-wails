@@ -1,3 +1,6 @@
+> ⚠️ **已过时**：本文件是 2026-07-24 从旧 Rust/Tauri 工程导出的上下文交接，
+> 内容停留在迁移早期。当前状态以 [MIGRATION.md](MIGRATION.md) 为准。
+
 # 🤝 Context Handoff
 
 ## Meta

@@ -43,6 +43,8 @@ separate from both Rust DBX and any concurrently running Go instance.
   cancellation, timeouts and basic metadata.
 - Native Redis key browsing and basic type editing, MongoDB documents/aggregation/indexes,
   and ClickHouse HTTP SQL/metadata, with TLS and SSH. See [engine support](docs/go-native-engines.md).
+- HTTP service engines — Elasticsearch, Consul, Nacos, Meilisearch and InfluxDB —
+  are handled by the Go service driver.
 - Verified TLS/mTLS, SSH chains of up to four hops and encrypted shared tunnel
   profiles. See [secure connections](docs/go-secure-connections.md).
 - PostgreSQL table/view/materialized-view structural DDL, ordered index metadata

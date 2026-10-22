@@ -40,6 +40,7 @@ pnpm build:go
 
 - SQLite、MySQL/MariaDB、PostgreSQL 的原生 Go 连接、查询、事务、取消、超时及基础元数据。
 - Redis 键浏览和基础类型编辑、MongoDB 文档/聚合/索引、ClickHouse HTTP SQL 与元数据，均支持 TLS/SSH，见 [新增数据库说明](docs/go-native-engines.md)。
+- Elasticsearch、Consul、Nacos、Meilisearch、InfluxDB 等 HTTP 服务型连接由 Go 服务驱动实现。
 - TLS/mTLS、最多 4 跳 SSH 及加密共享隧道配置，见 [安全连接说明](docs/go-secure-connections.md)。
 - PostgreSQL 普通表、视图、物化视图的结构 DDL、索引和复合外键；高级对象有明确限制。
 - 连接配置、SQL 文件、历史记录、设置及布局，加密持久化和跨进程数据目录锁。

@@ -2,6 +2,16 @@
 
 更新：2026-10-22。
 
+## 2026-10-22 改名 MagpieDB
+
+仓库由 `sugaryiiy/dbx-go-wails` 改名为 `sugaryiiy/magpiedb`，与应用名
+MagpieDB 对齐：Go 模块路径改为 `github.com/sugaryiiy/magpiedb`，Wails 产物
+二进制名改为 `magpiedb`（`.app` 仍为 MagpieDB.app），中英文 README 同步
+更新（产物路径、MCP 20 个工具、托盘与关闭流程）。运行时标识不变：
+`DBX_GO_*` / `DBX_*` 环境变量、数据目录、独立 Web 与 MCP 二进制名
+（`dbx-web`、`dbx-mcp-go`）保持原样，避免影响已有本地数据。旧仓库地址由
+GitHub 自动重定向到新地址。
+
 ## 2026-10-22 仓库清理收尾与 agents 评估
 
 Rust 工作区与 Tauri 壳删除后的收尾清理：注解类型对齐测试改对 Go 结构体
