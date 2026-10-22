@@ -49,61 +49,36 @@ const STRUCTURED_BACKEND_ERROR_KEYS = [
   "backendErrors.unknown",
 ] as const;
 
-// Reproduces the exact string crates/dbx-driver-agent/src/agent_service.rs builds on
-// Windows: `\` line continuations strip the newline plus the following indent.
-const WINDOWS_JRE_REMOVE_ERROR = [
-  "Failed to remove the old JRE directory: C:\\dbx\\jre21",
-  "Possible causes:",
-  "  - a dbx Agent / java process still holds the directory",
-  "  - antivirus software is scanning it",
-  "Close any process that may hold the directory, or restart dbx and try again.",
-  "(original error: Access is denied. (os error 5))",
-].join("\n");
-
-// Every backend message changed away from hardcoded Chinese, paired with the
-// key and params it must resolve to.
+// Every catalogued backend message, paired with the key and params it must
+// resolve to. Messages are the current Go/Java/frontend wordings; the catalog
+// audit (2026-10) removed the Rust-era wordings whose producers are gone.
 const CASES: { name: string; message: string; key: string; params?: Record<string, string> }[] = [
   {
-    name: "plugin update requires closing related connections",
-    message: "Plugin update blocked by active connections: Production S3, Local storage",
-    key: "pluginPlatform.updateBlockedByConnections",
-    params: { labels: "Production S3, Local storage" },
-  },
-  {
-    name: "plugin update waits for active operations",
-    message: "Plugin update blocked by active operations. Please wait for them to finish.",
-    key: "pluginPlatform.updateBlockedByOperations",
-  },
-  {
     name: "plugin update from a changed source needs confirmation",
-    message: "Plugin update source change requires confirmation: the offering repository, publisher, or signing key differs from the recorded install",
+    message: "Plugin update source changed or version is older; explicit allowSourceChange is required",
+    key: "pluginPlatform.updateSourceChangeRequired",
+  },
+  {
+    name: "plugin update from a changed source requires reinstall",
+    message: "Plugin update source changed; remove the old plugin before installing this source",
     key: "pluginPlatform.updateSourceChangeRequired",
   },
   {
     name: "plugin downgrade is rejected",
-    message: "Plugin downgrade to version 1.0.5 is not allowed (installed 1.1.0)",
+    message: "Plugin downgrade requires explicit rollback",
     key: "pluginPlatform.updateDowngradeRejected",
   },
   {
-    name: "connection admission waits for plugin update",
-    message: "Plugin update is in progress. Please try again after it finishes.",
-    key: "pluginPlatform.updateInProgress",
+    name: "agent driver missing",
+    message: "agent driver mysql is not installed",
+    key: "connection.driverNotInstalled",
+    params: { driver: "mysql" },
   },
   {
-    name: "Nacos ordinary user must configure managed namespaces when namespace discovery is forbidden",
-    message: "Failed to list Nacos namespaces: NACOS_ERROR[v3ManagedNamespacesRequired]: access denied",
-    key: "nacos.nacosManagedNamespacesRequired",
-  },
-  {
-    name: "Nacos ordinary user must configure managed namespaces when authorization management is forbidden",
-    message: "NACOS_ERROR[managedNamespacesRequired]: 403 Forbidden",
-    key: "nacos.nacosManagedNamespacesRequired",
-  },
-  {
-    name: "Nacos 3 managed namespace permission check failed",
-    message: 'NACOS_ERROR[managedNamespaceAccessDenied]: One or more configured namespace IDs are not readable: namespace "team-a" naming: forbidden',
-    key: "nacos.nacosManagedNamespaceAccessDenied",
-    params: { detail: 'namespace "team-a" naming: forbidden' },
+    name: "managed JRE missing",
+    message: "managed JRE 21 is not installed; install it or configure system Java",
+    key: "connection.jreNotInstalled",
+    params: { jre: "21" },
   },
   {
     name: "Apache Phoenix JDBC driver missing",
@@ -116,41 +91,9 @@ const CASES: { name: string; message: string; key: string; params?: Record<strin
     key: "connection.phoenixDriverNotInstalled",
   },
   {
-    name: "SSH TOTP prompt cancelled",
-    message: "SSH layer 1 failed: SSH keyboard-interactive authentication was cancelled",
-    key: "connection.sshTotpCancelled",
-  },
-  {
     name: "streaming export unsupported",
     message: "Streaming export is unsupported for this query. Simplify it or use a supported driver.",
     key: "exportProgress.streamingUnsupported",
-  },
-  {
-    name: "agent session missing",
-    message: "Streaming export needs a result-set session, but this driver returned no session_id.",
-    key: "exportProgress.agentSessionMissing",
-  },
-  {
-    name: "MongoDB Legacy insertMany unsupported",
-    message: "MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver",
-    key: "mongo.import.legacyInsertUnsupported",
-  },
-  {
-    // crates/dbx-core/src/data/mongodb_import_export.rs attributes a batch-level failure to a row.
-    name: "MongoDB Legacy insertMany unsupported on a located row",
-    message: "row 1: MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver",
-    key: "mongo.import.legacyInsertUnsupported",
-  },
-  {
-    name: "MongoDB Legacy partial insert",
-    message: "MongoDB Legacy Agent rejected 2 of 500 documents: E11000 duplicate key error collection: app.users",
-    key: "mongo.insert.partialFailure",
-    params: { failed: "2", total: "500", message: "E11000 duplicate key error collection: app.users" },
-  },
-  {
-    name: "MongoDB Legacy export cursor invalid",
-    message: "MongoDB Legacy Agent returned an invalid find cursor",
-    key: "mongo.import.legacyCursorInvalid",
   },
   {
     // Agent-raised messages reach the frontend through the "Agent RPC error (<code>): " envelope.
@@ -159,60 +102,15 @@ const CASES: { name: string; message: string; key: string; params?: Record<strin
     key: "mongo.import.legacyCursorInvalid",
   },
   {
-    name: "DuckDB draining",
-    message: "The previous DuckDB query is still stopping. Please try again shortly.",
-    key: "editor.duckdbDraining",
-  },
-  {
-    name: "JRE directory remove failure (Windows)",
-    message: WINDOWS_JRE_REMOVE_ERROR,
-    key: "driverStore.jreDirRemoveFailedWindows",
-    params: { path: "C:\\dbx\\jre21", error: "Access is denied. (os error 5)" },
-  },
-  {
-    name: "JRE directory remove failure (POSIX)",
-    message: "Failed to remove the old JRE directory: /home/u/.dbx/jre21 (original error: Permission denied (os error 13))",
-    key: "driverStore.jreDirRemoveFailed",
-    params: { path: "/home/u/.dbx/jre21", error: "Permission denied (os error 13)" },
-  },
-  {
-    name: "JRE still in use",
-    message: "JRE jre21 is in use by drivers: MySQL, PostgreSQL. Uninstall them first.",
-    key: "driverStore.jreInUseByDrivers",
-    params: { jre: "jre21", drivers: "MySQL, PostgreSQL" },
-  },
-  {
-    name: "offline package missing registry",
-    message: "agent-registry.json not found in the ZIP; not a valid offline driver package.",
-    key: "driverStore.offlinePackageRegistryMissing",
-  },
-  {
-    name: "driver update blocked by open connections",
-    message: "Close these database connections before updating drivers: Prod MySQL, Stage PG",
-    key: "driverStore.driverUpdateBlocked",
-    params: { labels: "Prod MySQL, Stage PG" },
-  },
-  {
     name: "GBase 8s server name mismatch",
     message: "Agent RPC error (-1): java.sql.SQLException: GBASEDBTSERVER 与 DBSERVERNAME 或 DBSERVERALIASES 不匹配。",
     key: "connection.gbaseServerMismatch",
-  },
-  {
-    name: "Kafka topic unload unsupported",
-    message: "Kafka does not support unloading topics",
-    key: "mqClients.unloadTopicUnsupportedKafka",
   },
   {
     name: "file does not exist",
     message: "file does not exist: /tmp/missing.sqlite",
     key: "common.fileNotFound",
     params: { path: "/tmp/missing.sqlite" },
-  },
-  {
-    name: "login rate limited",
-    message: "Please try again in 42s",
-    key: "auth.rateLimited",
-    params: { seconds: "42" },
   },
 ];
 
@@ -489,9 +387,9 @@ describe("backend error translation", () => {
     const t = translatorFor("zh-CN");
     const wrap = (message: string) => new BackendErrorException(message);
 
-    expect(translateBackendError(t, wrap("row 1: MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver"))).toBe(t("mongo.import.legacyInsertUnsupported"));
+    expect(translateBackendError(t, wrap("agent driver mysql is not installed"))).toBe(t("connection.driverNotInstalled", { driver: "mysql" }));
     expect(translateBackendError(t, wrap("Agent RPC error (-1): Find cursor not found"))).toBe(t("mongo.import.legacyCursorInvalid"));
-    expect(translateBackendError(t, wrap("MongoDB Legacy Agent rejected 2 of 500 documents: E11000 duplicate key"))).toBe(t("mongo.insert.partialFailure", { failed: "2", total: "500", message: "E11000 duplicate key" }));
+    expect(translateBackendError(t, wrap("Streaming export is unsupported for this query. Simplify it or use a supported driver."))).toBe(t("exportProgress.streamingUnsupported"));
   });
 
   test("keeps an explicit original detail when a structured legacy error omits detail", () => {

@@ -83,117 +83,46 @@ const taggedAiCliErrorKeys: Record<string, string> = {
 };
 
 const exactMessageKeys: Record<string, string> = {
-  "Plugin update is in progress. Please try again after it finishes.": "pluginPlatform.updateInProgress",
-  "Plugin update blocked by active operations. Please wait for them to finish.": "pluginPlatform.updateBlockedByOperations",
   [PHOENIX_DRIVER_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
   [PHOENIX_JDBC_PLUGIN_NOT_INSTALLED_ERROR]: "connection.phoenixDriverNotInstalled",
-  "DBX JDBC plugin is not installed. Install Apache Phoenix JDBC from the Driver Manager, then retry.": "connection.phoenixDriverNotInstalled",
 };
 
+// This catalog is audited against the Go/Java backends (2026-10): every pattern
+// below has a live producer in internal/, agents/, or the frontend itself.
+// Rust-era wordings whose producers were deleted with the Rust workspace were
+// removed; do not re-add a pattern without naming its current producer.
 const patterns: [RegExp, string][] = [
-  [/^Plugin update blocked by active connections: ([\s\S]+)$/, "pluginPlatform.updateBlockedByConnections"],
-  // crates/dbx-plugin-runtime provenance guard (installer.rs / marketplace.rs)
-  [/^Plugin update source change requires confirmation:/, "pluginPlatform.updateSourceChangeRequired"],
-  [/^Plugin downgrade to version .+ is not allowed/, "pluginPlatform.updateDowngradeRejected"],
-  [/^(.+?) driver is not installed\. Please install it from the Driver Manager\.$/, "connection.driverNotInstalled"],
-  [/^JRE (.+?) runtime is not installed\. Please install it from the Driver Manager\.$/, "connection.jreNotInstalled"],
-  [/^System Java runtime was not found:/, "connection.systemJavaNotFound"],
-  [/^Custom Java runtime path is empty\. Please choose a Java executable\.$/, "connection.customJavaPathEmpty"],
-  [/^Agent requires Java 21, but DBX started it with an older Java runtime\. Use DBX managed JRE 21 or select a Java 21 executable in Driver Manager\./, "connection.agentJavaTooOld"],
-  [/^JDBC plugin is not installed\. Install the optional JDBC plugin to use this connection\.$/, "connection.jdbcPluginNotInstalled"],
+  // Plugin updates (internal/server/plugins_marketplace.go, plugins_package.go)
+  [/^Plugin update source changed/, "pluginPlatform.updateSourceChangeRequired"],
+  [/^Plugin downgrade requires explicit rollback$/, "pluginPlatform.updateDowngradeRejected"],
+
+  // Driver / JRE management (internal/agent/store.go)
+  [/^agent driver (.+?) is not installed$/, "connection.driverNotInstalled"],
+  [/^managed JRE (.+?) is not installed; install it or configure system Java$/, "connection.jreNotInstalled"],
+
+  // The GBase JDBC driver reports server-name mismatches with these variables
+  // in the raw error text, which reaches the UI through the agent RPC envelope.
   [/GBASEDBTSERVER[\s\S]*DBSERVERNAME[\s\S]*DBSERVERALIASES/, "connection.gbaseServerMismatch"],
-  [/^ai\.configNameExists:(.+)$/, "ai.configNameExists"],
 
-  // Ordinary users may not enumerate namespaces or authorization data through Nacos management APIs.
-  [/NACOS_ERROR\[(?:v3ManagedNamespacesRequired|managedNamespacesRequired)\]:[\s\S]*$/, "nacos.nacosManagedNamespacesRequired"],
-  [/NACOS_ERROR\[managedNamespaceAccessDenied\]: One or more configured namespace IDs are not readable: ([\s\S]+)$/, "nacos.nacosManagedNamespaceAccessDenied"],
-
-  // Tunnel / proxy test messages
-  [/^HTTP CONNECT proxy connection successful \((\d+)\)$/, "settings.tunnelsHttpTestSuccess"],
-  [/^SOCKS5 proxy connection successful$/, "settings.tunnelsSocks5TestSuccess"],
-  [/^SSH tunnel connection successful$/, "settings.tunnelsTestSuccess"],
-  [/^Proxy host is required\.$/, "settings.tunnelsProxyHostRequired"],
-  [/^Proxy port is required\.$/, "settings.tunnelsProxyPortRequired"],
-  [/^SSH host is required\.$/, "settings.tunnelsSshHostRequired"],
-  [/^Tunnel test is not supported for HTTP tunnel profiles\.$/, "settings.tunnelsHttpTunnelUnsupported"],
-  [/^Proxy connection timed out \(([^)]+)\)$/, "settings.tunnelsProxyTimedOut"],
-  [/^Failed to connect to proxy: (.+)$/, "settings.tunnelsProxyConnectFailed"],
-  [/^Proxy handshake failed \([^)]+\): (.+)$/, "settings.tunnelsProxyHandshakeFailed"],
-  [/^Proxy handshake timed out \(([^)]+)\)$/, "settings.tunnelsProxyHandshakeTimedOut"],
-  [/^HTTP proxy CONNECT failed: (.+)$/, "settings.tunnelsHttpConnectFailed"],
-  [/^Invalid SOCKS proxy version: (\d+)$/, "settings.tunnelsSocksInvalidVersion"],
-  [/^SOCKS username or password is too long$/, "settings.tunnelsSocksAuthTooLong"],
-  [/^SOCKS proxy authentication failed$/, "settings.tunnelsSocksAuthFailed"],
-  [/^SOCKS proxy rejected all supported auth methods$/, "settings.tunnelsSocksAuthRejected"],
-  [/^SOCKS proxy selected unsupported auth method: (\d+)$/, "settings.tunnelsSocksUnsupportedAuth"],
-  [/^Proxy host too long for SOCKS5 domain address$/, "settings.tunnelsSocksHostTooLong"],
-  [/^SOCKS proxy connect rejected \(code (\d+)\)$/, "settings.tunnelsSocksConnectRejected"],
-  [/^Unsupported SOCKS bound address type: (\d+)$/, "settings.tunnelsSocksUnsupportedAddrType"],
-
-  // SSH keyboard-interactive prompts (for example JumpServer TOTP).
-  [/^(?:SSH layer \d+ failed:\s*)?SSH keyboard-interactive authentication was cancelled$/, "connection.sshTotpCancelled"],
-
-  // Query result export limits (crates/dbx-core/src/data/query_result_export.rs)
+  // Query result export limits: raised by the frontend itself
+  // (apps/desktop/src/stores/queryStore.ts).
   [/^Streaming export is unsupported for this query\. Simplify it or use a supported driver\.$/, "exportProgress.streamingUnsupported"],
-  // MongoDB Legacy agent failures: messages raised by the agent arrive wrapped in "Agent RPC
-  // error (<code>): ", and the import path prefixes the row a batch-level failure belongs to.
-  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver$/, "mongo.import.legacyInsertUnsupported"],
-  [/^(?:row \d+: )?MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver$/, "mongo.import.legacyInsertUnsupported"],
-  [/^MongoDB Legacy Agent rejected (\d+) of (\d+) documents: ([\s\S]+)$/, "mongo.insert.partialFailure"],
-  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent returned an invalid find cursor$/, "mongo.import.legacyCursorInvalid"],
-  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent returned an invalid find cursor page$/, "mongo.import.legacyCursorInvalid"],
+
+  // Agent-raised messages arrive wrapped in "Agent RPC error (<code>): "
+  // (internal/agent/runtime.go). The MongoDB agent throws this when a find
+  // cursor has expired (agents/drivers/mongodb MongoAgent.java).
   [/^(?:Agent RPC error \(-?\d+\): )?Find cursor not found$/, "mongo.import.legacyCursorInvalid"],
-  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent does not support type-preserving export; upgrade or reinstall the MongoDB Legacy driver$/, "mongo.import.legacyExportUnsupported"],
-  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent returned the same export page twice; upgrade or reinstall the MongoDB Legacy driver$/, "mongo.import.legacyExportStalled"],
-  [/^(?:Agent RPC error \(-?\d+\): )?MongoDB Legacy Agent returned a document without _id$/, "mongo.import.legacyExportMissingId"],
-  [/^Streaming export needs a result-set session, but this driver returned no session_id\.$/, "exportProgress.agentSessionMissing"],
 
-  // Legacy bundled DuckDB error kept for compatibility with older backends.
-  [/^The previous DuckDB query is still stopping\. Please try again shortly\.$/, "editor.duckdbDraining"],
-
-  // Driver / JRE management (crates/dbx-driver-agent/src/agent_service.rs, routes/agents.rs)
-  // The Windows variant is multi-line, so it must be tried before the single-line one.
-  [/^Failed to remove the old JRE directory: (.+)\nPossible causes:[\s\S]*\(original error: ([\s\S]+)\)$/, "driverStore.jreDirRemoveFailedWindows"],
-  [/^Failed to remove the old JRE directory: (.+) \(original error: ([\s\S]+)\)$/, "driverStore.jreDirRemoveFailed"],
-  [/^JRE (.+?) is in use by drivers: (.+)\. Uninstall them first\.$/, "driverStore.jreInUseByDrivers"],
-  [/^agent-registry\.json not found in the ZIP; not a valid offline driver package\.$/, "driverStore.offlinePackageRegistryMissing"],
-  [/^Close these database connections before updating drivers: (.+)$/, "driverStore.driverUpdateBlocked"],
-
-  // Message queues (crates/dbx-core/src/admin/mq/adapters/kafka.rs)
-  [/^Kafka does not support unloading topics$/, "mqClients.unloadTopicUnsupportedKafka"],
-
-  // Filesystem (src-tauri/src/commands/fs_open.rs)
+  // Filesystem open/reveal failures surface in this shape.
   [/^file does not exist: (.+)$/, "common.fileNotFound"],
-
-  // Web auth rate limiting (crates/dbx-web/src/auth.rs)
-  [/^Please try again in (\d+)s$/, "auth.rateLimited"],
 ];
 
 // Named placeholders for each pattern's capture groups, in capture order.
 // A bare string is shorthand for a single capture group.
 const paramNames: Record<string, string | string[]> = {
-  "pluginPlatform.updateBlockedByConnections": "labels",
   "connection.driverNotInstalled": "driver",
   "connection.jreNotInstalled": "jre",
-  "ai.configNameExists": "name",
-  "nacos.nacosManagedNamespaceAccessDenied": "detail",
-  "mongo.insert.partialFailure": ["failed", "total", "message"],
-  "settings.tunnelsHttpTestSuccess": "code",
-  "settings.tunnelsProxyTimedOut": "duration",
-  "settings.tunnelsProxyConnectFailed": "error",
-  "settings.tunnelsProxyHandshakeFailed": "error",
-  "settings.tunnelsProxyHandshakeTimedOut": "duration",
-  "settings.tunnelsHttpConnectFailed": "detail",
-  "settings.tunnelsSocksInvalidVersion": "version",
-  "settings.tunnelsSocksUnsupportedAuth": "method",
-  "settings.tunnelsSocksConnectRejected": "code",
-  "settings.tunnelsSocksUnsupportedAddrType": "type",
-  "driverStore.jreDirRemoveFailedWindows": ["path", "error"],
-  "driverStore.jreDirRemoveFailed": ["path", "error"],
-  "driverStore.jreInUseByDrivers": ["jre", "drivers"],
-  "driverStore.driverUpdateBlocked": "labels",
   "common.fileNotFound": "path",
-  "auth.rateLimited": "seconds",
 };
 
 function backendErrorMessage(error: unknown): string {
