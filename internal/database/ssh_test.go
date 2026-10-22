@@ -131,7 +131,10 @@ func TestSSHAuthentication(t *testing.T) {
 			layer["key_path"] = test.path
 			layer["password"] = test.password
 			layer["key_passphrase"] = test.passphrase
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			// The encrypted-key subtests spend most of their time in the
+			// key KDF (~2.8s locally under -race), so a 3s budget flakes
+			// on loaded CI runners; match the production default (15s).
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			_, err := TestSSHTunnel(ctx, layer)
 			if (err != nil) != test.fail {
