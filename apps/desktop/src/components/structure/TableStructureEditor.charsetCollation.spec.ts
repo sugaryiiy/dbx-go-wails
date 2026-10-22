@@ -36,19 +36,23 @@ vi.mock("@lucide/vue", async () => {
     AlertTriangle: Icon,
     Check: Icon,
     ChevronDown: Icon,
+    ChevronLeft: Icon,
+    ChevronRight: Icon,
     ChevronUp: Icon,
     ClipboardList: Icon,
     Copy: Icon,
     Database: Icon,
     Info: Icon,
-    Keyboard: Icon,
     KeyRound: Icon,
+    Keyboard: Icon,
     ListChevronsUpDown: Icon,
     Loader2: Icon,
+    LocateFixed: Icon,
     Maximize2: Icon,
     Pencil: Icon,
     Plus: Icon,
     RefreshCw: Icon,
+    RotateCcw: Icon,
     Rows3: Icon,
     Save: Icon,
     Search: Icon,
@@ -57,20 +61,6 @@ vi.mock("@lucide/vue", async () => {
     Trash2: Icon,
     UserRound: Icon,
     X: Icon,
-  };
-});
-
-vi.mock("@/components/ui/button", async () => {
-  const { defineComponent, h } = await import("vue");
-  return {
-    Button: defineComponent({
-      name: "Button",
-      inheritAttrs: false,
-      setup:
-        (_props, { attrs, slots }) =>
-        () =>
-          h("button", attrs, slots.default?.()),
-    }),
   };
 });
 vi.mock("@/components/ui/input", async () => {

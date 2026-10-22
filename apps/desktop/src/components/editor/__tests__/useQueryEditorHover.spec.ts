@@ -106,7 +106,7 @@ describe("QueryEditor hover resolution", () => {
     const { store, resolve, createHoverDom } = createHarness();
     store.lookupLocalCompletionTables.mockReturnValue([{ name: "users", schema: "public" }]);
     (await resolve())!.create();
-    expect(createHoverDom).toHaveBeenCalledWith("users", expect.any(String), undefined, ["[DBX] Failed to load table structure — check connection"]);
+    expect(createHoverDom).toHaveBeenCalledWith("users", expect.any(String), undefined, ["[MagpieDB] Failed to load table structure — check connection"]);
   });
 
   it("suppresses a late DDL tooltip when a context menu opens during its request", async () => {

@@ -177,7 +177,7 @@ describe("AgentOfflineExportDialog", () => {
     i18n.global.locale.value = "en";
     await mountDialog({ open: true, preview: { platform: "linux-x64", candidates: [] } satisfies AgentOfflineExportPreview });
 
-    expect(document.body.textContent).toContain("No eligible DBX-managed Agent drivers are installed.");
+    expect(document.body.textContent).toContain("No eligible MagpieDB-managed Agent drivers are installed.");
     expect(buttonContaining("Export 0 driver(s)")?.disabled).toBe(true);
   });
 });

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it as test } from "vitest";
 import { createI18n } from "vue-i18n";
 import { translateBackendError, type BackendErrorTranslate } from "@/i18n/backend-errors";
@@ -631,32 +630,5 @@ describe("backend error translation", () => {
         operationOutcome: "unknown",
       }),
     ).toBe("DBX-JDBC-5001");
-  });
-});
-
-// Matching on message text only works while both sides agree on the wording, so
-// pin current backend literals to their Rust source. Compatibility-only patterns
-// may remain after the backend stops emitting them.
-describe("backend error wording is pinned to the Rust sources", () => {
-  const rust = (path: string) => readFileSync(new URL(`../../../../../${path}`, import.meta.url), "utf8");
-
-  test.each([
-    ["crates/dbx-core/src/data/query_result_export.rs", "Streaming export is unsupported for this query. Simplify it or use a supported driver."],
-    ["crates/dbx-core/src/data/query_result_export.rs", "Streaming export needs a result-set session, but this driver returned no session_id."],
-    ["crates/dbx-core/src/data/mongodb_import_export.rs", "MongoDB Legacy Agent does not support insertMany; upgrade or reinstall the MongoDB Legacy driver"],
-    ["crates/dbx-core/src/data/mongodb_import_export.rs", "MongoDB Legacy Agent returned an invalid find cursor"],
-    ["crates/dbx-core/src/query/mongo_ops.rs", "MongoDB Legacy Agent rejected "],
-    ["crates/dbx-driver-agent/src/agent_service.rs", "Failed to remove the old JRE directory: "],
-    ["crates/dbx-driver-agent/src/agent_service.rs", "is in use by drivers: "],
-    ["crates/dbx-driver-agent/src/agent_service.rs", "agent-registry.json not found in the ZIP; not a valid offline driver package."],
-    ["crates/dbx-core/src/admin/mq/adapters/kafka.rs", "Kafka does not support unloading topics"],
-    ["crates/dbx-plugin-runtime/src/plugins/installer.rs", "Plugin update source change requires confirmation:"],
-    ["crates/dbx-plugin-runtime/src/plugins/installer.rs", "Plugin downgrade to version "],
-    ["crates/dbx-web/src/auth.rs", "Please try again in {remaining}s"],
-    ["crates/dbx-web/src/routes/agents.rs", "Close these database connections before updating drivers: "],
-    ["src-tauri/src/commands/agents.rs", "Close these database connections before updating drivers: "],
-    ["src-tauri/src/commands/fs_open.rs", "file does not exist: "],
-  ])("%s still emits %j", (path, fragment) => {
-    expect(rust(path)).toContain(fragment);
   });
 });

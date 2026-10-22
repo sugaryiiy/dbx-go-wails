@@ -68,7 +68,7 @@ async function mountWorkspace(mode: "query" | "structure") {
     schema: "sales",
     catalog: "source-catalog",
     mode,
-    sql: "select * from sales.\"order.details\"",
+    sql: 'select * from sales."order.details"',
     isExecuting: false,
     ...(mode === "structure" ? { structureTableName: "order.details" } : {}),
   };
@@ -124,7 +124,7 @@ describe("table definition navigation through the workspace", () => {
     await nextTick();
 
     expect(onLocateTab).toHaveBeenCalledExactlyOnceWith(sourceTab);
-    expect(activeTabSidebarTarget(onLocateTab.mock.calls[0]![0])).toEqual({ type: "table", connectionId: "source-connection", database: "warehouse", schema: "sales", tableName: "order.details" });
+    expect(activeTabSidebarTarget(onLocateTab.mock.calls[0]![0])).toEqual({ type: "table", catalog: "source-catalog", connectionId: "source-connection", database: "warehouse", schema: "sales", tableName: "order.details" });
     expect(onClickTable).not.toHaveBeenCalled();
     expect(store.tabs).toHaveLength(2);
     expect(store.activeTabId).toBe(focusedTab.id);
