@@ -29,7 +29,12 @@ void dbx_tray_install(const void *iconPNG, int iconLen) {
             return;
         }
         dbxTrayTarget = [[DBXTrayTarget alloc] init];
-        dbxStatusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+        // statusItemWithLength: returns an autoreleased item that the
+        // status bar does not retain; this file is compiled without ARC
+        // (cgo default), so retain it explicitly for the process lifetime.
+        // Without the retain the item is freed at the next autorelease-pool
+        // drain and dbxStatusItem dangles into reused memory.
+        dbxStatusItem = [[[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength] retain];
         NSImage *image = nil;
         if (iconPNG != NULL && iconLen > 0) {
             NSData *data = [NSData dataWithBytes:iconPNG length:(NSUInteger)iconLen];
