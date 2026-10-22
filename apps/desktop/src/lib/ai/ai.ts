@@ -14,7 +14,7 @@ import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { normalizeSqliteNamespace } from "@/lib/database/sqliteNamespace";
 import { isQueryExecutionErrorResult } from "@/lib/query/queryResultError";
 
-import type { AgentEvent } from "@/lib/backend/tauri";
+import type { AgentEvent } from "@/lib/backend/backendTypes";
 
 const VECTOR_DB_TYPES: ReadonlySet<DatabaseType> = new Set([
   "qdrant",

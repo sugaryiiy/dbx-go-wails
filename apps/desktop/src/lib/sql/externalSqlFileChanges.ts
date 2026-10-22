@@ -1,4 +1,4 @@
-import type { ExternalSqlFileStatus, ExternalSqlFileSnapshot } from "@/lib/backend/tauri";
+import type { ExternalSqlFileStatus, ExternalSqlFileSnapshot } from "@/lib/backend/backendTypes";
 import type { ExternalSqlFileVersion, QueryTab } from "@/types/database";
 
 export function externalSqlFileMetadataMatches(version: ExternalSqlFileVersion | undefined, status: ExternalSqlFileStatus): boolean {

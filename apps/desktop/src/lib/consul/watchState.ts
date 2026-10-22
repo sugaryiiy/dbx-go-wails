@@ -1,4 +1,4 @@
-import type { KvInt64 } from "@/lib/backend/tauri";
+import type { KvInt64 } from "@/lib/backend/backendTypes";
 import type { ConsulWatchEvent } from "@/types/consul";
 
 export interface ConsulWatchState {

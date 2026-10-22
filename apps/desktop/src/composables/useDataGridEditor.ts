@@ -1,7 +1,7 @@
 import { joinedSaveOptions } from "@/lib/dataGrid/joinedRowChanges";
 import { ref, shallowRef, triggerRef, computed, nextTick, watch, getCurrentInstance, onActivated, onBeforeUnmount, onDeactivated, onMounted, toRaw, type ComputedRef, type Ref } from "vue";
 import * as api from "@/lib/backend/api";
-import type { DataGridSaveGuard } from "@/lib/backend/tauri";
+import type { DataGridSaveGuard } from "@/lib/backend/backendTypes";
 import type { CellValue } from "@/lib/dataGrid/cellValue";
 import { coerceDataGridCellValue, dataGridCellEditorText } from "@/lib/dataGrid/dataGridCellCoercion";
 import { focusDataGridEditorWithoutScrolling, preserveDataGridScrollPosition } from "@/lib/dataGrid/dataGridEditorFocus";

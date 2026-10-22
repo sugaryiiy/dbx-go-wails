@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { externalSqlFileContentMatchesBaseline, externalSqlFileMetadataMatches, externalSqlFileVersionWasIgnored } from "@/lib/sql/externalSqlFileChanges";
-import type { ExternalSqlFileSnapshot } from "@/lib/backend/tauri";
+import type { ExternalSqlFileSnapshot } from "@/lib/backend/backendTypes";
 import type { QueryTab } from "@/types/database";
 
 const originalVersion = {

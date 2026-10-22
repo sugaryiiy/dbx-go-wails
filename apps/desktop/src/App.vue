@@ -193,7 +193,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import type { HistoryEntry } from "@/lib/backend/tauri";
+import type { HistoryEntry } from "@/lib/backend/backendTypes";
 import { resolveDefaultAiSchema, type AiAction } from "@/lib/ai/ai";
 import { useBackgroundImage } from "@/composables/useBackgroundImage";
 import ExternalSqlFileChangeDialog from "@/components/editor/ExternalSqlFileChangeDialog.vue";

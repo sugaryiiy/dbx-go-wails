@@ -1,4 +1,4 @@
-import type { AiConversation } from "@/lib/backend/tauri";
+import type { AiConversation } from "@/lib/backend/backendTypes";
 import type { AiContextTarget } from "@/lib/ai/ai";
 import type { QueryTab } from "@/types/database";
 import type { DesktopAiRunRuntime } from "@/lib/ai/desktopAiRunRegistry";

@@ -9,7 +9,7 @@ import QueryLoadingState from "@/components/common/QueryLoadingState.vue";
 import JsonTree from "@/components/common/JsonTree.vue";
 import RedisJsonEditor from "@/components/redis/RedisJsonEditor.vue";
 import * as api from "@/lib/backend/api";
-import type { MeilisearchIndexSettings } from "@/lib/backend/tauri";
+import type { MeilisearchIndexSettings } from "@/lib/backend/backendTypes";
 import { useToast } from "@/composables/useToast";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useQueryStore } from "@/stores/queryStore";

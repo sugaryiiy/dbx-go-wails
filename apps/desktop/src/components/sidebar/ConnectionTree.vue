@@ -8,7 +8,7 @@ import { useSavedSqlStore } from "@/stores/savedSqlStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useToast } from "@/composables/useToast";
 import type { ColumnInfo, ObjectSourceKind, QueryTab, TableInfo, TableNameFilter, TreeNode, TreeNodeType } from "@/types/database";
-import type { ElasticsearchIndexMetadataKind } from "@/lib/backend/tauri";
+import type { ElasticsearchIndexMetadataKind } from "@/lib/backend/backendTypes";
 import { listEventTriggers } from "@/lib/backend/api";
 import {
   filterLocallySearchedTables,

@@ -1,4 +1,4 @@
-import type { AppSupportInfo } from "@/lib/backend/tauri";
+import type { AppSupportInfo } from "@/lib/backend/backendTypes";
 
 export interface AppSupportInfoLabels {
   appVersion: string;

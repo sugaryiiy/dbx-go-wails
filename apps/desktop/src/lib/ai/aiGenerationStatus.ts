@@ -15,7 +15,7 @@
  * `turn_start` and can invoke read-only tools, so `running_tool` is decided purely
  * by `tool_call_start`/`tool_call_end`, not by `assistantMode`.
  */
-import type { AgentEvent } from "@/lib/backend/tauri";
+import type { AgentEvent } from "@/lib/backend/backendTypes";
 import { formatAgentToolName } from "@/lib/ai/aiAgentStepPresentation";
 
 export interface AiGenerationStatus {

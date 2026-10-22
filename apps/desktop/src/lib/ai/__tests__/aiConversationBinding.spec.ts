@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AiConversation } from "@/lib/backend/tauri";
+import type { AiConversation } from "@/lib/backend/backendTypes";
 import {
   AI_UNBOUND_BINDING,
   activeAiRunBinding,

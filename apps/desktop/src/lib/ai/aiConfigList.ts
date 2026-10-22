@@ -1,5 +1,5 @@
 import type { AiConfig, AiConfigItem, AiConfiguredModel } from "@/types/ai";
-import type { AiModelInfo } from "@/lib/backend/tauri";
+import type { AiModelInfo } from "@/lib/backend/backendTypes";
 import { uuid } from "@/lib/common/utils";
 
 export type { AiConfigItem };

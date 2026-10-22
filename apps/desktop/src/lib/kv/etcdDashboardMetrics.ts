@@ -1,4 +1,4 @@
-import type { KvPrometheusMetrics } from "@/lib/backend/tauri";
+import type { KvPrometheusMetrics } from "@/lib/backend/backendTypes";
 
 type NumericMetricKey = Exclude<
   {

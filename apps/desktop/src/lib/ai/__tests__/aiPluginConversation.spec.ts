@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildPluginAiRequest, createPluginAiConversation, pluginComposerConnectionLabel, pluginContextConnectionId, pluginContextFromMessages, streamPluginAiConversation } from "../aiPluginConversation";
 import type { AiConfig } from "@/types/ai";
-import type { AgentEvent } from "@/lib/backend/tauri";
+import type { AgentEvent } from "@/lib/backend/backendTypes";
 
 const identity = { id: "market", name: "Market Watch" };
 const input = () => ({ title: "AAPL", prompt: "Analyse risks", context: { quotes: [{ symbol: "AAPL", price: 100, currency: "USD" }], snapshotId: "snap-1" } });

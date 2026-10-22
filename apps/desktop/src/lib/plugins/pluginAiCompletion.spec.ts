@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPluginAiCompletion, PLUGIN_AI_TASK_SYSTEM_PROMPTS, pluginAiModels, pluginAiPromptPreview } from "./pluginAiCompletion";
-import type { AiCompletionRequest, AiStreamChunk } from "@/lib/backend/tauri";
+import type { AiCompletionRequest, AiStreamChunk } from "@/lib/backend/backendTypes";
 import type { AiConfigItem } from "@/types/ai";
 const config = { id: "one", name: "My AI", provider: "openai", authMethod: "api-key", apiStyle: "completions", model: "a", models: [{ name: "b" }], apiKey: "secret", endpoint: "private", customHeaders: { token: "secret" }, isDefault: true } as AiConfigItem;
 describe("plugin text completion", () => {

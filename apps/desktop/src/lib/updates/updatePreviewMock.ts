@@ -1,5 +1,5 @@
 import type { UpdateInfo } from "@/lib/backend/api";
-import type { AgentDriverInfo, McpServerStatus } from "@/lib/backend/tauri";
+import type { AgentDriverInfo, McpServerStatus } from "@/lib/backend/backendTypes";
 import type { JdbcPluginStatus } from "@/types/database";
 import type { MarketplacePluginListing } from "@/lib/plugins/pluginMarketplace";
 

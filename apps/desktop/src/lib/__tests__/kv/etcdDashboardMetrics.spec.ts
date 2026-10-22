@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { KvPrometheusMetrics } from "@/lib/backend/tauri";
+import type { KvPrometheusMetrics } from "@/lib/backend/backendTypes";
 import { counterMapRates, counterRate, histogramAverageMilliseconds, histogramMapAverageMilliseconds, ratePercentage } from "@/lib/kv/etcdDashboardMetrics";
 
 function snapshot(values: Partial<KvPrometheusMetrics>): KvPrometheusMetrics {

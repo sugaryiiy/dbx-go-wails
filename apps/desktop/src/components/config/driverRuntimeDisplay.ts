@@ -1,4 +1,4 @@
-import type { DriverRuntimeInfo } from "@/lib/backend/tauri";
+import type { DriverRuntimeInfo } from "@/lib/backend/backendTypes";
 
 export function driverRuntimeProtocolLabel(runtime: Pick<DriverRuntimeInfo, "protocol_mode" | "active_sessions">): string | null {
   if (runtime.protocol_mode === "multi_session") {

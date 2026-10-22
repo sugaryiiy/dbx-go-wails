@@ -1,7 +1,7 @@
 import type { InjectionKey } from "vue";
 import { snapshotPluginWorkbenchContext } from "@/lib/plugins/pluginData";
 import type { AiAssistantMode, AiConfig } from "@/types/ai";
-import type { AiCompletionRequest, AiMessage, AiStreamChunk, AgentEvent } from "@/lib/backend/tauri";
+import type { AiCompletionRequest, AiMessage, AiStreamChunk, AgentEvent } from "@/lib/backend/backendTypes";
 
 /** Data owned by a conversation, independent of the currently selected DBX tab. */
 export interface AiPluginContext {

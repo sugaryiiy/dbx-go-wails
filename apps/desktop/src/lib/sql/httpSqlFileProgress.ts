@@ -1,4 +1,4 @@
-import type { SqlFileProgress } from "@/lib/backend/tauri";
+import type { SqlFileProgress } from "@/lib/backend/backendTypes";
 import { apiUrl } from "@/lib/common/webPath";
 
 export function listenSqlFileProgressById(executionId: string, handler: (progress: SqlFileProgress) => void, onError?: (error: Error) => void): Promise<() => void> {

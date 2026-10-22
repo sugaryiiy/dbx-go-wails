@@ -158,7 +158,7 @@ import { ACTIVE_TEMPLATES_TOTAL_MAX, promptTemplateCharacterCount } from "@/type
 import { capTemplateIdsToCharLimit, resolveAutoTemplateIds, resolveDefaultTemplateIds } from "@/lib/ai/promptTemplateDefaults";
 import { databaseManifestEntry } from "@/lib/database/databaseDriverManifest";
 
-import type { AgentEvent } from "@/lib/backend/tauri";
+import type { AgentEvent } from "@/lib/backend/backendTypes";
 import { buildAiAgentPlan } from "@/lib/ai/aiAgentPlan";
 import { extractFirstSqlCodeBlock, extractSingleSqlCodeBlock } from "@/lib/ai/aiSqlExecutionPolicy";
 import { productionContextForDatabase } from "@/lib/database/productionSafety";

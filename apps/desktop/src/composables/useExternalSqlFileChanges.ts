@@ -6,7 +6,7 @@ import { externalSqlFileContentMatchesBaseline, externalSqlFileMetadataMatches, 
 import { useQueryStore } from "@/stores/queryStore";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { externalSqlEditorMaxBytes } from "@/lib/sql/sqlFileOpen";
-import type { ExternalSqlFileSnapshot } from "@/lib/backend/tauri";
+import type { ExternalSqlFileSnapshot } from "@/lib/backend/backendTypes";
 import type { QueryTab } from "@/types/database";
 
 export type ExternalSqlFilePromptDecision = "load" | "keep" | "overwrite" | "recreate" | "saveAs" | "close" | "cancel";

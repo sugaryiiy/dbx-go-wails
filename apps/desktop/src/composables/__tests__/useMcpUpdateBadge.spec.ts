@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useMcpUpdateBadge } from "@/composables/useMcpUpdateBadge";
 import { beginMcpStatusRequest } from "@/lib/mcp/mcpUpdateStatus";
-import type { McpServerStatus } from "@/lib/backend/tauri";
+import type { McpServerStatus } from "@/lib/backend/backendTypes";
 
 const apiMock = vi.hoisted(() => ({
   checkMcpServerStatus: vi.fn<() => Promise<McpServerStatus>>(),

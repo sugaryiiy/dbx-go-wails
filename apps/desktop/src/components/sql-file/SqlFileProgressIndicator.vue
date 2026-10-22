@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
-import type { SqlFileProgress } from "@/lib/backend/tauri";
+import type { SqlFileProgress } from "@/lib/backend/backendTypes";
 import { formatSqlFileBytes, sqlFileProgressPercent } from "@/lib/sql/sqlFileProgress";
 
 const props = defineProps<{

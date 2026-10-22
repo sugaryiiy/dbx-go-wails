@@ -1,6 +1,6 @@
 import { reactive } from "vue";
 import * as api from "@/lib/backend/api";
-import type { AiModelInfo } from "@/lib/backend/tauri";
+import type { AiModelInfo } from "@/lib/backend/backendTypes";
 import type { AiConfigItem, AiEffortCapability } from "@/types/ai";
 
 const CATALOG_TTL_MS = 5 * 60 * 1000;

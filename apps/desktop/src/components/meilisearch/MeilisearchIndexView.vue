@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { Copy, FileText, ListChecks, RefreshCcw, Settings } from "@lucide/vue";
 import { Button } from "@/components/ui/button";
 import * as api from "@/lib/backend/api";
-import type { MeilisearchIndexOverview } from "@/lib/backend/tauri";
+import type { MeilisearchIndexOverview } from "@/lib/backend/backendTypes";
 import { formatBytes } from "@/lib/database/serverMetrics";
 import { useToast } from "@/composables/useToast";
 import { useTabUiState } from "@/lib/tabs/tabUiState";

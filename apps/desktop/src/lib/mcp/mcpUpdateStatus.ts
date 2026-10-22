@@ -1,4 +1,4 @@
-import type { McpServerStatus } from "@/lib/backend/tauri";
+import type { McpServerStatus } from "@/lib/backend/backendTypes";
 
 let mcpStatusRequestSequence = 0;
 let latestMcpStatusRequestId = 0;

@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { loadMcpHttpServerSettings, saveMcpHttpServerSettings, mcpHttpServerStatus, rotateMcpHttpServerToken, loadWebMcpHttpStatus, saveWebMcpHttpSettings, rotateWebMcpToken } from "@/lib/backend/api";
-import type { McpHttpServerSettings, McpHttpServerStatus, WebMcpHttpStatus } from "@/lib/backend/tauri";
+import type { McpHttpServerSettings, McpHttpServerStatus, WebMcpHttpStatus } from "@/lib/backend/backendTypes";
 import { isWailsRuntime } from "@/lib/backend/wailsRuntime";
 import { apiUrl } from "@/lib/common/webPath";
 import { copyToClipboard } from "@/lib/common/clipboard";

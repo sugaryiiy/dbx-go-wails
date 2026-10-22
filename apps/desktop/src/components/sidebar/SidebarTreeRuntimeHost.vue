@@ -87,7 +87,7 @@ import type { InstalledPlugin, PluginContextMenuContribution, PluginWorkbenchCon
 import { useDatabaseOptions } from "@/composables/useDatabaseOptions";
 import type { ColumnInfo, ConnectionConfig, DatabaseType, TreeNode, TreeNodeType } from "@/types/database";
 import * as api from "@/lib/backend/api";
-import type { ElasticsearchIndexMetadataKind } from "@/lib/backend/tauri";
+import type { ElasticsearchIndexMetadataKind } from "@/lib/backend/backendTypes";
 import { queryTimeoutSecsForConnection } from "@/lib/sql/queryTimeout";
 import { resolveDefaultDatabase } from "@/lib/database/defaultDatabase";
 import { connectionUsesVisibleSchemaFilter } from "@/lib/database/visibleDatabases";

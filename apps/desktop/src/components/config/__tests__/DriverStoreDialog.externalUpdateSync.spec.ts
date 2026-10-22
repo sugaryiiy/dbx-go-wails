@@ -2,7 +2,7 @@
 
 import { createApp, defineComponent, h, nextTick, type App } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentDriverInfo } from "@/lib/backend/tauri";
+import type { AgentDriverInfo } from "@/lib/backend/backendTypes";
 import type { JdbcPluginStatus } from "@/types/database";
 import { COMPONENT_DRIVER_UPDATES_CHANGED_EVENT } from "@/lib/updates/componentUpdateEvents";
 

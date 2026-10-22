@@ -1,5 +1,5 @@
 import type { DatabaseType, TreeNode } from "@/types/database";
-import type { ElasticsearchDeleteByQueryResult } from "@/lib/backend/tauri";
+import type { ElasticsearchDeleteByQueryResult } from "@/lib/backend/backendTypes";
 
 /**
  * `elasticsearch-index` tree nodes are also used for Meilisearch indexes, which

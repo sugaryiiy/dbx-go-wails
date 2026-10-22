@@ -6,7 +6,7 @@ import { mcpUpdateAvailability } from "@/lib/mcp/mcpUpdateStatus";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { isUpdatePreviewMockEnabled, previewDriverUpdates, previewJdbcUpdate, previewMcpUpdate, previewPluginUpdates } from "@/lib/updates/updatePreviewMock";
 import type { ComponentUpdateCategory } from "@/lib/updates/componentUpdateOrchestration";
-import type { AgentDriverInfo, AgentUpdateBlocker, McpServerStatus } from "@/lib/backend/tauri";
+import type { AgentDriverInfo, AgentUpdateBlocker, McpServerStatus } from "@/lib/backend/backendTypes";
 import type { JdbcPluginStatus } from "@/types/database";
 
 export type { ComponentUpdateCategory } from "@/lib/updates/componentUpdateOrchestration";

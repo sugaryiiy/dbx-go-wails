@@ -1,6 +1,6 @@
 import type { AiConfigItem } from "@/types/ai";
 import { isCliProvider } from "@/lib/ai/aiConfigCandidates";
-import type { AiCompletionRequest, AiStreamChunk } from "@/lib/backend/tauri";
+import type { AiCompletionRequest, AiStreamChunk } from "@/lib/backend/backendTypes";
 import { uuid } from "@/lib/common/utils";
 
 export interface PluginAiProvider {

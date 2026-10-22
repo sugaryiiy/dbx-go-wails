@@ -9,7 +9,7 @@ import { useToast } from "@/composables/useToast";
 import { copyToClipboard } from "@/lib/common/clipboard";
 import * as api from "@/lib/backend/api";
 import { translateBackendError } from "@/i18n/backend-errors";
-import type { ElasticsearchIndexMetadataKind } from "@/lib/backend/tauri";
+import type { ElasticsearchIndexMetadataKind } from "@/lib/backend/backendTypes";
 
 const props = defineProps<{
   open: boolean;

@@ -1,5 +1,5 @@
 import * as api from "@/lib/backend/api";
-import type { AiCompletionRequest } from "@/lib/backend/tauri";
+import type { AiCompletionRequest } from "@/lib/backend/backendTypes";
 import { ASK_ACTIONS, AGENT_ACTIONS, defaultActionForMode, isValidActionForMode, type AiAction } from "@/lib/ai/ai";
 import { isShortAffirmative, isShortNegative } from "@/lib/ai/aiProposalDetect";
 import type { AiConfig } from "@/stores/settingsStore";

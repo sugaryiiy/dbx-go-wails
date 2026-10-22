@@ -4,7 +4,7 @@ import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
 import * as api from "@/lib/backend/api";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { UpdateDownloadSource as SettingsUpdateDownloadSource } from "@/stores/settingsStore";
-import type { UpdateDownloadProgress } from "@/lib/backend/tauri";
+import type { UpdateDownloadProgress } from "@/lib/backend/backendTypes";
 import { currentLocale } from "@/i18n";
 import { shouldBlockAppUpdate } from "@/lib/app/appUpdateTaskGuard";
 import { uuid } from "@/lib/common/utils";

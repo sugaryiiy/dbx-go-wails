@@ -4,7 +4,7 @@ import type { UserSkillRootSettings, UserSkillsListResult, UserSkillsReadResult 
 import type { SampleWorkspace } from "@/types/workspace";
 import type { ConnectionContentSearchRequest, ObjectContentSearchRequest, ObjectContentSearchMatch, SavedQueryContentSearchMatch, ContentSearchResult } from "@/lib/globalSearch/contentSearchTypes";
 import type { DatabaseBackupCommand, DatabaseBackupBackgroundStatus } from "@/lib/backup/backgroundDatabaseBackup";
-import type { PluginUiStorageItemRef, SyncCatalogItem, SyncSelection, SyncSnapshotCatalog } from "@/lib/backend/tauri";
+import type { PluginUiStorageItemRef, SyncCatalogItem, SyncSelection, SyncSnapshotCatalog } from "@/lib/backend/backendTypes";
 
 export function databaseBackupCommand<T = unknown>(command: DatabaseBackupCommand): Promise<T> {
   return post("/api/database-backups", command);
@@ -199,7 +199,7 @@ import type {
   MeilisearchIndexSettings,
   ElasticsearchIndexMetadataKind,
   ElasticsearchDeleteByQueryResult,
-} from "@/lib/backend/tauri";
+} from "@/lib/backend/backendTypes";
 import type { QueryEditability } from "@/lib/sql/sqlAnalysis";
 import type { PluginTableMetadata, PluginTableMetadataRequest } from "@/types/pluginSchemaMetadata";
 import type { PluginDataGrant, PluginDataQueryRequest, PluginDataQueryResult } from "@/types/pluginData";
@@ -269,7 +269,7 @@ import type {
   PluginTrustedKey,
   PluginUiAssetPayload,
 } from "@/types/database";
-import type { DataGridSavePreparation } from "@/lib/backend/tauri";
+import type { DataGridSavePreparation } from "@/lib/backend/backendTypes";
 import type {
   NacosBatchPreview,
   NacosBatchReport,
@@ -2160,9 +2160,9 @@ export async function loadAiChatSelection(): Promise<AiChatSelectionState | null
   return get("/api/ai/chat-selection");
 }
 
-export type { AgentEvent } from "@/lib/backend/tauri";
+export type { AgentEvent } from "@/lib/backend/backendTypes";
 
-function isAgentEvent(v: unknown): v is import("@/lib/backend/tauri").AgentEvent {
+function isAgentEvent(v: unknown): v is import("@/lib/backend/backendTypes").AgentEvent {
   return typeof v === "object" && v !== null && "type" in v && typeof (v as Record<string, unknown>).type === "string";
 }
 
@@ -2173,7 +2173,7 @@ export async function aiAgentStream(
   database: string,
   schema: string | undefined,
   dbType: string,
-  onEvent: (event: import("@/lib/backend/tauri").AgentEvent) => void,
+  onEvent: (event: import("@/lib/backend/backendTypes").AgentEvent) => void,
   mode?: string,
   allowWriteSql = false,
   confirmedWriteSql?: string,
@@ -2330,11 +2330,11 @@ export async function saveMcpGlobalPolicy(policy: Omit<McpGlobalPolicy, "configu
   if (!res.ok) throw await backendResponseError(res);
 }
 
-export async function loadMcpHttpServerSettings(): Promise<import("@/lib/backend/tauri").McpHttpServerSettings> {
+export async function loadMcpHttpServerSettings(): Promise<import("@/lib/backend/backendTypes").McpHttpServerSettings> {
   return get("/api/app-settings/mcp-http-server");
 }
 
-export async function saveMcpHttpServerSettings(settings: import("@/lib/backend/tauri").McpHttpServerSettings): Promise<import("@/lib/backend/tauri").McpHttpServerStatus> {
+export async function saveMcpHttpServerSettings(settings: import("@/lib/backend/backendTypes").McpHttpServerSettings): Promise<import("@/lib/backend/backendTypes").McpHttpServerStatus> {
   const res = await fetch(apiUrl("/api/app-settings/mcp-http-server"), {
     method: "PUT",
     headers: { "Content-Type": "application/json", "X-DBX-MCP-Settings": "1" },
@@ -2344,21 +2344,21 @@ export async function saveMcpHttpServerSettings(settings: import("@/lib/backend/
   return res.json();
 }
 
-export async function mcpHttpServerStatus(): Promise<import("@/lib/backend/tauri").McpHttpServerStatus> {
+export async function mcpHttpServerStatus(): Promise<import("@/lib/backend/backendTypes").McpHttpServerStatus> {
   return get("/api/app-settings/mcp-http-server/status");
 }
 
-export async function rotateMcpHttpServerToken(): Promise<import("@/lib/backend/tauri").McpHttpServerStatus> {
+export async function rotateMcpHttpServerToken(): Promise<import("@/lib/backend/backendTypes").McpHttpServerStatus> {
   const res = await fetch(apiUrl("/api/app-settings/mcp-http-server/rotate-token"), { method: "POST", headers: { "X-DBX-MCP-Settings": "1" } });
   if (!res.ok) throw await backendResponseError(res);
   return res.json();
 }
 
-export async function loadWebMcpHttpStatus(): Promise<import("@/lib/backend/tauri").WebMcpHttpStatus> {
+export async function loadWebMcpHttpStatus(): Promise<import("@/lib/backend/backendTypes").WebMcpHttpStatus> {
   return get("/api/app-settings/mcp-http-status");
 }
 
-export async function saveWebMcpHttpSettings(settings: import("@/lib/backend/tauri").WebMcpHttpSettings): Promise<import("@/lib/backend/tauri").WebMcpHttpStatus> {
+export async function saveWebMcpHttpSettings(settings: import("@/lib/backend/backendTypes").WebMcpHttpSettings): Promise<import("@/lib/backend/backendTypes").WebMcpHttpStatus> {
   const res = await fetch(apiUrl("/api/app-settings/mcp-http"), {
     method: "PUT",
     headers: { "Content-Type": "application/json", "X-DBX-MCP-Settings": "1" },
@@ -2368,7 +2368,7 @@ export async function saveWebMcpHttpSettings(settings: import("@/lib/backend/tau
   return res.json();
 }
 
-export async function rotateWebMcpToken(): Promise<import("@/lib/backend/tauri").WebMcpHttpStatus> {
+export async function rotateWebMcpToken(): Promise<import("@/lib/backend/backendTypes").WebMcpHttpStatus> {
   const res = await fetch(apiUrl("/api/app-settings/mcp-http/rotate-token"), { method: "POST", headers: { "X-DBX-MCP-Settings": "1" } });
   if (!res.ok) throw await backendResponseError(res);
   return res.json();
@@ -2891,17 +2891,17 @@ export async function readExternalSqlFile(_path: string, _maxSizeBytes?: number)
   throw new Error("Opening external SQL file paths is only available in the desktop app");
 }
 
-export async function readExternalSqlFileSnapshot(_path: string, _maxSizeBytes?: number): Promise<import("@/lib/backend/tauri").ExternalSqlFileSnapshot> {
+export async function readExternalSqlFileSnapshot(_path: string, _maxSizeBytes?: number): Promise<import("@/lib/backend/backendTypes").ExternalSqlFileSnapshot> {
   if (isWailsRuntime()) return wailsApp().ReadExternalSQL(_path, _maxSizeBytes ?? 32 * 1024 * 1024);
   throw new Error("Opening external SQL file paths is only available in the desktop app");
 }
 
-export async function inspectExternalSqlFile(_path: string): Promise<import("@/lib/backend/tauri").ExternalSqlFileStatus> {
+export async function inspectExternalSqlFile(_path: string): Promise<import("@/lib/backend/backendTypes").ExternalSqlFileStatus> {
   if (isWailsRuntime()) return wailsApp().InspectExternalSQL(_path);
   throw new Error("Inspecting external SQL file paths is only available in the desktop app");
 }
 
-export async function writeExternalSqlFile(_path: string, _content: string, _options: { expectedContentHash?: string; expectedMissing?: boolean } = {}): Promise<import("@/lib/backend/tauri").ExternalSqlFileWriteResult> {
+export async function writeExternalSqlFile(_path: string, _content: string, _options: { expectedContentHash?: string; expectedMissing?: boolean } = {}): Promise<import("@/lib/backend/backendTypes").ExternalSqlFileWriteResult> {
   if (isWailsRuntime()) return wailsApp().WriteExternalSQL(_path, _content, _options);
   throw new Error("Saving external SQL file paths is only available in the desktop app");
 }
@@ -5486,7 +5486,7 @@ export async function fetchChangelog(lang?: string): Promise<import("@/lib/app/c
 }
 
 // Go includes its MCP service in the application; no external package is installed.
-export async function checkMcpServerStatus(): Promise<import("@/lib/backend/tauri").McpServerStatus> {
+export async function checkMcpServerStatus(): Promise<import("@/lib/backend/backendTypes").McpServerStatus> {
   return {
     installed: true,
     installation_source: "native",

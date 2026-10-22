@@ -1,4 +1,4 @@
-import type { KvInt64, KvValue } from "@/lib/backend/tauri";
+import type { KvInt64, KvValue } from "@/lib/backend/backendTypes";
 
 export type ConsulCapabilityStatus = "supported" | "unsupported" | "disabled" | "forbidden" | "unknown";
 

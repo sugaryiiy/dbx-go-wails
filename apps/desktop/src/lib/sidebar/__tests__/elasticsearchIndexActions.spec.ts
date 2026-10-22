@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { elasticsearchClearIndexPreview, elasticsearchIndexAliasLabel, isElasticsearchClearConfirmed, isElasticsearchIndexPattern, isElasticsearchProtocolIndex, isPartialElasticsearchClear, matchesElasticsearchIndexPattern } from "@/lib/sidebar/elasticsearchIndexActions";
-import type { ElasticsearchDeleteByQueryResult } from "@/lib/backend/tauri";
+import type { ElasticsearchDeleteByQueryResult } from "@/lib/backend/backendTypes";
 
 function clearResult(overrides: Partial<ElasticsearchDeleteByQueryResult> = {}): ElasticsearchDeleteByQueryResult {
   return { total: 10, deleted: 10, versionConflicts: 0, timedOut: false, failures: [], ...overrides };
