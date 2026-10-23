@@ -792,6 +792,8 @@ export interface UpdateInfo {
 
 export type UpdateDownloadSource = "official" | "cnb";
 
+export type UpdateChannel = "stable" | "preview";
+
 export interface DownloadedUpdate {
   cache_id: string;
   version: string;

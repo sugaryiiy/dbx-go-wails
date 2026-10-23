@@ -1,15 +1,16 @@
 import { computed, ref, watch, onScopeDispose } from "vue";
 import { useI18n } from "vue-i18n";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
+import { isWailsRuntime, onWailsEvent, openWailsUrl, wailsApp } from "@/lib/backend/wailsRuntime";
 import * as api from "@/lib/backend/api";
 import { useSettingsStore } from "@/stores/settingsStore";
-import type { UpdateDownloadSource as SettingsUpdateDownloadSource } from "@/stores/settingsStore";
+import type { UpdateChannel as SettingsUpdateChannel, UpdateDownloadSource as SettingsUpdateDownloadSource } from "@/stores/settingsStore";
 import type { UpdateDownloadProgress } from "@/lib/backend/backendTypes";
 import { currentLocale } from "@/i18n";
 import { shouldBlockAppUpdate } from "@/lib/app/appUpdateTaskGuard";
 import { uuid } from "@/lib/common/utils";
 import { isUpdatePreviewMockEnabled, previewAppUpdateInfo } from "@/lib/updates/updatePreviewMock";
-import { UPSTREAM_APP_UPDATES_ENABLED } from "@/lib/app/distribution";
+import { APP_RELEASES_URL, APP_UPDATES_ENABLED, appReleaseTagUrl } from "@/lib/app/distribution";
 
 interface UseAppUpdaterOptions {
   getActiveTaskCount?: () => number;
@@ -17,11 +18,11 @@ interface UseAppUpdaterOptions {
 }
 
 export function shouldOpenUpdateDialog(options: { silent?: boolean }) {
-  return UPSTREAM_APP_UPDATES_ENABLED && options.silent !== true;
+  return APP_UPDATES_ENABLED && options.silent !== true;
 }
 
 export function canDownloadAndInstallUpdate(info: api.UpdateInfo | null, isDesktop: boolean) {
-  return UPSTREAM_APP_UPDATES_ENABLED && isDesktop && info?.update_available === true && info.manual_update_only !== true;
+  return APP_UPDATES_ENABLED && isDesktop && info?.update_available === true && info.manual_update_only !== true;
 }
 
 interface ParsedUpdateVersion {
@@ -98,23 +99,19 @@ export function tagVersion(version: string): string {
   return trimmed.startsWith("v") ? trimmed : `v${trimmed}`;
 }
 
-export function resolveUpdateReleaseUrl(_info: api.UpdateInfo | null, _source: unknown, _fallbackUrl: string): string {
-  return "";
+export function resolveUpdateReleaseUrl(info: api.UpdateInfo | null, _source: unknown, fallbackUrl: string): string {
+  return info?.release_url || fallbackUrl || APP_RELEASES_URL;
 }
 
-/** This distribution has no upstream package download or rollback page. */
-export function resolveReleaseTagUrl(_tag: string, _source: unknown): string {
-  return "";
+/** Release pages live on this distribution's own GitHub repository. */
+export function resolveReleaseTagUrl(tag: string, _source: unknown): string {
+  return appReleaseTagUrl(tag);
 }
 
 export async function resolveUpdaterProxy(): Promise<string | undefined> {
-  if (!isTauriRuntime()) return undefined;
-  try {
-    const proxy = await api.getSystemProxyUrl();
-    return proxy || undefined;
-  } catch {
-    return undefined;
-  }
+  // The Go backend performs update downloads itself and resolves any system
+  // proxy on its side; the frontend never supplies one.
+  return undefined;
 }
 
 export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
@@ -136,8 +133,8 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
   const isInstallingUpdate = computed(() => phase.value === "installing" || isPreparingUpdate.value);
   const updateReady = computed(() => phase.value === "restart");
   const activeTaskCount = computed(() => Math.max(0, Math.trunc(options.getActiveTaskCount?.() ?? 0)));
-  const autoUpdateEnabled = computed(() => UPSTREAM_APP_UPDATES_ENABLED && settingsStore.editorSettings.autoUpdateApp !== false);
-  const hasUpdateAvailable = computed(() => UPSTREAM_APP_UPDATES_ENABLED && (updateDownloaded.value || updateReady.value || updateInfo.value?.update_available === true) && !isUpdateIgnored(updateInfo.value, settingsStore.editorSettings.ignoredUpdateVersion));
+  const autoUpdateEnabled = computed(() => APP_UPDATES_ENABLED && settingsStore.editorSettings.autoUpdateApp !== false);
+  const hasUpdateAvailable = computed(() => APP_UPDATES_ENABLED && (updateDownloaded.value || updateReady.value || updateInfo.value?.update_available === true) && !isUpdateIgnored(updateInfo.value, settingsStore.editorSettings.ignoredUpdateVersion));
   const latestReleaseUrl = "";
   let generation = 0;
   let activeDownload: Promise<void> | undefined;
@@ -192,7 +189,11 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
     clearError();
   }
   function openUrl(url: string) {
-    if (!UPSTREAM_APP_UPDATES_ENABLED || !url) return;
+    if (!APP_UPDATES_ENABLED || !url) return;
+    if (isWailsRuntime()) {
+      openWailsUrl(url);
+      return;
+    }
     if (isTauriRuntime()) void import("@tauri-apps/plugin-shell").then(({ open }) => open(url));
     else window.open(url, "_blank", "noopener,noreferrer");
   }
@@ -213,7 +214,7 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
     return t("updates.installFailed", { error: message });
   }
   async function checkUpdates(checkOptions: { silent?: boolean } = {}) {
-    if (!UPSTREAM_APP_UPDATES_ENABLED) return;
+    if (!APP_UPDATES_ENABLED) return;
     if (disposed || isIgnoringUpdate.value) return;
     if (!checkOptions.silent) showUpdateDialog.value = true;
     // A downloaded-but-uninstalled update keeps the app in the ready phase; checks
@@ -230,14 +231,14 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
         phase.value = "idle";
         return;
       }
-      const info = await api.checkForUpdates(currentLocale(), normalizeUpdateDownloadSource(settingsStore.editorSettings.updateDownloadSource));
+      const info = await api.checkForUpdates(currentLocale(), normalizeUpdateDownloadSource(settingsStore.editorSettings.updateDownloadSource), settingsStore.editorSettings.updateChannel);
       if (token !== generation || disposed) return;
       updateInfo.value = info;
       // Installation may have started while the check was in flight; only restore
       // the phase this check itself owns.
       if (phase.value === "checking") phase.value = downloaded.value ? "ready" : "idle";
       if (!info.update_available) updateCheckMessage.value = t("updates.upToDate", { version: info.current_version });
-      if (canDownloadAndInstallUpdate(info, isTauriRuntime()) && !isUpdateIgnored(info, settingsStore.editorSettings.ignoredUpdateVersion)) {
+      if (canDownloadAndInstallUpdate(info, isWailsRuntime()) && !isUpdateIgnored(info, settingsStore.editorSettings.ignoredUpdateVersion)) {
         const cached = downloaded.value;
         if (cached && !isNewerRemoteVersion(info.latest_version, cached.version)) {
           // Keep a prepared package installable without replacing it automatically.
@@ -272,8 +273,8 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
     }
   }
   async function downloadUpdateInBackground(automatic = false) {
-    if (!UPSTREAM_APP_UPDATES_ENABLED) return;
-    if (disposed || isIgnoringUpdate.value || phase.value !== "idle" || downloaded.value || !canDownloadAndInstallUpdate(updateInfo.value, isTauriRuntime())) return;
+    if (!APP_UPDATES_ENABLED) return;
+    if (disposed || isIgnoringUpdate.value || phase.value !== "idle" || downloaded.value || !canDownloadAndInstallUpdate(updateInfo.value, isWailsRuntime())) return;
     if (automatic && !autoUpdateEnabled.value) return;
     automaticDownload = automatic;
     const version = updateInfo.value!.latest_version;
@@ -288,9 +289,9 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
       try {
         await cancellation;
         if (token !== generation || disposed) return;
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<UpdateDownloadProgress>("update-download-progress", ({ payload }) => {
-          if (token !== generation || payload.attempt_id !== attemptId || payload.version !== version) return;
+        unlisten = onWailsEvent("update-download-progress", (...data: unknown[]) => {
+          const payload = data[0] as UpdateDownloadProgress | undefined;
+          if (!payload || token !== generation || payload.attempt_id !== attemptId || payload.version !== version) return;
           downloadProgress.value = payload.total && payload.total > 0 ? Math.min(100, Math.round((payload.downloaded / payload.total) * 100)) : null;
         });
         if (token !== generation || disposed) return;
@@ -346,8 +347,21 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
       if (phase.value === "downloading") phase.value = "idle";
     }
   }
+  async function changeUpdateChannel(channel: SettingsUpdateChannel) {
+    if (!APP_UPDATES_ENABLED) return;
+    if (isIgnoringUpdate.value || isInstallingUpdate.value) return;
+    try {
+      await settingsStore.updateEditorSettingsAndPersist({ updateChannel: channel });
+      if (downloaded.value || updateReady.value || isInstallingUpdate.value) return;
+      await cancelDownload();
+      retries = 0;
+      await checkUpdates();
+    } catch (error) {
+      fail(error);
+    }
+  }
   async function changeUpdateDownloadSource(source: SettingsUpdateDownloadSource) {
-    if (!UPSTREAM_APP_UPDATES_ENABLED) return;
+    if (!APP_UPDATES_ENABLED) return;
     if (isIgnoringUpdate.value || isInstallingUpdate.value) return;
     try {
       await settingsStore.updateEditorSettingsAndPersist({ updateDownloadSource: source });
@@ -378,8 +392,8 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
     }
   }
   async function performInstall(restartOnly: boolean) {
-    if (!UPSTREAM_APP_UPDATES_ENABLED && !restartOnly) return;
-    if (!isTauriRuntime() || isInstallingUpdate.value || isIgnoringUpdate.value || (!restartOnly && !downloaded.value)) return;
+    if (!APP_UPDATES_ENABLED && !restartOnly) return;
+    if (!isWailsRuntime() || isInstallingUpdate.value || isIgnoringUpdate.value || (!restartOnly && !downloaded.value)) return;
     const cache = downloaded.value;
     let release: (() => void) | undefined;
     phase.value = "preparing";
@@ -396,11 +410,16 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
         installed = true;
         downloaded.value = null;
       }
-      // Windows installers and the portable helper own process replacement/relaunch.
-      if (!cache?.portable_mode && !navigator.userAgent.includes("Windows")) {
+      // The Go install binding stages the package, starts the detached
+      // update helper and drives the normal quit flow; the helper swaps the
+      // package and relaunches once this process has exited. A bare restart
+      // request means an earlier install was staged but its quit was
+      // cancelled, so this process quits directly and the helper takes over.
+      if (restartOnly) {
         phase.value = "restart";
-        const { relaunch } = await import("@tauri-apps/plugin-process");
-        await relaunch();
+        await wailsApp().Close();
+      } else if (installed) {
+        phase.value = "restart";
       }
     } catch (error) {
       failed = true;
@@ -434,10 +453,10 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
     if (updateReady.value) await performInstall(true);
   }
   async function initialize() {
-    if (!UPSTREAM_APP_UPDATES_ENABLED) return;
+    if (!APP_UPDATES_ENABLED) return;
     if (initialized || disposed) return;
     initialized = true;
-    if (isTauriRuntime()) {
+    if (isWailsRuntime()) {
       phase.value = "checking";
       try {
         const cache = await api.getDownloadedUpdate();
@@ -511,6 +530,7 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
     formatUpdateError,
     openLatestRelease,
     changeUpdateDownloadSource,
+    changeUpdateChannel,
     ignoreCurrentVersion,
     downloadUpdateInBackground,
     cancelDownload,

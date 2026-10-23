@@ -48,7 +48,16 @@ export interface WailsRuntimeEvents {
   EventsOn(eventName: string, callback: (...data: unknown[]) => void): () => void;
 }
 
-type WailsRuntimeGlobal = { runtime?: WailsRuntimeEvents };
+type WailsRuntimeGlobal = { runtime?: WailsRuntimeEvents & { BrowserOpenURL?: (url: string) => void } };
+
+// Opens a URL in the system browser through the Wails runtime. Returns false
+// outside the Wails runtime so callers can fall back to window.open.
+export function openWailsUrl(url: string, globalObject: unknown = globalThis): boolean {
+  const runtime = (globalObject as WailsRuntimeGlobal)?.runtime;
+  if (typeof runtime?.BrowserOpenURL !== "function") return false;
+  runtime.BrowserOpenURL(url);
+  return true;
+}
 
 // Subscribes to an event emitted by the Go shell through runtime.EventsEmit.
 // Returns an unsubscribe function; outside the Wails runtime it is a no-op.

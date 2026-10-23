@@ -111,6 +111,7 @@ import type {
   UpdateInfo,
   DownloadedUpdate,
   UpdateDownloadSource,
+  UpdateChannel,
   RedisCollectionPage,
   RedisBlob,
   RedisDatabaseInfo,
@@ -5496,10 +5497,11 @@ export async function deleteHistoryEntry(id: string): Promise<void> {
 // Updates
 // ---------------------------------------------------------------------------
 
-export async function checkForUpdates(locale?: string, source?: UpdateDownloadSource): Promise<UpdateInfo> {
+export async function checkForUpdates(locale?: string, source?: UpdateDownloadSource, channel?: UpdateChannel): Promise<UpdateInfo> {
   const params = new URLSearchParams();
   if (locale) params.set("locale", locale);
   if (source) params.set("source", source);
+  if (channel) params.set("channel", channel);
   const query = params.size > 0 ? `?${params.toString()}` : "";
   return get(`/api/update/check${query}`);
 }

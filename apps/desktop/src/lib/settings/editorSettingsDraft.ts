@@ -121,6 +121,7 @@ export const EDITOR_SETTINGS_DRAFT_KEYS = [
   "updateNotificationsEnabled",
   "autoDownloadUpdates",
   "autoUpdateApp",
+  "updateChannel",
   "autoUpdateDrivers",
   "autoUpdateJdbc",
   "autoUpdateMcp",

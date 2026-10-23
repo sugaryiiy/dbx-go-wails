@@ -511,6 +511,13 @@ describe("normalizeEditorSettings", () => {
     expect(normalizeEditorSettings({ updateDownloadSource: "mirror" as any }).updateDownloadSource).toBe("official");
   });
 
+  it("defaults the update channel to stable and only accepts preview as the alternative", () => {
+    expect(normalizeEditorSettings({}).updateChannel).toBe("stable");
+    expect(normalizeEditorSettings({ updateChannel: "stable" }).updateChannel).toBe("stable");
+    expect(normalizeEditorSettings({ updateChannel: "preview" }).updateChannel).toBe("preview");
+    expect(normalizeEditorSettings({ updateChannel: "nightly" as any }).updateChannel).toBe("stable");
+  });
+
   it("defaults data grid search to row filtering and preserves highlight mode", () => {
     expect(normalizeEditorSettings({}).dataGridSearchMode).toBe("filter");
     expect(normalizeEditorSettings({ dataGridSearchMode: "highlight" }).dataGridSearchMode).toBe("highlight");

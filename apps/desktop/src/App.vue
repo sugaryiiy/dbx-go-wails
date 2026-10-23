@@ -300,6 +300,7 @@ const {
   checkUpdates,
   openLatestRelease,
   changeUpdateDownloadSource,
+  changeUpdateChannel,
   ignoreCurrentVersion,
   downloadUpdateInBackground,
   cancelDownload,
@@ -316,6 +317,10 @@ const { setupFileDrop } = useFileDrop();
 const { openInStreamingExecutorOnTooLarge } = useLargeSqlFileStreamingFallback();
 
 const isDesktop = isTauriRuntime();
+// The app-update preparation pipeline only needs a desktop shell with the
+// Go bindings; it must not inherit isDesktop's other consumers (auth, AI
+// runs, window frame), which keep their existing behaviour.
+const isAppUpdateDesktop = isTauriRuntime() || isWailsRuntime();
 const componentUpdates = useComponentUpdates({ isDesktop: isDesktop || isUpdatePreviewMockEnabled() });
 const windowContext = resolveWindowContext();
 const isDetachedWindowContext = windowContext.kind === "detached-tab";
@@ -323,7 +328,7 @@ const detachedContextTabId = windowContext.kind === "detached-tab" ? windowConte
 let updateWindowReady = false;
 let updatePreparation: Awaited<ReturnType<typeof setupUpdatePreparation>> | undefined;
 async function initializeUpdatePreparation() {
-  if (!isDesktop || updatePreparation) return;
+  if (!isAppUpdateDesktop || updatePreparation) return;
   updatePreparation = await setupUpdatePreparation({
     translate: (key) => t(key),
     assertSafe() {
@@ -4310,7 +4315,7 @@ async function initApp() {
       hasPendingComponentUpdates: () => !isDetachedWindowContext && hasPendingComponentUpdatesAfterAppRestart(),
       prepareStartup: async () => {
         await settingsStore.initDesktopSettings().catch(() => {});
-        if (isDesktop) {
+        if (isAppUpdateDesktop) {
           updateWindowReady = true;
           await initializeUpdatePreparation();
           await initializeUpdater();
@@ -5073,6 +5078,7 @@ onUnmounted(() => {
             :checking-updates="checkingUpdates"
             :update-check-failed="updateCheckFailed"
             :update-download-source="settingsStore.editorSettings.updateDownloadSource"
+            :update-channel="settingsStore.editorSettings.updateChannel"
             :is-downloading-update="isDownloadingUpdate"
             :download-progress="downloadProgress"
             :update-downloaded="updateDownloaded"
@@ -5092,6 +5098,7 @@ onUnmounted(() => {
             :is-updating-all="updatingAllUpdates || componentUpdates.updating.value"
             @open-latest-release="openLatestRelease"
             @change-download-source="changeUpdateDownloadSource"
+            @change-update-channel="changeUpdateChannel"
             @download-in-background="downloadUpdateInBackground"
             @cancel-download="cancelDownload"
             @install-downloaded="installDownloadedUpdateWithComponentUpdates"

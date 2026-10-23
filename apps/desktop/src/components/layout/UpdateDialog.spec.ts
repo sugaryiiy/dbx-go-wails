@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 import UpdateDialog from "@/components/layout/UpdateDialog.vue";
 
-vi.mock("@/lib/app/distribution", () => ({ UPSTREAM_APP_UPDATES_ENABLED: true }));
+vi.mock("@/lib/app/distribution", () => ({
+  APP_UPDATES_ENABLED: true,
+  APP_RELEASES_URL: "https://github.com/sugaryiiy/magpiedb/releases",
+  appReleaseTagUrl: (tag: string) => `https://github.com/sugaryiiy/magpiedb/releases/tag/${tag.startsWith("v") ? tag : `v${tag}`}`,
+}));
 
 const runtimeState = vi.hoisted(() => ({ tauri: true }));
 
@@ -451,7 +455,7 @@ describe("UpdateDialog older versions", () => {
     historyButton("Open Release")?.click();
     await flushDialog();
 
-    expect(updateMocks.openExternal).not.toHaveBeenCalled();
+    expect(updateMocks.openExternal).toHaveBeenCalledWith("https://github.com/sugaryiiy/magpiedb/releases/tag/v0.5.59");
   });
 
   it("keeps the history collapsed until the user expands it", async () => {

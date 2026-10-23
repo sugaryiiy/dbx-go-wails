@@ -17,13 +17,24 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
 }));
 // Exercise the retained update lifecycle independently from the distribution guard.
-vi.mock("@/lib/app/distribution", () => ({ UPSTREAM_APP_UPDATES_ENABLED: true }));
+vi.mock("@/lib/app/distribution", () => ({
+  APP_UPDATES_ENABLED: true,
+  APP_RELEASES_URL: "https://github.com/sugaryiiy/magpiedb/releases",
+  appReleaseTagUrl: (tag: string) => `https://github.com/sugaryiiy/magpiedb/releases/tag/${tag.startsWith("v") ? tag : `v${tag}`}`,
+}));
 vi.mock("@/lib/backend/api", () => mocks);
 vi.mock("@/lib/backend/tauriRuntime", () => ({ isTauriRuntime: () => true }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
-vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: mocks.relaunch }));
+vi.mock("@/lib/backend/wailsRuntime", () => ({
+  isWailsRuntime: () => true,
+  onWailsEvent: (name: string, callback: (...args: unknown[]) => void) => {
+    void mocks.listen(name, callback);
+    return () => {};
+  },
+  wailsApp: () => ({ Close: mocks.relaunch }),
+  openWailsUrl: () => true,
+}));
 vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: mocks.toast }) }));
-const settings = reactive({ updateDownloadSource: "official", ignoredUpdateVersion: "", updateNotificationsEnabled: true, autoDownloadUpdates: true, autoUpdateApp: true });
+const settings = reactive({ updateDownloadSource: "official", updateChannel: "stable", ignoredUpdateVersion: "", updateNotificationsEnabled: true, autoDownloadUpdates: true, autoUpdateApp: true });
 vi.mock("@/stores/settingsStore", () => ({ useSettingsStore: () => ({ editorSettings: settings, updateEditorSettingsAndPersist: mocks.persist }) }));
 const info = { current_version: "1.0.0", latest_version: "1.1.0", update_available: true, portable_mode: false, manual_update_only: false, release_name: "v1.1.0", release_url: "https://example.com", release_notes: "Changes" };
 const cache = { cache_id: "cached", version: "1.1.0", portable_mode: false, release_url: "https://example.com", release_notes: "Changes", downloaded_at: 1 };
@@ -58,6 +69,7 @@ async function flush() {
 beforeEach(() => {
   vi.resetAllMocks();
   settings.updateDownloadSource = "official";
+  settings.updateChannel = "stable";
   settings.ignoredUpdateVersion = "";
   settings.updateNotificationsEnabled = true;
   settings.autoDownloadUpdates = true;
@@ -74,13 +86,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("older version release pages", () => {
-  it("does not expose historical upstream release links", () => {
-    expect(resolveReleaseTagUrl("0.5.59", "official")).toBe("");
-    expect(resolveReleaseTagUrl("v0.5.59", "official")).toBe("");
+  it("links historical releases to this distribution's own repository", () => {
+    expect(resolveReleaseTagUrl("0.5.59", "official")).toBe("https://github.com/sugaryiiy/magpiedb/releases/tag/v0.5.59");
+    expect(resolveReleaseTagUrl("v0.5.59", "official")).toBe("https://github.com/sugaryiiy/magpiedb/releases/tag/v0.5.59");
   });
 
-  it("does not expose the former mirror release page", () => {
-    expect(resolveReleaseTagUrl("v0.5.59", "cnb")).toBe("");
+  it("uses the same repository for every download source", () => {
+    expect(resolveReleaseTagUrl("v0.5.59", "cnb")).toBe("https://github.com/sugaryiiy/magpiedb/releases/tag/v0.5.59");
   });
 
   it("treats only strictly older releases as rollback candidates", () => {
@@ -217,7 +229,10 @@ describe("silent update lifecycle", () => {
     expect(mocks.downloadUpdate).not.toHaveBeenCalled();
     expect(mocks.installDownloadedUpdate).toHaveBeenCalledWith("cached", "1.1.0");
     expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(mocks.installDownloadedUpdate.mock.invocationCallOrder[0]);
-    expect(mocks.installDownloadedUpdate.mock.invocationCallOrder[0]).toBeLessThan(mocks.relaunch.mock.invocationCallOrder[0]);
+    // The Go install binding owns the quit and the helper relaunches the new
+    // build; the frontend must not relaunch the process itself.
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+    expect(updater.phase.value).toBe("restart");
     expect(release).not.toHaveBeenCalled();
   });
   it("preparation failure retains the package and repeated clicks cannot bypass preparation", async () => {
@@ -245,6 +260,10 @@ describe("silent update lifecycle", () => {
     const updater = mount();
     await updater.checkUpdates({ silent: true });
     await updater.installDownloadedUpdate();
+    // The install binding owns the quit after a successful install; an
+    // explicit restart whose quit fails can be retried without reinstalling.
+    expect(mocks.relaunch).not.toHaveBeenCalled();
+    await updater.restartApp();
     await updater.restartApp();
     expect(mocks.installDownloadedUpdate).toHaveBeenCalledOnce();
     expect(mocks.relaunch).toHaveBeenCalledTimes(2);
@@ -291,9 +310,9 @@ describe("silent update lifecycle", () => {
     await vi.waitFor(() => expect(mocks.listen).toHaveBeenCalled());
     const callback = mocks.listen.mock.calls[0][1];
     const attempt = mocks.downloadUpdate.mock.calls[0][2];
-    callback({ payload: { downloaded: 90, total: 100, attempt_id: "old", version: "1.1.0" } });
+    callback({ downloaded: 90, total: 100, attempt_id: "old", version: "1.1.0" });
     expect(updater.downloadProgress.value).toBeNull();
-    callback({ payload: { downloaded: 30, total: 100, attempt_id: attempt, version: "1.1.0" } });
+    callback({ downloaded: 30, total: 100, attempt_id: attempt, version: "1.1.0" });
     expect(updater.downloadProgress.value).toBe(30);
     pending.resolve(cache);
     await checking;
@@ -320,6 +339,19 @@ describe("silent update lifecycle", () => {
     await updater.changeUpdateDownloadSource("cnb");
     expect(mocks.downloadUpdate).toHaveBeenCalledOnce();
     expect(mocks.checkForUpdates).toHaveBeenCalledOnce();
+  });
+  it("passes the configured update channel to the checker", async () => {
+    settings.updateChannel = "preview";
+    const updater = mount();
+    await updater.checkUpdates({ silent: true });
+    expect(mocks.checkForUpdates).toHaveBeenCalledWith(expect.any(String), "official", "preview");
+  });
+  it("persists a channel change through the settings store", async () => {
+    const updater = mount();
+    await updater.checkUpdates({ silent: true });
+    await updater.changeUpdateChannel("preview");
+    expect(mocks.persist).toHaveBeenCalledWith({ updateChannel: "preview" });
+    expect(settings.updateChannel).toBe("preview");
   });
   it("reconciles a download that commits just before cancellation without installing it", async () => {
     const pending = deferred<typeof cache>();

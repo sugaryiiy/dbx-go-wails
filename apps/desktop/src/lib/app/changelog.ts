@@ -1,4 +1,4 @@
-import { UPSTREAM_APP_UPDATES_ENABLED } from "@/lib/app/distribution";
+import { APP_RELEASES_URL, APP_UPDATES_ENABLED, appReleaseTagUrl } from "@/lib/app/distribution";
 
 export type ChangelogItem = {
   title: string;
@@ -40,15 +40,15 @@ export function changelogLangFromLocale(locale: string): ChangelogLang {
 }
 
 export function changelogWebsiteUrl(_lang: ChangelogLang): string {
-  return "";
+  return APP_RELEASES_URL;
 }
 
-export function changelogReleaseUrl(_tag: string): string {
-  return "";
+export function changelogReleaseUrl(tag: string): string {
+  return appReleaseTagUrl(tag);
 }
 
 export async function fetchChangelog(lang: ChangelogLang, options: { force?: boolean } = {}): Promise<ChangelogData> {
-  if (!UPSTREAM_APP_UPDATES_ENABLED) return { updatedAt: "", releases: [] };
+  if (!APP_UPDATES_ENABLED) return { updatedAt: "", releases: [] };
   if (options.force) {
     cache.delete(lang);
   }

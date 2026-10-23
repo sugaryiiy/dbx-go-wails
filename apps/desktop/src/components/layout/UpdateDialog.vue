@@ -6,12 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getAppVersion, type UpdateInfo } from "@/lib/backend/api";
-import type { AgentDriverInfo, McpServerStatus, UpdateDownloadSource } from "@/lib/backend/backendTypes";
+import type { AgentDriverInfo, McpServerStatus, UpdateChannel, UpdateDownloadSource } from "@/lib/backend/backendTypes";
 import type { JdbcPluginStatus } from "@/types/database";
 import { pluginSourceChange, type MarketplacePluginListing } from "@/lib/plugins/pluginMarketplace";
 import { mcpUpdateAvailability } from "@/lib/mcp/mcpUpdateStatus";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
-import { UPSTREAM_APP_UPDATES_ENABLED } from "@/lib/app/distribution";
+import { isWailsRuntime, openWailsUrl } from "@/lib/backend/wailsRuntime";
+import { APP_UPDATES_ENABLED } from "@/lib/app/distribution";
 import { isUpdatePreviewMockEnabled } from "@/lib/updates/updatePreviewMock";
 import { canDownloadAndInstallUpdate, isNewerRemoteVersion, resolveReleaseTagUrl } from "@/composables/useAppUpdater";
 import type { ComponentUpdateCategory } from "@/composables/useComponentUpdates";
@@ -37,6 +38,7 @@ const props = withDefaults(
     checkingUpdates: boolean;
     updateCheckFailed: boolean;
     updateDownloadSource: UpdateDownloadSource;
+    updateChannel?: UpdateChannel;
     driverUpdates?: AgentDriverInfo[];
     jdbcUpdate?: JdbcPluginStatus | null;
     mcpUpdate?: McpServerStatus | null;
@@ -57,6 +59,7 @@ const props = withDefaults(
     componentUpdatesUpdating: false,
     updatingComponent: null,
     isUpdatingAll: false,
+    updateChannel: "stable",
   },
 );
 
@@ -68,12 +71,13 @@ const emit = defineEmits<{
   restart: [];
   "ignore-version": [];
   "change-download-source": [source: UpdateDownloadSource];
+  "change-update-channel": [channel: UpdateChannel];
   "install-component-updates": [category: ComponentUpdateCategory];
   "update-all": [];
 }>();
 
 const { t, locale } = useI18n();
-const isDesktop = isTauriRuntime() || isUpdatePreviewMockEnabled();
+const isDesktop = isTauriRuntime() || isWailsRuntime() || isUpdatePreviewMockEnabled();
 const selectedTab = ref<UpdateTab>("app");
 const renderedNotes = ref("");
 
@@ -167,7 +171,11 @@ function handleOpenChange(nextOpen: boolean) {
 }
 
 function openExternalUrl(url: string) {
-  if (!UPSTREAM_APP_UPDATES_ENABLED || !url) return;
+  if (!APP_UPDATES_ENABLED || !url) return;
+  if (isWailsRuntime()) {
+    openWailsUrl(url);
+    return;
+  }
   if (isTauriRuntime()) {
     import("@tauri-apps/plugin-shell").then(({ open }) => open(url));
   } else {
@@ -176,7 +184,7 @@ function openExternalUrl(url: string) {
 }
 
 async function loadOlderReleases() {
-  if (!UPSTREAM_APP_UPDATES_ENABLED) return;
+  if (!APP_UPDATES_ENABLED) return;
   const requestId = historyRequest.begin();
   historyLoading.value = true;
   historyError.value = "";
@@ -364,7 +372,7 @@ watch(
             <p v-if="updateDownloaded && !isInstallingUpdate" class="mt-3">{{ t("updates.downloadedReady", { version: updateInfo?.latest_version }) }}</p>
             <p v-if="updateCheckFailed && updateInfo?.update_available" role="alert" class="mt-3 text-destructive">{{ updateCheckMessage }}</p>
 
-            <div v-if="UPSTREAM_APP_UPDATES_ENABLED && (olderReleases.length || historyError)" data-update-history class="mt-4 border-t pt-3">
+            <div v-if="APP_UPDATES_ENABLED && (olderReleases.length || historyError)" data-update-history class="mt-4 border-t pt-3">
               <button type="button" class="flex w-full items-center justify-between gap-2 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground" @click="toggleOlderReleases">
                 <span>{{ t("updates.historyTab") }}</span>
                 <ChevronDown class="h-3.5 w-3.5 shrink-0 transition-transform" :class="olderReleasesExpanded ? 'rotate-180' : ''" />
@@ -465,18 +473,32 @@ watch(
           </template>
         </div>
 
-        <DialogFooter v-if="selectedTab === 'app' && UPSTREAM_APP_UPDATES_ENABLED" data-update-footer class="mx-0 mb-0 min-w-0 rounded-none border-t px-[22px] pb-2.5 pt-2.5 sm:items-center sm:justify-end">
-          <div v-if="!updateReady && !isInstallingUpdate && !updateDownloaded && (updateInfo?.update_available || updateCheckFailed)" class="flex items-center gap-1.5 self-start sm:mr-auto sm:self-center">
-            <span class="text-xs text-muted-foreground">{{ t("updates.source") }}</span>
-            <Select :model-value="updateDownloadSource" :disabled="checkingUpdates || isIgnoringUpdate" @update:model-value="(value) => value && emit('change-download-source', value as UpdateDownloadSource)">
-              <SelectTrigger class="h-8 w-[150px] text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="official">{{ t("updates.sourceOfficial") }}</SelectItem>
-                <SelectItem value="cnb">{{ t("updates.sourceCnb") }}</SelectItem>
-              </SelectContent>
-            </Select>
+        <DialogFooter v-if="selectedTab === 'app' && APP_UPDATES_ENABLED" data-update-footer class="mx-0 mb-0 min-w-0 rounded-none border-t px-[22px] pb-2.5 pt-2.5 sm:items-center sm:justify-end">
+          <div v-if="!updateReady && !isInstallingUpdate && !updateDownloaded && (updateInfo?.update_available || updateCheckFailed)" class="flex flex-wrap items-center gap-x-3 gap-y-1.5 self-start sm:mr-auto sm:self-center">
+            <span class="flex items-center gap-1.5">
+              <span class="text-xs text-muted-foreground">{{ t("settings.updateChannel") }}</span>
+              <Select :model-value="updateChannel" :disabled="checkingUpdates || isIgnoringUpdate" @update:model-value="(value) => value && emit('change-update-channel', value as UpdateChannel)">
+                <SelectTrigger class="h-8 w-[110px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="stable">{{ t("settings.updateChannelStable") }}</SelectItem>
+                  <SelectItem value="preview">{{ t("settings.updateChannelPreview") }}</SelectItem>
+                </SelectContent>
+              </Select>
+            </span>
+            <span class="flex items-center gap-1.5">
+              <span class="text-xs text-muted-foreground">{{ t("updates.source") }}</span>
+              <Select :model-value="updateDownloadSource" :disabled="checkingUpdates || isIgnoringUpdate" @update:model-value="(value) => value && emit('change-download-source', value as UpdateDownloadSource)">
+                <SelectTrigger class="h-8 w-[150px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="official">{{ t("updates.sourceOfficial") }}</SelectItem>
+                  <SelectItem value="cnb">{{ t("updates.sourceCnb") }}</SelectItem>
+                </SelectContent>
+              </Select>
+            </span>
           </div>
           <template v-if="updateInfo?.update_available">
             <div class="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
