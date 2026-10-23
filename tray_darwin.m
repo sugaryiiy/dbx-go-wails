@@ -42,6 +42,9 @@ void dbx_tray_install(const void *iconPNG, int iconLen) {
         }
         if (image != nil) {
             [image setSize:NSMakeSize(18, 18)];
+            // The glyph is a template image: the system renders it in the
+            // menu bar's current foreground color (light/dark/highlighted).
+            [image setTemplate:YES];
             dbxStatusItem.button.image = image;
         } else {
             dbxStatusItem.button.title = @"MagpieDB";

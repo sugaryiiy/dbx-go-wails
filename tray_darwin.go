@@ -15,9 +15,12 @@ import (
 	"unsafe"
 )
 
-// The menu bar icon reuses the bundled app icon.
+// The menu bar icon is a dedicated monochrome magpie glyph (template
+// image), not the full-color app icon: menu bar extras read as simple
+// single-color silhouettes, and macOS tints template images to match the
+// menu bar appearance automatically.
 //
-//go:embed build/wails/appicon.png
+//go:embed build/wails/trayicon.png
 var trayIconPNG []byte
 
 // trayApp receives the callbacks the native status item menu raises.
