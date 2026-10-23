@@ -128,6 +128,9 @@ jobs:
         run: >-
           tar -czf build/release/MagpieDB-${{ needs.prepare.outputs.asset_version }}-Linux-x64.tar.gz
           -C build/wails/bin magpiedb
+      - name: Create the release staging directory
+        shell: bash
+        run: mkdir -p build/release
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ runner.os }}
