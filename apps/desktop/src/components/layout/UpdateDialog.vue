@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, Loader2, RefreshCw } from "@l
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { getAppVersion, type UpdateInfo } from "@/lib/backend/api";
+import { clearUpdateFailure, getAppVersion, getUpdateFailure, type UpdateInfo } from "@/lib/backend/api";
 import type { AgentDriverInfo, McpServerStatus, UpdateChannel, UpdateDownloadSource } from "@/lib/backend/backendTypes";
 import type { JdbcPluginStatus } from "@/types/database";
 import { pluginSourceChange, type MarketplacePluginListing } from "@/lib/plugins/pluginMarketplace";
@@ -80,6 +80,25 @@ const { t, locale } = useI18n();
 const isDesktop = isTauriRuntime() || isWailsRuntime() || isUpdatePreviewMockEnabled();
 const selectedTab = ref<UpdateTab>("app");
 const renderedNotes = ref("");
+/** Version of an update whose install failed and was rolled back (Go-side pending record). */
+const failedUpdateVersion = ref("");
+
+async function loadUpdateFailure() {
+  try {
+    failedUpdateVersion.value = await getUpdateFailure();
+  } catch {
+    failedUpdateVersion.value = "";
+  }
+}
+
+async function dismissUpdateFailure() {
+  failedUpdateVersion.value = "";
+  try {
+    await clearUpdateFailure();
+  } catch {
+    /* The record is re-read on the next open; a failed clear is not fatal. */
+  }
+}
 
 const hasAppUpdate = computed(() => props.updateDownloaded || props.updateReady || props.updateInfo?.update_available === true);
 const mcpAvailable = computed(() => (props.mcpUpdate ? mcpUpdateAvailability(props.mcpUpdate) === true : false));
@@ -235,6 +254,7 @@ watch(
     // 每次打开弹窗都回到折叠状态，不残留上次展开的状态
     olderReleasesExpanded.value = false;
     void loadOlderReleases();
+    void loadUpdateFailure();
   },
   { immediate: true },
 );
@@ -331,6 +351,11 @@ watch(
 
         <div data-update-scroll-region class="min-h-0 flex-1 overflow-auto px-5 py-4 text-sm">
           <template v-if="selectedTab === 'app'">
+            <div v-if="failedUpdateVersion" role="alert" class="mb-3 flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              <AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
+              <span class="min-w-0 flex-1">{{ t("updates.installFailedRolledBack", { version: failedUpdateVersion }) }}</span>
+              <Button variant="ghost" size="sm" class="h-6 shrink-0 px-2 text-xs" @click="dismissUpdateFailure">{{ t("common.close") }}</Button>
+            </div>
             <div class="space-y-3">
               <p v-if="updateInfo?.update_available">
                 {{

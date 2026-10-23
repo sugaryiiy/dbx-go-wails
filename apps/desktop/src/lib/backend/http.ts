@@ -5572,8 +5572,18 @@ export async function discardDownloadedUpdate(cacheId: string): Promise<void> {
   if (isWailsRuntime()) return wailsApp().DiscardDownloadedUpdate(cacheId);
 }
 
-export async function installDownloadedUpdate(_cacheId: string, _expectedVersion: string): Promise<void> {
+export async function installDownloadedUpdate(cacheId: string, expectedVersion: string): Promise<void> {
+  if (isWailsRuntime()) return wailsApp().InstallDownloadedUpdate(cacheId, expectedVersion);
   throw new Error("In-app update installation is only available in the desktop app.");
+}
+
+export async function getUpdateFailure(): Promise<string> {
+  if (isWailsRuntime()) return wailsApp().GetUpdateFailure();
+  return "";
+}
+
+export async function clearUpdateFailure(): Promise<void> {
+  if (isWailsRuntime()) return wailsApp().ClearUpdateFailure();
 }
 
 export async function getAppVersion(): Promise<string> {

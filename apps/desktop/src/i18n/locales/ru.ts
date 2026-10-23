@@ -589,6 +589,7 @@ export default withEnglishFallback({
     installing: "Установка обновления...",
     portableHelperFailed: "Не удалось запустить помощник портативного обновления: {error}",
     installFailed: "Не удалось установить обновление: {error}",
+    installFailedRolledBack: "Обновление до {version} не удалось и было отменено. Предыдущая версия восстановлена.",
     restart: "Выйти и перезапустить",
     updateAction: "Обновить",
     updateNow: "Обновить сейчас",

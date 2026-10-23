@@ -604,6 +604,7 @@ export default withEnglishFallback({
     installing: "Instalando atualização...",
     portableHelperFailed: "Não foi possível iniciar o assistente de atualização portátil: {error}",
     installFailed: "Falha ao instalar a atualização: {error}",
+    installFailedRolledBack: "A atualização para {version} falhou e foi revertida. A versão anterior foi restaurada.",
     restart: "Sair e Reiniciar",
     updateAction: "Atualizar",
     updateNow: "Atualizar agora",

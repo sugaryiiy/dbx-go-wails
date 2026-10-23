@@ -24,10 +24,29 @@ describe("Go Wails update bindings", () => {
     expect(app.DiscardDownloadedUpdate).toHaveBeenCalledWith("attempt-1");
   });
 
+  it("routes installs and failure reporting through the native bindings", async () => {
+    const app = {
+      GetWindowState: vi.fn(),
+      InstallDownloadedUpdate: vi.fn().mockResolvedValue(undefined),
+      GetUpdateFailure: vi.fn().mockResolvedValue("0.6.34"),
+      ClearUpdateFailure: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.stubGlobal("go", { main: { App: app } });
+
+    await api.installDownloadedUpdate("attempt-1", "0.6.34");
+    expect(app.InstallDownloadedUpdate).toHaveBeenCalledWith("attempt-1", "0.6.34");
+    await expect(api.getUpdateFailure()).resolves.toBe("0.6.34");
+    await api.clearUpdateFailure();
+    expect(app.ClearUpdateFailure).toHaveBeenCalledOnce();
+  });
+
   it("keeps web behaviour outside the desktop runtime", async () => {
     await expect(api.downloadUpdate("official", "0.6.34", "attempt-1")).rejects.toThrow("only available in the desktop app");
     await expect(api.getDownloadedUpdate()).resolves.toBeNull();
     await expect(api.cancelUpdateDownload()).resolves.toBeUndefined();
     await expect(api.discardDownloadedUpdate("attempt-1")).resolves.toBeUndefined();
+    await expect(api.installDownloadedUpdate("attempt-1", "0.6.34")).rejects.toThrow("only available in the desktop app");
+    await expect(api.getUpdateFailure()).resolves.toBe("");
+    await expect(api.clearUpdateFailure()).resolves.toBeUndefined();
   });
 });

@@ -218,3 +218,10 @@ func (s *Server) UpdateService() *updater.Service {
 	service.PortableMode = portable
 	return service
 }
+
+// ConfirmUpdatePending resolves the pending record of a previous install
+// at startup: a swap that landed on this build is confirmed (its backup
+// removed), anything else is preserved for the UI to report or dismiss.
+func (s *Server) ConfirmUpdatePending() {
+	_ = s.UpdateService().ConfirmPending(version.Version)
+}

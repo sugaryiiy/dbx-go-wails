@@ -563,6 +563,7 @@ export default withEnglishFallback({
     installing: "Memasang pembaruan...",
     portableHelperFailed: "Helper pembaruan portabel tidak dapat dijalankan: {error}",
     installFailed: "Pemasangan pembaruan gagal: {error}",
+    installFailedRolledBack: "Pembaruan ke {version} gagal dan dikembalikan. Versi sebelumnya telah dipulihkan.",
     restart: "Keluar & Restart",
     updateAction: "Perbarui",
     updateNow: "Perbarui Sekarang",

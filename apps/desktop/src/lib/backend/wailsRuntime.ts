@@ -44,6 +44,9 @@ export interface WailsApp {
   CancelUpdateDownload(): Promise<void>;
   GetDownloadedUpdate(): Promise<import("./backendTypes").DownloadedUpdate | null>;
   DiscardDownloadedUpdate(cacheId: string): Promise<void>;
+  InstallDownloadedUpdate(cacheId: string, expectedVersion: string): Promise<void>;
+  GetUpdateFailure(): Promise<string>;
+  ClearUpdateFailure(): Promise<void>;
 }
 
 type WailsGlobal = { go?: { main?: { App?: WailsApp } } };

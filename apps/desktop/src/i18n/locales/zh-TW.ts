@@ -636,6 +636,7 @@ export default withEnglishFallback({
     installing: "正在安裝更新...",
     portableHelperFailed: "可攜版更新助手啟動失敗：{error}。可攜版更新依賴 Windows PowerShell，可先安裝或修復 PowerShell，也可開啟下載頁手動更新。",
     installFailed: "更新安裝失敗：{error}",
+    installFailedRolledBack: "更新到 {version} 失敗，已回滾，之前的版本已恢復。",
     restart: "結束並重新啟動",
     updateAction: "更新",
     updateNow: "立即更新",

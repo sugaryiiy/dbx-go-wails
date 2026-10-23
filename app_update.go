@@ -71,3 +71,44 @@ func (a *App) DiscardDownloadedUpdate(cacheID string) error {
 	}
 	return service.Discard(cacheID)
 }
+
+// InstallDownloadedUpdate stages a verified cached package, starts the
+// detached update helper and drives the normal quit flow (the same one
+// the tray Quit item uses). The helper waits for this process to exit,
+// swaps the package, and relaunches the new build; if the swap fails it
+// restores the current build and records the failure for the dialog.
+func (a *App) InstallDownloadedUpdate(cacheID string, expectedVersion string) error {
+	service := a.updateService()
+	if service == nil {
+		return fmt.Errorf("update installation is unavailable in this build")
+	}
+	jobPath, err := service.PrepareInstall(cacheID, expectedVersion)
+	if err != nil {
+		return err
+	}
+	if err := updater.SpawnHelper(jobPath); err != nil {
+		return fmt.Errorf("start update helper: %w", err)
+	}
+	a.emitCloseRequested("quit")
+	return nil
+}
+
+// GetUpdateFailure returns the version of a failed update that was rolled
+// back, or "" when there is nothing to report.
+func (a *App) GetUpdateFailure() string {
+	service := a.updateService()
+	if service == nil {
+		return ""
+	}
+	return service.PendingFailure()
+}
+
+// ClearUpdateFailure dismisses a reported update failure and removes its
+// leftovers.
+func (a *App) ClearUpdateFailure() error {
+	service := a.updateService()
+	if service == nil {
+		return nil
+	}
+	return service.ClearPendingFailure()
+}

@@ -611,6 +611,7 @@ export default withEnglishFallback({
     installing: "업데이트 설치 중...",
     portableHelperFailed: "포터블 업데이트 도우미를 시작하지 못했습니다: {error}",
     installFailed: "업데이트 설치에 실패했습니다: {error}",
+    installFailedRolledBack: "{version}(으)로의 업데이트에 실패하여 롤백되었습니다. 이전 버전이 복원되었습니다.",
     restart: "종료 후 다시 시작",
     updateAction: "업데이트",
     updateNow: "지금 업데이트",

@@ -969,6 +969,8 @@ export const cancelUpdateDownload = forward("cancelUpdateDownload");
 export const getDownloadedUpdate = forward("getDownloadedUpdate");
 export const discardDownloadedUpdate = forward("discardDownloadedUpdate");
 export const installDownloadedUpdate = forward("installDownloadedUpdate");
+export const getUpdateFailure = forward("getUpdateFailure");
+export const clearUpdateFailure = forward("clearUpdateFailure");
 export const getAppVersion = forward("getAppVersion");
 export const getAppSupportInfo = forward("getAppSupportInfo");
 

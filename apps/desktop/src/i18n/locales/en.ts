@@ -680,6 +680,7 @@ export default {
     installing: "Installing update...",
     portableHelperFailed: "The portable update helper could not start: {error}",
     installFailed: "Update installation failed: {error}",
+    installFailedRolledBack: "The update to {version} failed and was rolled back. The previous version has been restored.",
     restart: "Exit & Restart",
     updateAction: "Update",
     updateNow: "Update Now",

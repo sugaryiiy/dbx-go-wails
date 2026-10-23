@@ -604,6 +604,7 @@ export default withEnglishFallback({
     installing: "アップデートをインストール中...",
     portableHelperFailed: "ポータブル版アップデートのヘルパーを起動できませんでした: {error}",
     installFailed: "アップデートのインストールに失敗しました: {error}",
+    installFailedRolledBack: "{version} への更新に失敗したため、ロールバックしました。以前のバージョンが復元されました。",
     restart: "終了して再起動",
     updateAction: "更新",
     updateNow: "今すぐ更新",

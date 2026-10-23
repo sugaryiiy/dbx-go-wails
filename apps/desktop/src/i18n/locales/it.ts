@@ -603,6 +603,7 @@ export default withEnglishFallback({
     installing: "Installazione dell'aggiornamento...",
     portableHelperFailed: "Impossibile avviare l'helper di aggiornamento portatile: {error}",
     installFailed: "Installazione dell'aggiornamento non riuscita: {error}",
+    installFailedRolledBack: "L'aggiornamento a {version} non è riuscito ed è stato annullato. La versione precedente è stata ripristinata.",
     restart: "Esci e Riavvia",
     updateAction: "Aggiorna",
     updateNow: "Aggiorna ora",

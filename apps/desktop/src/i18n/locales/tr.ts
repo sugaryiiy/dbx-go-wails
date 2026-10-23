@@ -402,6 +402,7 @@ export default withEnglishFallback({
     installing: "Güncelleme kuruluyor...",
     portableHelperFailed: "Taşınabilir güncelleme yardımcısı başlatılamadı: {error}",
     installFailed: "Güncelleme kurulumu başarısız: {error}",
+    installFailedRolledBack: "{version} sürümüne güncelleme başarısız oldu ve geri alındı. Önceki sürüm geri yüklendi.",
     restart: "Çık ve Yeniden Başlat",
     updateAction: "Güncelle",
     updateNow: "Şimdi Güncelle",

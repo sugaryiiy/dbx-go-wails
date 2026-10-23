@@ -402,6 +402,7 @@ export default withEnglishFallback({
     installing: "Yeniləmə quraşdırılır...",
     portableHelperFailed: "Daşınabilən yeniləmə köməkçisi işə salına bilmədi: {error}",
     installFailed: "Yeniləməni quraşdırmaq mümkün olmadı: {error}",
+    installFailedRolledBack: "{version} yeniləməsi uğursuz oldu və geri qaytarıldı. Əvvəlki versiya bərpa edildi.",
     restart: "Çıx və yenidən başlat",
     updateAction: "Yenilə",
     updateNow: "İndi yenilə",
