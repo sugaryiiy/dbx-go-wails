@@ -159,7 +159,7 @@ func TestHelperSwapAndConfirm(t *testing.T) {
 	if err := os.WriteFile(staged, newBinary, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	job := &InstallJob{Version: "0.6.34", Root: root, Target: target, Staged: staged, Backup: target + ".magpiedb-backup", WaitPID: exitImmediately(t)}
+	job := &InstallJob{Version: "0.6.34", Root: root, Target: target, Staged: staged, Backup: target + ".magpiedb-backup", WaitPID: exitImmediately(t), SkipLaunch: true}
 	if err := RunHelper(writeJob(t, job)); err != nil {
 		t.Fatal(err)
 	}

@@ -52,12 +52,18 @@ func RunHelper(jobPath string) error {
 			logf("rollback failed: %v", restoreErr)
 		}
 		_ = service.writePending(&pendingInstall{Version: job.Version, Target: job.Target, Backup: job.Backup, State: pendingFailed})
-		if launchErr := launchInstalled(&job); launchErr != nil {
-			logf("relaunch after rollback failed: %v", launchErr)
+		if !job.SkipLaunch {
+			if launchErr := launchInstalled(&job); launchErr != nil {
+				logf("relaunch after rollback failed: %v", launchErr)
+			}
 		}
 		return swapErr
 	}
 	_ = service.writePending(&pendingInstall{Version: job.Version, Target: job.Target, Backup: job.Backup, State: pendingSwapped})
+	if job.SkipLaunch {
+		logf("swap complete; launch skipped (test job)")
+		return nil
+	}
 	logf("swap complete; launching %s", job.Target)
 	if err := launchInstalled(&job); err != nil {
 		logf("launch failed: %v", err)

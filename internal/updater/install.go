@@ -30,6 +30,11 @@ type InstallJob struct {
 	Backup string `json:"backup"`
 	// WaitPID is the main process the helper waits on before swapping.
 	WaitPID int `json:"wait_pid"`
+	// SkipLaunch is a test-only switch: when true the helper swaps the
+	// payload but does not relaunch it. Tests use fake payload files that
+	// are not executable binaries, so relaunching them would fail on
+	// Windows (run 39925413088). Production always leaves this false.
+	SkipLaunch bool `json:"skip_launch,omitempty"`
 }
 
 // pendingInstall is the durable record of an in-flight or finished update
