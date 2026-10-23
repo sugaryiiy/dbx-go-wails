@@ -13,5 +13,5 @@
   "build:dir": "build/wails",
   "build:tags": "desktop",
   "author": { "name": "MagpieDB" },
-  "info": { "productName": "MagpieDB", "productVersion": "0.6.33", "copyright": "", "comments": "MagpieDB" }
+  "info": { "productName": "MagpieDB", "productVersion": "0.6.34", "copyright": "", "comments": "MagpieDB" }
 }

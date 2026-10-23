@@ -6,4 +6,4 @@
 package version
 
 // Version is the current application version (SemVer, without a "v" prefix).
-var Version = "0.6.33"
+var Version = "0.6.34"
