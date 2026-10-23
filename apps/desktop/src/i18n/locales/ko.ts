@@ -585,6 +585,8 @@ export default withEnglishFallback({
     preparationConfig: "현재 설정 편집을 완료하세요.",
     preparationNotReady: "업데이트 준비가 안 되었습니다. 다시 시도하세요.",
     downloadedReady: "새 버전 v{version} 다운로드 완료. 다시 시작하여 업데이트하세요.",
+    notificationTitle: "MagpieDB 업데이트",
+    notificationAvailable: "MagpieDB {version} 새 버전이 나왔습니다.",
     restartAndUpdate: "다시 시작 및 업데이트",
     preparing: "업데이트 준비 중…",
     retryDownload: "다운로드 재시도",

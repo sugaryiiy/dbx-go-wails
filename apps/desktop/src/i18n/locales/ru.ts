@@ -560,6 +560,8 @@ export default withEnglishFallback({
     preparationConfig: "Завершите редактирование текущей конфигурации перед обновлением.",
     preparationNotReady: "Подготовка обновления не готова. Повторите попытку.",
     downloadedReady: "Новая версия v{version} загружена. Перезапустите для обновления.",
+    notificationTitle: "Обновление MagpieDB",
+    notificationAvailable: "Доступна версия MagpieDB {version}.",
     restartAndUpdate: "Перезапустить и обновить",
     preparing: "Подготовка обновления…",
     retryDownload: "Повторить загрузку",

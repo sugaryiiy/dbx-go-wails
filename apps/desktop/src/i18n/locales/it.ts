@@ -577,6 +577,8 @@ export default withEnglishFallback({
     preparationConfig: "Completa la modifica della configurazione.",
     preparationNotReady: "Aggiornamento non pronto. Riprova.",
     downloadedReady: "La versione v{version} è scaricata. Riavvia per aggiornare.",
+    notificationTitle: "Aggiornamento MagpieDB",
+    notificationAvailable: "MagpieDB {version} è disponibile.",
     restartAndUpdate: "Riavvia e aggiorna",
     preparing: "Preparazione aggiornamento…",
     retryDownload: "Riprova download",

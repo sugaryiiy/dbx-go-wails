@@ -534,6 +534,8 @@ export default withEnglishFallback({
     preparationConfig: "Selesaikan pengeditan konfigurasi saat ini sebelum memperbarui.",
     preparationNotReady: "Persiapan pembaruan belum siap. Coba lagi.",
     downloadedReady: "Versi baru v{version} sudah diunduh. Restart untuk memperbarui.",
+    notificationTitle: "Pembaruan MagpieDB",
+    notificationAvailable: "MagpieDB {version} telah tersedia.",
     restartAndUpdate: "Restart & Perbarui",
     preparing: "Mempersiapkan pembaruan…",
     retryDownload: "Coba Unduh Lagi",

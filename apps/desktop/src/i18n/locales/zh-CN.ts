@@ -588,6 +588,8 @@ export default withEnglishFallback({
     preparationConfig: "请先完成当前配置编辑。",
     preparationNotReady: "更新准备尚未就绪，请重试。",
     downloadedReady: "新版本 v{version} 已下载，重启即可更新",
+    notificationTitle: "MagpieDB 更新",
+    notificationAvailable: "MagpieDB {version} 已发布，可以更新了。",
     restartAndUpdate: "重启并更新",
     preparing: "正在准备更新…",
     retryDownload: "重试下载",

@@ -373,6 +373,8 @@ export default withEnglishFallback({
     preparationConfig: "Konfiqurasiya redaktəsini bitirin.",
     preparationNotReady: "Yeniləmə hazır deyil. Yenidən sınayın.",
     downloadedReady: "v{version} versiyası endirilib. Yeniləmək üçün yenidən başladın.",
+    notificationTitle: "MagpieDB Yeniləməsi",
+    notificationAvailable: "MagpieDB {version} mövcuddur.",
     restartAndUpdate: "Yenidən başladın və yeniləyin",
     preparing: "Yeniləmə hazırlanır…",
     retryDownload: "Endirməni yenidən sınayın",

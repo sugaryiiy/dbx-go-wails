@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isTauriRuntime } from "./tauriRuntime";
-import { isWailsRuntime, onWailsEvent, openWailsFile, saveWailsFile, saveWailsBytes, wailsApp } from "./wailsRuntime";
+import { isWailsRuntime, onWailsEvent, openWailsFile, saveWailsFile, saveWailsBytes, sendWailsNotification, wailsApp } from "./wailsRuntime";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -37,6 +37,39 @@ describe("Wails desktop boundary", () => {
   it("treats event subscription as a no-op outside the Wails runtime", () => {
     const unlisten = onWailsEvent("dbx-app-close-requested", vi.fn(), {});
     expect(() => unlisten()).not.toThrow();
+  });
+
+  it("sends notifications only when the Wails runtime offers them", async () => {
+    const options = { id: "app-update", title: "MagpieDB Update", body: "1.1.0 is available." };
+    await expect(sendWailsNotification(options, {})).resolves.toBe(false);
+    await expect(sendWailsNotification(options, { runtime: {} })).resolves.toBe(false);
+  });
+
+  it("initializes and authorizes once, then forwards notification options", async () => {
+    const InitializeNotifications = vi.fn().mockResolvedValue(undefined);
+    const RequestNotificationAuthorization = vi.fn().mockResolvedValue(true);
+    const SendNotification = vi.fn().mockResolvedValue(undefined);
+    const env = { runtime: { InitializeNotifications, RequestNotificationAuthorization, SendNotification } };
+    const options = { id: "app-update", title: "MagpieDB Update", body: "1.1.0 is available." };
+    await expect(sendWailsNotification(options, env)).resolves.toBe(true);
+    await expect(sendWailsNotification(options, env)).resolves.toBe(true);
+    expect(InitializeNotifications).toHaveBeenCalledTimes(1);
+    expect(RequestNotificationAuthorization).toHaveBeenCalledTimes(1);
+    expect(SendNotification).toHaveBeenCalledTimes(2);
+    expect(SendNotification).toHaveBeenCalledWith(options);
+  });
+
+  it("stays silent when notification authorization is denied", async () => {
+    const SendNotification = vi.fn().mockResolvedValue(undefined);
+    const env = {
+      runtime: {
+        InitializeNotifications: vi.fn().mockResolvedValue(undefined),
+        RequestNotificationAuthorization: vi.fn().mockResolvedValue(false),
+        SendNotification,
+      },
+    };
+    await expect(sendWailsNotification({ id: "app-update", title: "MagpieDB Update" }, env)).resolves.toBe(false);
+    expect(SendNotification).not.toHaveBeenCalled();
   });
 
   it("normalizes native file dialog cancellation and multiple selection", async () => {

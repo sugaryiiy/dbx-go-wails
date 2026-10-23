@@ -651,6 +651,8 @@ export default {
     preparationConfig: "Finish editing the current configuration before updating.",
     preparationNotReady: "Update preparation is not ready. Try again.",
     downloadedReady: "New version v{version} is downloaded. Restart to update.",
+    notificationTitle: "MagpieDB Update",
+    notificationAvailable: "MagpieDB {version} is available.",
     restartAndUpdate: "Restart & Update",
     preparing: "Preparing update…",
     retryDownload: "Retry Download",

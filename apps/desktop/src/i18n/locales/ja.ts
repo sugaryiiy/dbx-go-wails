@@ -578,6 +578,8 @@ export default withEnglishFallback({
     preparationConfig: "設定の編集を終了してください。",
     preparationNotReady: "更新の準備ができていません。再試行してください。",
     downloadedReady: "新バージョン v{version} をダウンロード済みです。再起動して更新できます。",
+    notificationTitle: "MagpieDB のアップデート",
+    notificationAvailable: "MagpieDB {version} が利用可能です。",
     restartAndUpdate: "再起動して更新",
     preparing: "更新を準備中…",
     retryDownload: "ダウンロードを再試行",

@@ -74,6 +74,56 @@ export function onWailsEvent(eventName: string, callback: (...data: unknown[]) =
   return runtime.EventsOn(eventName, callback);
 }
 
+export interface WailsNotificationOptions {
+  id: string;
+  title: string;
+  subtitle?: string;
+  body?: string;
+}
+
+interface WailsRuntimeNotifications {
+  InitializeNotifications?: () => Promise<void>;
+  RequestNotificationAuthorization?: () => Promise<boolean>;
+  SendNotification?: (options: WailsNotificationOptions) => Promise<void>;
+}
+
+interface NotificationSession {
+  initialized: boolean;
+  authorized: boolean | null;
+}
+
+// Initialization/authorization state is kept per global object so repeated
+// notifications neither re-initialize the native service nor re-prompt.
+const notificationSessions = new WeakMap<object, NotificationSession>();
+
+// Sends an OS notification through the Wails runtime. The native service is
+// initialized and authorization is requested lazily on first use; a denied
+// authorization or any native failure degrades silently to "not sent" so a
+// notification can never break the flow that triggered it. Returns whether
+// the notification was handed to the OS.
+export async function sendWailsNotification(options: WailsNotificationOptions, globalObject: unknown = globalThis): Promise<boolean> {
+  const runtime = (globalObject as { runtime?: WailsRuntimeNotifications })?.runtime;
+  if (typeof runtime?.SendNotification !== "function") return false;
+  const key = (globalObject ?? {}) as object;
+  let session = notificationSessions.get(key);
+  if (!session) {
+    session = { initialized: false, authorized: null };
+    notificationSessions.set(key, session);
+  }
+  try {
+    if (!session.initialized) {
+      await runtime.InitializeNotifications?.();
+      session.initialized = true;
+      session.authorized = typeof runtime.RequestNotificationAuthorization === "function" ? await runtime.RequestNotificationAuthorization() : true;
+    }
+    if (session.authorized === false) return false;
+    await runtime.SendNotification(options);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // This intentionally does not change isTauriRuntime: Wails database calls must
 // use the shared HTTP API instead of Tauri's Rust command transport.
 export function isWailsRuntime(globalObject: unknown = globalThis): boolean {

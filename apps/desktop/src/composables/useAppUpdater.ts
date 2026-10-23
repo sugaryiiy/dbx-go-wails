@@ -1,7 +1,7 @@
 import { computed, ref, watch, onScopeDispose } from "vue";
 import { useI18n } from "vue-i18n";
 import { isTauriRuntime } from "@/lib/backend/tauriRuntime";
-import { isWailsRuntime, onWailsEvent, openWailsUrl, wailsApp } from "@/lib/backend/wailsRuntime";
+import { isWailsRuntime, onWailsEvent, openWailsUrl, sendWailsNotification, wailsApp } from "@/lib/backend/wailsRuntime";
 import * as api from "@/lib/backend/api";
 import { useSettingsStore } from "@/stores/settingsStore";
 import type { UpdateChannel as SettingsUpdateChannel, UpdateDownloadSource as SettingsUpdateDownloadSource } from "@/stores/settingsStore";
@@ -148,6 +148,24 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
   let disposed = false;
   let versionRecheckPending = false;
   let updatePreparationRelease: (() => void) | undefined;
+  const notifiedUpdateVersions = new Set<string>();
+
+  // OS notifications complement the in-app badge for background discovery:
+  // at most one per version and kind per session, and only when the user has
+  // not opted out via the update-notifications setting. Sending is
+  // best-effort; sendWailsNotification never throws.
+  function notifyUpdateOnce(kind: "available" | "downloaded", version: string) {
+    if (!isWailsRuntime()) return;
+    if (settingsStore.editorSettings.updateNotificationsEnabled === false) return;
+    const key = `${kind}:${version}`;
+    if (notifiedUpdateVersions.has(key)) return;
+    notifiedUpdateVersions.add(key);
+    void sendWailsNotification({
+      id: `magpiedb-update-${version}`,
+      title: t("updates.notificationTitle"),
+      body: kind === "downloaded" ? t("updates.downloadedReady", { version }) : t("updates.notificationAvailable", { version }),
+    });
+  }
 
   function clearRetry() {
     clearTimeout(retryTimer);
@@ -247,8 +265,17 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
         }
         // A cached package older than the remote release must not mask the newer version.
         if (cached && !(await discardSupersededUpdate(cached))) return;
-        if (!autoUpdateEnabled.value) return;
+        if (!autoUpdateEnabled.value) {
+          // Nothing will be downloaded in the background, so the discovery
+          // itself is the moment to tell the user.
+          if (checkOptions.silent) notifyUpdateOnce("available", info.latest_version);
+          return;
+        }
         await downloadUpdateInBackground(true);
+      } else if (checkOptions.silent && info.update_available && !isUpdateIgnored(info, settingsStore.editorSettings.ignoredUpdateVersion)) {
+        // Manual-update-only installs (portable/restricted locations) cannot
+        // download in-app; a silent discovery still deserves one notification.
+        notifyUpdateOnce("available", info.latest_version);
       }
     } catch (error) {
       if (token !== generation || disposed) return;
@@ -299,6 +326,10 @@ export function useAppUpdater(options: UseAppUpdaterOptions = {}) {
         if (token !== generation || disposed) return;
         if (cache.version !== version) throw new Error("Downloaded update version changed; check for updates again.");
         setDownloaded(cache);
+        // Automatic downloads finish in the background; this notification is
+        // the user's cue that a restart will complete the update. Manual
+        // downloads happen in front of the open dialog and skip it.
+        if (automatic) notifyUpdateOnce("downloaded", cache.version);
       } catch (error) {
         if (token !== generation || disposed) return;
         phase.value = "idle";

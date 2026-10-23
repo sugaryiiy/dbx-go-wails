@@ -11,6 +11,7 @@ vi.mock("@/lib/backend/wailsRuntime", () => ({
   onWailsEvent: () => () => {},
   wailsApp: () => ({ Close: vi.fn() }),
   openWailsUrl: () => true,
+  sendWailsNotification: () => Promise.resolve(false),
 }));
 vi.mock("vue-i18n", () => ({ useI18n: () => ({ t: (key: string) => key }), createI18n: () => ({ global: { locale: { value: "en" } } }) }));
 vi.mock("@/stores/settingsStore", () => ({

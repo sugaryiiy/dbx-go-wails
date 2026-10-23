@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   relaunch: vi.fn(),
   persist: vi.fn(),
   toast: vi.fn(),
+  notify: vi.fn(),
 }));
 // Exercise the retained update lifecycle independently from the distribution guard.
 vi.mock("@/lib/app/distribution", () => ({
@@ -32,6 +33,7 @@ vi.mock("@/lib/backend/wailsRuntime", () => ({
   },
   wailsApp: () => ({ Close: mocks.relaunch }),
   openWailsUrl: () => true,
+  sendWailsNotification: (options: unknown) => mocks.notify(options),
 }));
 vi.mock("@/composables/useToast", () => ({ useToast: () => ({ toast: mocks.toast }) }));
 const settings = reactive({ updateDownloadSource: "official", updateChannel: "stable", ignoredUpdateVersion: "", updateNotificationsEnabled: true, autoDownloadUpdates: true, autoUpdateApp: true });
@@ -79,6 +81,7 @@ beforeEach(() => {
   mocks.getDownloadedUpdate.mockResolvedValue(null);
   mocks.getAppVersion.mockResolvedValue("1.0.0");
   mocks.listen.mockResolvedValue(vi.fn());
+  mocks.notify.mockResolvedValue(true);
   mocks.persist.mockImplementation(async (values) => Object.assign(settings, values));
 });
 afterEach(() => {
@@ -99,6 +102,40 @@ describe("older version release pages", () => {
     expect(isNewerRemoteVersion("0.5.60", "v0.5.59")).toBe(true);
     expect(isNewerRemoteVersion("0.5.60", "v0.5.60")).toBe(false);
     expect(isNewerRemoteVersion("0.5.60", "v0.5.61")).toBe(false);
+  });
+});
+
+describe("update notifications", () => {
+  it("notifies once when a silent check finds an update and automatic downloads are disabled", async () => {
+    settings.autoUpdateApp = false;
+    const updater = mount();
+    await updater.initialize();
+    await flush();
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+    expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ id: "magpiedb-update-1.1.0", body: expect.stringContaining("1.1.0") }));
+    await updater.checkUpdates({ silent: true });
+    await flush();
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies when an automatic background download completes", async () => {
+    const updater = mount();
+    await updater.initialize();
+    await flush();
+    expect(mocks.downloadUpdate).toHaveBeenCalled();
+    expect(updater.updateDownloaded.value).toBe(true);
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+    expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ id: "magpiedb-update-1.1.0", body: expect.stringContaining("1.1.0") }));
+  });
+
+  it("stays silent when update notifications are disabled", async () => {
+    settings.updateNotificationsEnabled = false;
+    settings.autoUpdateApp = false;
+    const updater = mount();
+    await updater.initialize();
+    await flush();
+    expect(updater.hasUpdateAvailable.value).toBe(true);
+    expect(mocks.notify).not.toHaveBeenCalled();
   });
 });
 
