@@ -1,0 +1,175 @@
+# MagpieDB 发版流水线（第 4 步 · 第 0 步产物）
+#
+# 用法：GitHub 网页 Actions → Release → Run workflow，填：
+#   version  与仓库内三处版本真源一致的版本号（如 0.6.34），不一致会直接失败
+#   channel  stable = 正式版（tag v<version>）；preview = 预览版（tag v<version>-preview.<yyyymmdd>）
+#   notes    可选，本次更新说明（Markdown），留空则用默认文案
+#
+# 资产命名与已落地的更新器代码严格对齐（internal/updater/github.go）：
+#   MagpieDB-<tagVersion>-macOS-arm64.dmg(+ .sha256 / .manifest.json sidecar)
+#   MagpieDB-<tagVersion>-Windows-x64.zip（内含 magpiedb.exe）
+#   MagpieDB-<tagVersion>-Linux-x64.tar.gz（内含 magpiedb）
+# 其中 <tagVersion> = tag 去掉前缀 v（预览版含 -preview.<日期> 后缀）。
+#
+# 落地通道：仓库所有者的 GitHub 登录（网页端，或所有者已授权的 gh CLI 登录）；Contents-only PAT 无 workflow 权限，不走 PAT。
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（须与 wails.json / package.json / internal/version 三处一致，如 0.6.34）"
+        required: true
+        type: string
+      channel:
+        description: "发布通道"
+        required: true
+        type: choice
+        options:
+          - preview
+          - stable
+      notes:
+        description: "本次更新说明（Markdown，可选）"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  GOFLAGS: -mod=mod
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      asset_version: ${{ steps.meta.outputs.asset_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify the version source of truth agrees
+        run: |
+          python3 - <<'EOF'
+          import json, re, sys
+          want = "${{ inputs.version }}".strip()
+          wails = json.load(open("wails.json"))["info"]["productVersion"]
+          pkg = json.load(open("package.json"))["version"]
+          go_src = open("internal/version/version.go").read()
+          m = re.search(r'Version\s*=\s*"([^"]+)"', go_src)
+          gov = m.group(1) if m else "<not found>"
+          print(f"input={want} wails.json={wails} package.json={pkg} internal/version={gov}")
+          if not (want == wails == pkg == gov):
+              sys.exit("版本号不一致：先把三处版本真源一起 bump 到目标版本再发版。")
+          EOF
+      - name: Compute tag and asset version
+        id: meta
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          if [ "${{ inputs.channel }}" = "stable" ]; then
+            echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "asset_version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v${{ inputs.version }}-preview.$DATE" >> "$GITHUB_OUTPUT"
+            echo "asset_version=${{ inputs.version }}-preview.$DATE" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Fail if the release already exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.meta.outputs.tag }}" > /dev/null 2>&1; then
+            echo "Release ${{ steps.meta.outputs.tag }} 已存在，请先删除或换版本号。"
+            exit 1
+          fi
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: pnpm
+      - run: pnpm --filter dbx... install --frozen-lockfile --force
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+      - name: Build macOS or Windows desktop
+        if: runner.os != 'Linux'
+        run: pnpm build:wails
+      - name: Build Linux desktop
+        if: runner.os == 'Linux'
+        run: pnpm build:wails -tags desktop,webkit2_41
+      - name: Package the macOS disk image
+        if: runner.os == 'macOS'
+        run: >-
+          python3 scripts/package-go-macos.py
+          --tag ${{ needs.prepare.outputs.tag }}
+          --output build/release/MagpieDB-${{ needs.prepare.outputs.asset_version }}-macOS-arm64.dmg
+      - name: Package the Windows zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          Compress-Archive -Path build/wails/bin/magpiedb.exe
+          -DestinationPath build/release/MagpieDB-${{ needs.prepare.outputs.asset_version }}-Windows-x64.zip
+      - name: Package the Linux tarball
+        if: runner.os == 'Linux'
+        run: >-
+          tar -czf build/release/MagpieDB-${{ needs.prepare.outputs.asset_version }}-Linux-x64.tar.gz
+          -C build/wails/bin magpiedb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ runner.os }}
+          path: build/release/
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+      - name: Write release notes
+        run: |
+          {
+            echo "MagpieDB ${{ inputs.channel == 'stable' && '正式版' || '预览版' }}，版本 ${{ inputs.version }}。"
+            echo
+            if [ -n "${{ inputs.notes }}" ]; then
+              echo "${{ inputs.notes }}"
+              echo
+            fi
+            echo "**安装说明**"
+            echo "- macOS：Apple Silicon（arm64），最低 macOS 13.0；未签名、未公证（个人自用构建），首次打开请在 Finder 中右键应用 →「打开」"
+            echo "- Windows：解压 zip 后运行 magpiedb.exe；未签名，SmartScreen 提示时选「仍要运行」"
+            echo "- Linux：解压 tar.gz 后给 magpiedb 加执行权限再运行"
+            echo
+            echo "**SHA-256**"
+            echo '```'
+            cd release-assets && sha256sum MagpieDB-* | sort
+            echo '```'
+          } > notes.md
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "${{ inputs.channel }}" = "preview" ]; then PRERELEASE_FLAG="--prerelease"; fi
+          gh release create "${{ needs.prepare.outputs.tag }}" \
+            --title "${{ needs.prepare.outputs.tag }}" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" \
+            $PRERELEASE_FLAG \
+            release-assets/MagpieDB-*
