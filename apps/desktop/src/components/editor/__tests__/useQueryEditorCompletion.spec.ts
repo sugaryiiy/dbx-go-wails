@@ -10,6 +10,7 @@ import { useQueryEditorCompletionMetadata } from "../useQueryEditorCompletionMet
 import type { QueryEditorProps } from "../queryEditorTypes";
 import type { RedisCommandDocumentation } from "@/lib/redis/redisCommandDocs";
 import type { SqlCompletionColumn, SqlCompletionTable } from "@/lib/sql/sqlCompletion";
+import { recordCompletionSelection } from "@/lib/sql/sqlCompletion";
 import { analyzeSqlCompletion, type SqlCompletionAnalysisResult } from "@/lib/sql/sqlCompletionAnalysis";
 import type { SqlFormatterCase } from "@/lib/sql/sqlFormatterConfig";
 import type { SqlSnippet } from "@/types/database";
@@ -569,5 +570,33 @@ describe("QueryEditor completion provider ownership", () => {
     expect(store.listCompletionTables).not.toHaveBeenCalled();
     expect(store.listMongoCompletionCollections).not.toHaveBeenCalled();
     expect(store.listRedisCompletionCommandDocs).not.toHaveBeenCalled();
+  });
+});
+
+describe("SQL completion boost ranking passthrough", () => {
+  beforeEach(() => vi.useRealTimers());
+
+  it("rewrites option boosts as rank scores so CodeMirror keeps the library order", async () => {
+    const harness = createHarness({ modelValue: "SELECT * FROM rep" });
+    // rep_zebra carries a far larger raw boost, but rep_alpha was picked
+    // before: the library ranks selection history ahead of raw boost, so
+    // its order is [rep_alpha, rep_zebra]. CodeMirror re-sorts options by
+    // boost, so the adapter must encode the library order in the boosts —
+    // a raw pass-through would surface rep_zebra first in the editor.
+    harness.store.listCompletionTables.mockResolvedValue([
+      { name: "rep_zebra", boost: 9000 },
+      { name: "rep_alpha", boost: 0 },
+    ]);
+    recordCompletionSelection("rep_alpha", "table");
+    recordCompletionSelection("rep_alpha", "table");
+    const result = await harness.provide();
+    expect(result).not.toBeNull();
+    const options = result!.options;
+    const labels = options.map((option) => option.label);
+    expect(labels.indexOf("rep_alpha")).toBeGreaterThanOrEqual(0);
+    expect(labels.indexOf("rep_alpha")).toBeLessThan(labels.indexOf("rep_zebra"));
+    for (let index = 1; index < options.length; index += 1) {
+      expect(options[index - 1].boost ?? 0).toBeGreaterThan(options[index].boost ?? 0);
+    }
   });
 });

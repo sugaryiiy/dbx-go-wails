@@ -324,7 +324,17 @@ export function useQueryEditorCompletion(options: QueryEditorCompletionOptions) 
           },
         ]
       : [];
-    return buildCompletionResult(actions.length > 0 ? [...replacement.items, ...actions] : replacement.items, replacement.from, getSqlCompletionResultValidFor(fullDoc, position), completionContext.prefix);
+    const displayItems = actions.length > 0 ? [...replacement.items, ...actions] : replacement.items;
+    // CodeMirror re-sorts options by boost (descending, stable for ties),
+    // so passing the raw per-item boosts through would override the order
+    // the SQL library already computed — its ranking (selection-history
+    // tiers, type priority: frequent first, tables ahead, functions last)
+    // is not encoded in item.boost. Rewrite boost as a rank score so the
+    // editor's boost sort reproduces the library order exactly. The
+    // batch-selection actions sit at the tail of the array and therefore
+    // keep ranking last, never becoming the default Enter target.
+    const rankedItems = displayItems.map((item, index) => ({ ...item, boost: displayItems.length - index }));
+    return buildCompletionResult(rankedItems, replacement.from, getSqlCompletionResultValidFor(fullDoc, position), completionContext.prefix);
   }
 
   // CodeMirror's built-in matcher only matches single-character queries against
