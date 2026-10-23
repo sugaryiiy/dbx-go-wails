@@ -1258,7 +1258,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   sidebarBrowseObjectsOnDatabaseActivationMigrationVersion: SIDEBAR_BROWSE_OBJECTS_MIGRATION_VERSION,
   openTabsRestoreMode: "all",
   autoReloadRestoredDataTabsOnOpen: false,
-  disconnectTabHandlingMode: "close-tabs",
+  disconnectTabHandlingMode: "keep-tabs-clear-results",
   deleteConnectionTabHandlingMode: "close-tabs",
   rememberConnectionDatabaseOnDelete: true,
   rememberedConnectionDatabases: {},

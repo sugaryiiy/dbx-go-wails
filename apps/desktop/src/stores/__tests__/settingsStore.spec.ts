@@ -463,6 +463,13 @@ describe("normalizeEditorSettings", () => {
     expect(normalizeEditorSettings({ autoReloadRestoredDataTabsOnOpen: undefined }).autoReloadRestoredDataTabsOnOpen).toBe(false);
   });
 
+  it("defaults the disconnect-time tab handling to keeping SQL tabs and preserves explicit modes", () => {
+    expect(normalizeEditorSettings({}).disconnectTabHandlingMode).toBe("keep-tabs-clear-results");
+    expect(normalizeEditorSettings({ disconnectTabHandlingMode: "close-tabs" }).disconnectTabHandlingMode).toBe("close-tabs");
+    expect(normalizeEditorSettings({ disconnectTabHandlingMode: "keep-tabs-keep-results" }).disconnectTabHandlingMode).toBe("keep-tabs-keep-results");
+    expect(normalizeEditorSettings({ disconnectTabHandlingMode: "invalid" as any }).disconnectTabHandlingMode).toBe("keep-tabs-clear-results");
+  });
+
   it("defaults the delete-time tab handling to closing tabs and preserves explicit modes", () => {
     expect(normalizeEditorSettings({}).deleteConnectionTabHandlingMode).toBe("close-tabs");
     expect(normalizeEditorSettings({ deleteConnectionTabHandlingMode: "keep-sql-tabs" }).deleteConnectionTabHandlingMode).toBe("keep-sql-tabs");
