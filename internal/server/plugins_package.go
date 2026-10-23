@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	semver "github.com/Masterminds/semver/v3"
+	"github.com/sugaryiiy/magpiedb/internal/version"
 	"io"
 	"net/url"
 	"os"
@@ -23,7 +24,10 @@ import (
 	"time"
 )
 
-const pluginAppVersion = "0.6.33"
+// pluginAppVersion is the application version reported to plugins and used
+// in marketplace User-Agent strings. The single source of truth lives in
+// internal/version; do not hardcode another copy here.
+var pluginAppVersion = version.Version
 
 var pluginIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 

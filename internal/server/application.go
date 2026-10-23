@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+
+	"github.com/sugaryiiy/magpiedb/internal/version"
 )
 
 func (s *Server) handleApplication(w http.ResponseWriter, r *http.Request, p map[string]any) bool {
@@ -15,6 +17,12 @@ func (s *Server) handleApplication(w http.ResponseWriter, r *http.Request, p map
 	switch {
 	case route == "/api/health" && method == "GET", route == "/api/ready" && method == "GET":
 		result = map[string]any{"status": "ok", "backend": "go", "desktop": s.desktop}
+	case route == "/api/version" && method == "GET":
+		result = map[string]any{"version": version.Version}
+	case route == "/api/update/check" && method == "GET":
+		result, err = s.handleUpdateCheck(r)
+	case route == "/api/changelog" && method == "GET":
+		result, err = s.handleChangelog(r)
 	case route == "/api/migration/status" && method == "GET":
 		result = map[string]any{"migrationId": "go-isolated-storage-v1", "state": "not_required", "needsMigration": false, "keyProviderAvailable": true, "keyStatus": "ready", "keyCreationAllowed": false, "databasePlaintextCount": 0, "connectionCount": len(s.snapshot().Connections), "pluginSecretCount": 0, "aiSecretCount": 0, "tunnelSecretCount": 0, "syncCredentialCount": 0, "legacyJsonFiles": []any{}, "backupRequired": false, "dataDir": s.dataDir, "keyFileConfigured": true, "keyFileReadable": true, "persistentKeyConfigured": true, "keySource": "managed_data_dir"}
 	case route == "/api/connection/list" && method == "GET":

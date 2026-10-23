@@ -57,6 +57,10 @@ type Server struct {
 	agentStore    *agent.Store
 	agents        *agentHTTPState
 
+	updateMu      sync.Mutex
+	updateCache   *updateReleaseCache
+	updateAPIBase string
+
 	storeMu              sync.Mutex // Serializes durable updates without blocking readers or authentication.
 	stateMu              sync.RWMutex
 	state                diskState
@@ -93,6 +97,7 @@ func New(opts Options) (*Server, error) {
 	}
 	s := &Server{database: database.NewManager(), dataDir: absolute, desktop: opts.Desktop, assets: opts.Assets, passwordHash: sha256.Sum256([]byte(opts.Password)), sessions: map[string]time.Time{}, extensions: newExtensionState(), aiRuntime: newAIRuntime()}
 	s.basePath = base
+	s.updateAPIBase = updateAPIBase()
 	if err = s.openStore(); err != nil {
 		_ = s.Close()
 		return nil, err
