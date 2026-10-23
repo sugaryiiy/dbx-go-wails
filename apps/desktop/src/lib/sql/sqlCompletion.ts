@@ -5893,11 +5893,8 @@ export function recordCompletionSelection(label: string, type: string): void {
   }
 }
 
-function getHistoryBoost(label: string, type: string): number {
-  const count = completionStats.get(`${type}:${label}`);
-  if (!count) return 0;
-  // Diminishing returns: first selection gives biggest boost
-  return Math.min(count * 80, 500);
+function getHistoryCount(label: string, type: string): number {
+  return completionStats.get(`${type}:${label}`) ?? 0;
 }
 
 function dedupeAndSort(items: SqlCompletionItem[]): SqlCompletionItem[] {
@@ -5913,9 +5910,17 @@ function dedupeAndSort(items: SqlCompletionItem[]): SqlCompletionItem[] {
 function compareCompletionItems(left: SqlCompletionItem, right: SqlCompletionItem): number {
   if ((left.type === "variable") !== (right.type === "variable")) return left.type === "variable" ? -1 : 1;
   if (!left.exactMatch !== !right.exactMatch) return left.exactMatch ? -1 : 1;
-  const leftBonus = getHistoryBoost(left.label, left.type);
-  const rightBonus = getHistoryBoost(right.label, right.type);
-  return right.boost + rightBonus + getTypePriorityBoost(right.type) - (left.boost + leftBonus + getTypePriorityBoost(left.type));
+  // Selection history is a hard tier, not a score bonus: as a bonus it was
+  // capped at +500 and could never overcome the per-type base boosts
+  // (tables +1000, statement keywords +2000), so items the user reaches for
+  // every day stayed buried. Any previously selected item now ranks ahead
+  // of never-selected ones, and among selected items the most-selected
+  // wins; match quality only decides inside the same history tier.
+  const leftCount = getHistoryCount(left.label, left.type);
+  const rightCount = getHistoryCount(right.label, right.type);
+  if (leftCount > 0 !== rightCount > 0) return leftCount > 0 ? -1 : 1;
+  if (leftCount !== rightCount) return rightCount - leftCount;
+  return right.boost + getTypePriorityBoost(right.type) - (left.boost + getTypePriorityBoost(left.type));
 }
 
 function getTypePriorityBoost(type: SqlCompletionItem["type"]): number {
@@ -5939,7 +5944,13 @@ function getTypePriorityBoost(type: SqlCompletionItem["type"]): number {
     case "text":
       return 220;
     case "function":
-      return 90;
+      // Functions rank last among peer groups at equal boost: tables (and
+      // columns, keywords, schemas, snippets) all carry a higher priority.
+      // A function can still come forward when it clearly matches better —
+      // its score lead has to overcome the tables' +1000 base and this
+      // priority gap — or in function-only pools, where every candidate
+      // shares this priority and the boost decides alone.
+      return 0;
   }
 }
 
