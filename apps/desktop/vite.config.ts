@@ -81,6 +81,13 @@ export default defineConfig(async ({ mode }) => ({
     },
   },
   clearScreen: false,
+  // All workers in this app are instantiated as module workers
+  // ({ type: "module" }), so their bundles must be emitted as ES modules;
+  // the default "iife" format forbids the code splitting Rolldown needs
+  // when a worker's graph shares chunks with the lazily loaded backend.
+  worker: {
+    format: "es",
+  },
   build: {
     outDir: "../../dist",
     emptyOutDir: true,
