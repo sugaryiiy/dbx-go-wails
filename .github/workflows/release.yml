@@ -111,6 +111,9 @@ jobs:
       - name: Build Linux desktop
         if: runner.os == 'Linux'
         run: pnpm build:wails -tags desktop,webkit2_41
+      - name: Create the release staging directory
+        shell: bash
+        run: mkdir -p build/release
       - name: Package the macOS disk image
         if: runner.os == 'macOS'
         run: >-
@@ -128,9 +131,6 @@ jobs:
         run: >-
           tar -czf build/release/MagpieDB-${{ needs.prepare.outputs.asset_version }}-Linux-x64.tar.gz
           -C build/wails/bin magpiedb
-      - name: Create the release staging directory
-        shell: bash
-        run: mkdir -p build/release
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ runner.os }}
