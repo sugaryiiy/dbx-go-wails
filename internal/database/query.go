@@ -38,8 +38,11 @@ type queryRunner interface {
 
 var ErrCommitOutcomeUnknown = errors.New("transaction commit outcome is unknown; check the database before retrying")
 
-func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (any, error) {
+func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (value any, executionErr error) {
 	if str(p, "resultSessionId") != "" {
+		if p["maxAffectedRowsPerStatement"] != nil {
+			return nil, errors.New("affected row guards cannot fetch retained results")
+		}
 		result, err := m.fetchResult(p)
 		if err != nil {
 			return nil, err
@@ -94,6 +97,11 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 	if path == "/api/query/execute" && len(statements) != 1 {
 		return nil, errors.New("execute requires exactly one SQL statement; use execute-multi for scripts")
 	}
+	limits, e := affectedRowLimits(p, statements, cfg.Type)
+	if e != nil {
+		return nil, e
+	}
+	guarded := limits != nil
 	stateful, explicit := false, false
 	for _, s := range statements {
 		switch firstWord(s, cfg.Type) {
@@ -102,6 +110,15 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 			explicit = true
 		case "SET", "USE", "ATTACH", "DETACH":
 			stateful = true
+		case "PRAGMA":
+			// SQLite PRAGMAs can change physical-connection settings such as
+			// foreign_keys or query_only, including the function-call syntax.
+			if cfg.Type == "sqlite" && sqliteConnectionPragma(s) {
+				if sqlitePath(cfg) == ":memory:" {
+					return nil, unsupported("connection-setting PRAGMAs for private in-memory SQLite; use a database file")
+				}
+				stateful = true
+			}
 		}
 		if containsSQLWord(s, "TEMP", cfg.Type) || containsSQLWord(s, "TEMPORARY", cfg.Type) {
 			stateful = true
@@ -161,6 +178,7 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 			if ctx.Err() != nil {
 				session.closeLocked()
 			}
+			m.releaseCleanQuerySession(session)
 			session.lastUsed = time.Now()
 			session.mu.Unlock()
 		}()
@@ -205,7 +223,11 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 			}
 		}()
 	}
-	transaction := path == "/api/query/execute-in-transaction" || boolean(p, "useTransaction") || protected && cfg.Type != "sqlite" && (session == nil || !session.readOnly)
+	guardedSavepoint := guarded && session != nil && session.inTransaction
+	transaction := path == "/api/query/execute-in-transaction" || boolean(p, "useTransaction") || guarded && !guardedSavepoint || protected && cfg.Type != "sqlite" && (session == nil || !session.readOnly)
+	if guardedSavepoint {
+		transaction = false
+	}
 	if transaction && session != nil && session.inTransaction {
 		return nil, errors.New("an explicit transaction is already open in this tab; commit or roll it back first")
 	}
@@ -230,17 +252,35 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 		defer tx.Rollback()
 		runner = tx
 	}
+	var guardScope *affectedRowSavepoint
+	if guardedSavepoint {
+		guardScope, e = beginAffectedRowSavepoint(ctx, conn, session)
+		if e != nil {
+			return nil, redact(e, cfg)
+		}
+		defer func() {
+			if rollbackErr := guardScope.rollback(); rollbackErr != nil {
+				executionErr = errors.Join(executionErr, redact(rollbackErr, cfg))
+			}
+		}()
+	}
+	if guarded && cfg.Type == "mysql" {
+		if e = validateMySQLAffectedRowTables(ctx, runner, statements); e != nil {
+			return nil, redact(e, cfg)
+		}
+	}
 	schema := str(p, "schema")
 	if schema == "" {
 		schema = cfg.DefaultSchema
 	}
 	if cfg.Type == "postgres" && schema != "" {
-		if _, e = runner.ExecContext(ctx, "SELECT set_config('search_path', $1, $2)", quoteIdentifier(schema, "postgres")+",pg_catalog", tx != nil); e != nil {
+		localPath := tx != nil || guardScope != nil
+		if _, e = runner.ExecContext(ctx, "SELECT set_config('search_path', $1, $2)", quoteIdentifier(schema, "postgres")+",pg_catalog", localPath); e != nil {
 			return nil, redact(e, cfg)
 		}
 		// A transaction-local path restores itself on commit or rollback.
 		// For autocommit, discard a connection if reset cannot be confirmed.
-		if tx == nil {
+		if !localPath {
 			defer func() {
 				resetCtx, resetCancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer resetCancel()
@@ -278,6 +318,9 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 		}
 		result, err := runStatement(ctx, runner, s, cfg.Type, maxRows, offset, maxBytes)
 		result.StatementIndex = index
+		if err == nil && guarded && limits[index] != nil && result.AffectedRows > *limits[index] {
+			err = fmt.Errorf("statement %d affected %d rows, exceeding its limit of %d; this batch was rolled back", index+1, result.AffectedRows, *limits[index])
+		}
 		if err != nil {
 			err = redact(err, cfg)
 			if !boolean(p, "continueOnError") {
@@ -300,6 +343,10 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 				}
 			case "SET", "USE", "ATTACH", "DETACH":
 				session.dirty = true
+			case "PRAGMA":
+				if cfg.Type == "sqlite" && sqliteConnectionPragma(s) {
+					session.dirty = true
+				}
 			}
 			if containsSQLWord(s, "TEMP", cfg.Type) || containsSQLWord(s, "TEMPORARY", cfg.Type) {
 				session.dirty = true
@@ -313,6 +360,11 @@ func (m *Manager) execute(ctx context.Context, path string, p map[string]any) (a
 		}
 		results = append(results, result)
 		aggregate.AffectedRows += result.AffectedRows
+	}
+	if guardScope != nil {
+		if e = guardScope.release(ctx); e != nil {
+			return nil, redact(e, cfg)
+		}
 	}
 	if tx != nil {
 		if e = tx.Commit(); e != nil {
@@ -347,7 +399,10 @@ func runStatement(ctx context.Context, q queryRunner, statement, dialect string,
 			return out, e
 		}
 		if mutation {
-			out.AffectedRows, _ = result.RowsAffected()
+			out.AffectedRows, e = result.RowsAffected()
+			if e != nil {
+				return out, e
+			}
 		}
 		out.ExecutionTimeMS = time.Since(start).Milliseconds()
 		return out, nil

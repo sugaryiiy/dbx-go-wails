@@ -440,6 +440,7 @@ const dataGridCrosshairHighlight = computed(() => settingsStore.editorSettings.d
 const tableFontSize = computed(() => settingsStore.editorSettings.tableFontSize);
 const rowNumberWidth = ref(DATA_GRID_ROW_NUM_WIDTH);
 const largeValueResolutionVersion = ref(0);
+const searchContentVersion = ref(0);
 const multiRowTranspose = computed(() => settingsStore.editorSettings.dataGridMultiRowTranspose);
 const hideNullColumns = computed(() => settingsStore.editorSettings.dataGridHideNullColumns);
 const booleanCellsUseCheckbox = computed(() => settingsStore.editorSettings.dataGridBooleanDisplayMode === "checkbox");
@@ -1118,6 +1119,12 @@ const dataGridSearch = useDataGridSearch({
   literalQuery: replaceOpen,
   includeColumnMatches: () => !replaceOpen.value,
   isCellSearchable: (row, columnIndex) => !replaceOpen.value || (canReplaceGridCell(row, columnIndex) && replacementCellInScope(row.id, columnIndex)),
+  invalidationKey: () => [
+    pendingChangesVersion.value,
+    largeValueResolutionVersion.value,
+    searchContentVersion.value,
+    ...(replaceOpen.value ? [replaceAvailable.value, replaceScope.value, replaceColumn.value, selectedRange.value, selectedCellKeys.value, selectedRowIds.value, selectedColumnIndexes.value, visibleColumnIndexes.value, allColumnTypes.value] : []),
+  ],
   onNavigate: () => nextTick(scrollToCurrentMatch),
   // Same key as useDataGridEditor below: table data tabs use the tab id, query
   // results use resultGridInstanceKey so a re-execute starts with a clean search.
@@ -4928,6 +4935,7 @@ const rollbackToolbarCapability = computed<DataGridToolbarActionCapability>(() =
 }));
 
 const sortedRows = computed(() => {
+  void searchContentVersion.value;
   let indices = localFilteredRows.value;
   const q = deferredClientSearchText.value;
   if (q && dataGridSearchMode.value === "filter" && !replaceOpen.value) {
@@ -6875,6 +6883,7 @@ function clearCellFormatCache() {
   primitiveCellFormatCache.clear();
   objectCellFormatCache = new WeakMap<object, Map<number, string>>();
   rowLowerTextCache.clear();
+  searchContentVersion.value++;
 }
 
 function rememberPrimitiveCellFormat(key: string, display: string): string {
@@ -8894,7 +8903,7 @@ const replacementMatches = computed(() => {
 });
 
 const canReplaceCurrent = computed(() => {
-  if (searchText.value !== deferredClientSearchText.value) return false;
+  if (dataGridSearch.isSearching.value || searchText.value !== deferredClientSearchText.value) return false;
   const match = currentSearchMatch.value;
   if (!match || match.kind !== "cell") return false;
   const item = displayItemAt(match.displayRow);

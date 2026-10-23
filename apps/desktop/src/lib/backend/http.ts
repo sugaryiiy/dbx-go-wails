@@ -1669,13 +1669,14 @@ export async function executeScriptWith2pc(connectionId: string, database: strin
   });
 }
 
-export async function executeInTransaction(connectionId: string, database: string, statements: string[], schema?: string, catalog?: string): Promise<QueryResult> {
+export async function executeInTransaction(connectionId: string, database: string, statements: string[], schema?: string, catalog?: string, maxAffectedRowsPerStatement?: Array<number | null>): Promise<QueryResult> {
   return post("/api/query/execute-in-transaction", {
     connectionId,
     database,
     statements,
     schema,
     catalog,
+    maxAffectedRowsPerStatement,
   });
 }
 
@@ -1684,8 +1685,31 @@ export async function beginManualTransaction(_connectionId: string, _database: s
   throw new Error("Manual transaction management is only available in the desktop app.");
 }
 
-export async function executeInManualTransaction(_txnSessionId: string, _sql: string, _database: string, _schema?: string, _maxRows?: number, _tableDataPreview?: boolean, _pageSize?: number, _resultSessionId?: string, _classificationSql?: string): Promise<QueryResult[]> {
-  if (isGoBackend()) return post("/api/transaction/execute", { txnSessionId: _txnSessionId, sql: _sql, database: _database, schema: _schema, maxRows: _maxRows, tableDataPreview: _tableDataPreview, pageSize: _pageSize, resultSessionId: _resultSessionId, classificationSql: _classificationSql });
+export async function executeInManualTransaction(
+  _txnSessionId: string,
+  _sql: string,
+  _database: string,
+  _schema?: string,
+  _maxRows?: number,
+  _tableDataPreview?: boolean,
+  _pageSize?: number,
+  _resultSessionId?: string,
+  _classificationSql?: string,
+  maxAffectedRowsPerStatement?: Array<number | null>,
+): Promise<QueryResult[]> {
+  if (isGoBackend())
+    return post("/api/transaction/execute", {
+      txnSessionId: _txnSessionId,
+      sql: _sql,
+      database: _database,
+      schema: _schema,
+      maxRows: _maxRows,
+      tableDataPreview: _tableDataPreview,
+      pageSize: _pageSize,
+      resultSessionId: _resultSessionId,
+      classificationSql: _classificationSql,
+      maxAffectedRowsPerStatement,
+    });
   throw new Error("Manual transaction management is only available in the desktop app.");
 }
 

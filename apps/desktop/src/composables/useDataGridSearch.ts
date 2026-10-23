@@ -1,5 +1,5 @@
-import { computed, getCurrentScope, nextTick, onScopeDispose, ref, toValue, watch, type MaybeRefOrGetter } from "vue";
-import { dataGridSearchMatchKey } from "@/lib/dataGrid/canvasDataGridRenderer";
+import { computed, getCurrentScope, nextTick, onScopeDispose, ref, shallowRef, toValue, watch, watchEffect, type MaybeRefOrGetter } from "vue";
+import { DataGridSearchMatchIndex } from "@/lib/dataGrid/dataGridSearchMatchIndex";
 import { loadDataGridSearchState, saveDataGridSearchState } from "@/lib/dataGrid/dataGridSearchStatePersistence";
 import { dataGridReplacementPattern } from "@/lib/dataGrid/dataGridReplace";
 
@@ -24,6 +24,9 @@ export type UseDataGridSearchOptions<Row> = {
   includeColumnMatches?: MaybeRefOrGetter<boolean>;
   isCellSearchable?: (row: Row, columnIndex: number) => boolean;
   debounceMs?: number;
+  /** Reactive predicate/formatting inputs not represented by the row snapshot.
+   * Large scans yield between chunks, so read these dependencies before scanning. */
+  invalidationKey?: MaybeRefOrGetter<unknown>;
   onNavigate?: (match: DataGridSearchMatch) => void;
   /** 按标签页键控的持久化键；不传则该宿主不参与搜索状态保留。 */
   persistenceKey?: MaybeRefOrGetter<string | undefined>;
@@ -49,46 +52,89 @@ export function useDataGridSearch<Row>(options: UseDataGridSearchOptions<Row>) {
   // case-insensitive instead of never matching uppercase input.
   const effectiveCaseSensitive = computed(() => !!toValue(options.caseSensitive) && (!!toValue(options.literalQuery) || !!options.getCellRawSearchText));
 
-  const matchState = computed(() => {
-    const query = deferredSearchText.value;
-    const keys: number[] = [];
-    const matchSet = new Set<number>();
-    if (!query) return { keys, matchSet };
+  const matchState = shallowRef(new DataGridSearchMatchIndex(0));
+  const isSearching = ref(false);
+  let scanGeneration = 0;
 
-    const addMatch = (displayRow: number, col: number) => {
-      const key = dataGridSearchMatchKey(displayRow, col);
-      keys.push(key);
-      matchSet.add(key);
-    };
+  function normalizedQuery(value: string) {
+    const text = toValue(options.literalQuery) ? value : value.trim();
+    return toValue(options.literalQuery) || effectiveCaseSensitive.value ? text : text.toLowerCase();
+  }
+
+  watchEffect((onCleanup) => {
+    const generation = ++scanGeneration;
+    let chunkTimer: ReturnType<typeof setTimeout> | undefined;
+    onCleanup(() => {
+      scanGeneration++;
+      if (chunkTimer !== undefined) clearTimeout(chunkTimer);
+    });
+    const query = deferredSearchText.value;
+    // Changing the input also cancels an in-progress scan during the debounce.
+    if (!query || normalizedQuery(searchText.value) !== query) {
+      isSearching.value = false;
+      matchState.value = new DataGridSearchMatchIndex(0);
+      return;
+    }
+    toValue(options.invalidationKey);
     const columns = toValue(options.columns);
+    const rows = toValue(options.rows);
+    const index = new DataGridSearchMatchIndex(columns.length);
     const sensitive = effectiveCaseSensitive.value;
     const pattern = toValue(options.literalQuery) ? dataGridReplacementPattern(query, sensitive) : undefined;
+    const includeColumns = toValue(options.includeColumnMatches) !== false;
     const includes = (value: string) => {
-      if (!pattern) return (sensitive ? value : value.toLowerCase()).includes(query);
+      // getCellSearchText already supplies lowercase text; avoid duplicating
+      // every cached string on every keypress. Headers are normalized below.
+      if (!pattern) return value.includes(query);
       pattern.lastIndex = 0;
       return pattern.test(value);
     };
-    if (toValue(options.includeColumnMatches) !== false) {
-      columns.forEach((column, col) => {
-        if (includes(column)) addMatch(-1, col);
-      });
-    }
-    toValue(options.rows).forEach((row, displayRow) => {
-      columns.forEach((_, col) => {
-        if (options.isCellSearchable && !options.isCellSearchable(row, col)) return;
-        const text = (pattern || sensitive) && options.getCellRawSearchText ? options.getCellRawSearchText(row, col) : options.getCellSearchText(row, col);
-        if (includes(text)) addMatch(displayRow, col);
-      });
-    });
-    return { keys, matchSet };
+    const totalCells = (rows.length + 1) * columns.length;
+    const asynchronous = totalCells > 20_000;
+    let cellIndex = 0;
+    isSearching.value = asynchronous;
+    if (asynchronous) matchState.value = new DataGridSearchMatchIndex(0);
+
+    const scanChunk = () => {
+      if (generation !== scanGeneration) return;
+      const end = asynchronous ? Math.min(totalCells, cellIndex + 32_768) : totalCells;
+      const deadline = performance.now() + 4;
+      while (cellIndex < end) {
+        const column = cellIndex % columns.length;
+        const rowIndex = Math.floor(cellIndex / columns.length) - 1;
+        if (rowIndex < 0) {
+          if (includeColumns && includes(sensitive || pattern ? columns[column]! : columns[column]!.toLowerCase())) index.appendCell(cellIndex);
+        } else {
+          const row = rows[rowIndex]!;
+          if (!options.isCellSearchable || options.isCellSearchable(row, column)) {
+            const text = (pattern || sensitive) && options.getCellRawSearchText ? options.getCellRawSearchText(row, column) : options.getCellSearchText(row, column);
+            if (includes(text)) index.appendCell(cellIndex);
+          }
+        }
+        cellIndex++;
+        if (asynchronous && cellIndex % 128 === 0 && performance.now() >= deadline) break;
+      }
+      if (cellIndex < totalCells) {
+        chunkTimer = setTimeout(scanChunk, 0);
+        return;
+      }
+      isSearching.value = false;
+      matchState.value = index;
+    };
+    // Small results retain their synchronous reactive scan. The first large
+    // chunk also runs here so synchronous predicate dependencies are tracked.
+    scanChunk();
   });
-  const matchKeys = computed(() => matchState.value.keys);
-  const matchSet = computed(() => matchState.value.matchSet);
-  const matches = computed<DataGridSearchMatch[]>(() => matchKeys.value.map(dataGridSearchMatchFromKey));
-  const matchCount = computed(() => matchKeys.value.length);
+
+  // These compatibility views materialize only if explicitly requested. Grid
+  // painting and navigation use the shared bitmap directly.
+  const matchKeys = computed(() => Array.from(matchState.value));
+  const matchSet = computed<ReadonlySet<number>>(() => matchState.value);
+  const matches = computed<DataGridSearchMatch[]>(() => Array.from(matchState.value, dataGridSearchMatchFromKey));
+  const matchCount = computed(() => matchState.value.size);
 
   function matchAt(index: number): DataGridSearchMatch | null {
-    const key = matchKeys.value[index];
+    const key = matchState.value.keyAt(index);
     return key === undefined ? null : dataGridSearchMatchFromKey(key);
   }
 
@@ -105,8 +151,7 @@ export function useDataGridSearch<Row>(options: UseDataGridSearchOptions<Row>) {
 
   watch([searchText, () => toValue(options.caseSensitive), () => toValue(options.literalQuery)], ([value]) => {
     clearTimer();
-    const text = toValue(options.literalQuery) ? value : value.trim();
-    const query = toValue(options.literalQuery) || effectiveCaseSensitive.value ? text : text.toLowerCase();
+    const query = normalizedQuery(value);
     const restoring = restoreToken !== null && restoreToken.searchText === value;
     if (!query) deferredSearchText.value = "";
     // Restoring is not typing: resolve the query now so the row set (and, in
@@ -140,10 +185,11 @@ export function useDataGridSearch<Row>(options: UseDataGridSearchOptions<Row>) {
     suggestionIndex.value = suggestions.value.length ? 0 : -1;
   });
 
-  watch(matchKeys, (value) => {
+  watch(matchState, (value) => {
+    if (isSearching.value) return;
     const restored = restoreToken;
     restoreToken = null;
-    if (!value.length) {
+    if (!value.size) {
       currentMatchIndex.value = -1;
       return;
     }
@@ -151,12 +197,16 @@ export function useDataGridSearch<Row>(options: UseDataGridSearchOptions<Row>) {
       // Re-entering the tab must not scroll to the first match: the grid's own
       // scroll restore owns the viewport (#8524). Clamp because the match list may
       // have shifted while the tab was away.
-      currentMatchIndex.value = Math.min(Math.max(restored.matchIndex, 0), value.length - 1);
+      currentMatchIndex.value = Math.min(Math.max(restored.matchIndex, 0), value.size - 1);
       return;
     }
     currentMatchIndex.value = 0;
     const firstMatch = matchAt(0);
-    if (firstMatch) nextTick(() => options.onNavigate?.(firstMatch));
+    const generation = scanGeneration;
+    if (firstMatch)
+      nextTick(() => {
+        if (generation === scanGeneration) options.onNavigate?.(firstMatch);
+      });
   });
 
   function acceptSuggestion(index = suggestionIndex.value) {
@@ -175,8 +225,8 @@ export function useDataGridSearch<Row>(options: UseDataGridSearchOptions<Row>) {
   }
 
   function navigateMatch(delta: number) {
-    const count = matchKeys.value.length;
-    if (!count) return;
+    const count = matchState.value.size;
+    if (!count || isSearching.value) return;
     // Results may change between input and navigation; recover from a stale index in the requested direction.
     const currentIndex = currentMatchIndex.value >= 0 && currentMatchIndex.value < count ? currentMatchIndex.value : delta < 0 ? 0 : -1;
     currentMatchIndex.value = (((currentIndex + delta) % count) + count) % count;
@@ -193,7 +243,7 @@ export function useDataGridSearch<Row>(options: UseDataGridSearchOptions<Row>) {
   }
 
   /**
-   * Must be called from onMounted, never from the setup body: watch(matchKeys)
+   * Must be called from onMounted, never from the setup body: the search effect
    * eagerly evaluates its source, and seeding a non-empty query would push
    * matchState past its empty-query early return into `options.rows`, which the
    * host declares later in its own setup (#8524).
@@ -253,7 +303,7 @@ export function useDataGridSearch<Row>(options: UseDataGridSearchOptions<Row>) {
 
   if (getCurrentScope()) onScopeDispose(clearTimer);
 
-  return { searchText, deferredSearchText, overlayVisible, currentMatchIndex, suggestions, suggestionIndex, matches, matchKeys, matchCount, matchAt, matchSet, currentMatch, acceptSuggestion, navigateSuggestion, navigateMatch, close, onKeydown, restorePersistedState };
+  return { searchText, deferredSearchText, overlayVisible, currentMatchIndex, suggestions, suggestionIndex, isSearching, matches, matchKeys, matchCount, matchAt, matchSet, currentMatch, acceptSuggestion, navigateSuggestion, navigateMatch, close, onKeydown, restorePersistedState };
 }
 
 function dataGridSearchMatchFromKey(key: number): DataGridSearchMatch {

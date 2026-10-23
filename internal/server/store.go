@@ -159,20 +159,19 @@ func (s *Server) openStore() error {
 
 // update persists a private copy first so a failed disk write never changes live state.
 func (s *Server) update(fn func(*diskState) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	bytes, err := json.Marshal(s.state)
+	s.storeMu.Lock()
+	defer s.storeMu.Unlock()
+	s.stateMu.RLock()
+	next, err := cloneDiskState(s.state)
+	accessVersion := s.cacheAccessVersion
+	s.stateMu.RUnlock()
 	if err != nil {
-		return err
-	}
-	next := emptyState()
-	if err = json.Unmarshal(bytes, &next); err != nil {
 		return err
 	}
 	if err = fn(&next); err != nil {
 		return err
 	}
-	bytes, err = json.Marshal(next)
+	bytes, err := json.Marshal(next)
 	if err != nil {
 		return err
 	}
@@ -211,15 +210,22 @@ func (s *Server) update(fn func(*diskState) error) error {
 		_ = directory.Sync()
 		_ = directory.Close()
 	}
+	s.stateMu.Lock()
+	// Cache reads can update recency while this private copy is being saved.
+	// Retain those newer timestamps in memory; a later write or Close flushes them.
+	mergeCacheAccesses(&next, s.state)
 	s.state = next
+	s.cacheAccessPersisted = accessVersion
+	s.stateMu.Unlock()
 	return nil
 }
 func (s *Server) snapshot() diskState {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	data, _ := json.Marshal(s.state)
-	next := emptyState()
-	_ = json.Unmarshal(data, &next)
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	next, err := cloneDiskState(s.state)
+	if err != nil {
+		return emptyState()
+	}
 	return next
 }
 func walkSecrets(value any, visit func(map[string]any, string, string)) {

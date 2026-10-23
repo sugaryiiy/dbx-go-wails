@@ -133,6 +133,10 @@ func (m *Manager) handleNative(parent context.Context, path string, p map[string
 		return nil, false, nil
 	}
 	c := session.config
+	if p["maxAffectedRowsPerStatement"] != nil {
+		m.mu.RUnlock()
+		return nil, true, unsupported("atomic affected row guards for " + c.Type)
+	}
 	if path == "/api/query/close-session" || path == "/api/query/close-client-session" {
 		if _, ok := session.native.(*agentDriver); !ok {
 			m.mu.RUnlock()

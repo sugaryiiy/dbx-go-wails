@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/base64"
 	"net/http"
 	"os"
@@ -8,6 +9,59 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestCacheReadsAreIsolatedAndDoNotRewriteState(t *testing.T) {
+	dir := t.TempDir()
+	s := testServer(t, dir)
+	if err := s.update(func(st *diskState) error {
+		st.Settings["schema.cache"] = map[string]any{"schema": map[string]any{"tables": []any{map[string]any{"name": "before"}}}}
+		st.Settings["tab.cache"] = map[string]any{"cached": map[string]any{"payloadBase64": "eA==", "lastAccessedAt": 1, "createdAt": 1}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "state.enc")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := s.schemaCacheEntry("schema").(map[string]any)
+	schema["tables"].([]any)[0].(map[string]any)["name"] = "after"
+	entry := s.tabCacheEntry("cached")
+	access := cacheAccessTime(entry["lastAccessedAt"])
+	entry["payloadBase64"] = "after"
+	metadata := s.tabCacheMetadata()
+	if _, exists := metadata[0]["payloadBase64"]; exists {
+		t.Fatal("metadata included cache payload")
+	}
+	metadata[0]["createdAt"] = 2
+	if got := s.schemaCacheEntry("schema").(map[string]any)["tables"].([]any)[0].(map[string]any)["name"]; got != "before" {
+		t.Fatal("schema read exposed live state")
+	}
+	if got := s.tabCacheEntry("cached")["payloadBase64"]; got != "eA==" {
+		t.Fatal("cache read exposed live state")
+	}
+	if got := cacheAccessTime(s.tabCacheMetadata()[0]["createdAt"]); got != 1 {
+		t.Fatal("metadata read exposed live state")
+	}
+	if s.tabCacheEntry("missing") != nil || s.schemaCacheEntry("missing") != nil {
+		t.Fatal("missing cache returned an entry")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("cache read rewrote encrypted state", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again := testServer(t, dir)
+	if got := cacheAccessTime(again.tabCacheMetadata()[0]["lastAccessedAt"]); got < access {
+		t.Fatal("cache recency was not flushed on Close")
+	}
+	if again.tabCacheEntry("cached")["payloadBase64"] != "eA==" {
+		t.Fatal("cache payload missing after restart")
+	}
+}
 
 func TestSchemaTabCachesPersistPruneAndOwner(t *testing.T) {
 	dir := t.TempDir()

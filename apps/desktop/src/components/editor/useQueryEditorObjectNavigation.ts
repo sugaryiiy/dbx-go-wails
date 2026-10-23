@@ -145,7 +145,9 @@ export function useQueryEditorObjectNavigation(options: QueryEditorObjectNavigat
     }
     const identifier = extracted.identifier;
     const scope = { tabId: props.tabId, connectionId: props.connectionId, database: props.database, schema: props.schema, catalog: props.catalog, databaseType: props.databaseType };
+    const metadataIsCurrent = completionMetadata.captureMetadataRequest();
     const isCurrentNavigation = () =>
+      metadataIsCurrent() &&
       !disposed &&
       request === navigationRequest &&
       view.value === currentView &&

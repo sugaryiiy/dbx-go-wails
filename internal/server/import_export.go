@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/sugaryiiy/magpiedb/internal/database"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -442,13 +443,7 @@ func (s *Server) startExport(w http.ResponseWriter, r *http.Request, p map[strin
 		result, err := s.database.Handle(ctx, "/api/query/execute", args)
 		var qr exportResult
 		if err == nil {
-			data, e := json.Marshal(result)
-			err = e
-			if e == nil {
-				decoder := json.NewDecoder(bytes.NewReader(data))
-				decoder.UseNumber()
-				err = decoder.Decode(&qr)
-			}
+			qr, err = exportQueryResult(result)
 		}
 		if err == nil && qr.Truncated && numberValue(p, "rowLimit", 0) <= 0 {
 			err = errors.New("Export exceeds 100,000 rows; set an explicit row limit or narrow the query")
@@ -456,7 +451,7 @@ func (s *Server) startExport(w http.ResponseWriter, r *http.Request, p map[strin
 		var data []byte
 		var contentType string
 		if err == nil {
-			data, contentType, err = encodeTransfer(qr, format, p)
+			data, contentType, err = encodeTransferContext(ctx, qr, format, p)
 		}
 		if err == nil && len(data) > maxTransferBytes {
 			err = errors.New("Export exceeds 32 MiB; narrow the query")
@@ -490,70 +485,187 @@ func (s *Server) startExport(w http.ResponseWriter, r *http.Request, p map[strin
 	}
 	writeJSON(w, 200, map[string]any{"exportId": id})
 }
+
+// Query results from SQL drivers already own typed rows. Keep those rows rather
+// than serializing and parsing an entire second copy just to drop metadata.
+func exportQueryResult(value any) (exportResult, error) {
+	switch result := value.(type) {
+	case database.QueryResult:
+		return exportResult{Columns: result.Columns, Rows: result.Rows, Truncated: result.Truncated}, nil
+	case map[string]any:
+		out := exportResult{}
+		out.Truncated, _ = result["truncated"].(bool)
+		switch columns := result["columns"].(type) {
+		case []string:
+			out.Columns = columns
+		case []any:
+			out.Columns = make([]string, len(columns))
+			for i, column := range columns {
+				var ok bool
+				out.Columns[i], ok = column.(string)
+				if !ok {
+					return out, errors.New("Invalid export result column")
+				}
+			}
+		default:
+			return out, errors.New("Query did not return tabular export columns")
+		}
+		switch rows := result["rows"].(type) {
+		case [][]any:
+			out.Rows = rows
+		case []any:
+			out.Rows = make([][]any, len(rows))
+			for i, row := range rows {
+				var ok bool
+				out.Rows[i], ok = row.([]any)
+				if !ok {
+					return out, errors.New("Invalid export result row")
+				}
+			}
+		case nil:
+			out.Rows = [][]any{}
+		default:
+			return out, errors.New("Query did not return tabular export rows")
+		}
+		return out, nil
+	default:
+		return exportResult{}, errors.New("Query did not return a supported tabular result")
+	}
+}
+
+type transferBuffer struct {
+	buf bytes.Buffer
+	ctx context.Context
+}
+
+func (b *transferBuffer) Len() int      { return b.buf.Len() }
+func (b *transferBuffer) Bytes() []byte { return b.buf.Bytes() }
+
+func (b *transferBuffer) Write(data []byte) (int, error) {
+	if err := b.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(data) > maxTransferBytes-b.Len() {
+		return 0, errors.New("Export exceeds 32 MiB; narrow the query")
+	}
+	return b.buf.Write(data)
+}
+
 func encodeTransfer(q exportResult, format string, p map[string]any) ([]byte, string, error) {
+	return encodeTransferContext(context.Background(), q, format, p)
+}
+
+func encodeTransferContext(ctx context.Context, q exportResult, format string, p map[string]any) ([]byte, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
 	nullLiteral := "\\N"
 	if v, ok := p["nullLiteral"].(string); ok {
 		nullLiteral = v
 	}
+	buffer := &transferBuffer{ctx: ctx}
 	if format == "json" {
-		objects := make([]map[string]any, len(q.Rows))
+		if _, err := buffer.Write([]byte("[")); err != nil {
+			return nil, "", err
+		}
+		// Reuse one row object. Duplicate column names retain the previous
+		// last-column-wins behavior, and encoding/json keeps keys deterministic.
+		object := make(map[string]any, len(q.Columns))
 		for i, row := range q.Rows {
-			objects[i] = map[string]any{}
-			for j, col := range q.Columns {
+			if err := ctx.Err(); err != nil {
+				return nil, "", err
+			}
+			clear(object)
+			for j, column := range q.Columns {
 				if j < len(row) {
-					objects[i][col] = row[j]
+					object[column] = row[j]
 				}
 			}
+			data, err := json.Marshal(object)
+			if err != nil {
+				return nil, "", err
+			}
+			separator := "\n  "
+			if i > 0 {
+				separator = ",\n  "
+			}
+			if _, err = buffer.Write([]byte(separator)); err != nil {
+				return nil, "", err
+			}
+			if _, err = buffer.Write(data); err != nil {
+				return nil, "", err
+			}
 		}
-		data, err := json.MarshalIndent(objects, "", "  ")
-		return data, "application/json; charset=utf-8", err
+		tail := "]\n"
+		if len(q.Rows) > 0 {
+			tail = "\n]\n"
+		}
+		if _, err := buffer.Write([]byte(tail)); err != nil {
+			return nil, "", err
+		}
+		return buffer.Bytes(), "application/json; charset=utf-8", nil
 	}
 	if format == "xlsx" {
 		book := excelize.NewFile()
 		defer book.Close()
-		for j, col := range q.Columns {
-			cell, _ := excelize.CoordinatesToCellName(j+1, 1)
-			if err := book.SetCellStr("Sheet1", cell, col); err != nil {
-				return nil, "", err
-			}
-		}
-		for i, row := range q.Rows {
-			for j, value := range row {
-				cell, _ := excelize.CoordinatesToCellName(j+1, i+2)
-				var err error
-				if value == nil {
-					err = book.SetCellStr("Sheet1", cell, nullLiteral)
-				} else {
-					switch v := value.(type) {
-					case string:
-						err = book.SetCellStr("Sheet1", cell, v)
-					case json.Number:
-						err = book.SetCellStr("Sheet1", cell, string(v))
-					default:
-						err = book.SetCellValue("Sheet1", cell, value)
-					}
-				}
-				if err != nil {
-					return nil, "", err
-				}
-			}
-		}
-		buf, err := book.WriteToBuffer()
+		stream, err := book.NewStreamWriter("Sheet1")
 		if err != nil {
 			return nil, "", err
 		}
-		return buf.Bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
+		header := make([]any, len(q.Columns))
+		for i, column := range q.Columns {
+			header[i] = column
+		}
+		if err = stream.SetRow("A1", header); err != nil {
+			return nil, "", err
+		}
+		cells := make([]any, len(q.Columns))
+		for i, row := range q.Rows {
+			if err = ctx.Err(); err != nil {
+				return nil, "", err
+			}
+			for j := range cells {
+				if j >= len(row) || row[j] == nil {
+					cells[j] = nullLiteral
+					continue
+				}
+				switch value := row[j].(type) {
+				case json.Number:
+					cells[j] = string(value)
+				case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+					// Excel cannot exactly represent every SQL numeric value.
+					cells[j] = fmt.Sprint(value)
+				default:
+					cells[j] = value
+				}
+			}
+			if err = stream.SetRow("A"+strconv.Itoa(i+2), cells); err != nil {
+				return nil, "", err
+			}
+		}
+		if err = ctx.Err(); err != nil {
+			return nil, "", err
+		}
+		if err = stream.Flush(); err != nil {
+			return nil, "", err
+		}
+		if err = book.Write(buffer); err != nil {
+			return nil, "", err
+		}
+		return buffer.Bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nil
 	}
-	var buffer bytes.Buffer
-	writer := csv.NewWriter(&buffer)
+	writer := csv.NewWriter(buffer)
 	if format == "txt" {
 		writer.Comma = '\t'
 	}
 	if err := writer.Write(q.Columns); err != nil {
 		return nil, "", err
 	}
+	record := make([]string, len(q.Columns))
 	for _, row := range q.Rows {
-		record := make([]string, len(q.Columns))
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
 		for i := range record {
 			if i < len(row) && row[i] != nil {
 				record[i] = fmt.Sprint(row[i])
@@ -566,9 +678,12 @@ func encodeTransfer(q exportResult, format string, p map[string]any) ([]byte, st
 		}
 	}
 	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return nil, "", err
+	}
 	contentType := "text/csv; charset=utf-8"
 	if format == "txt" {
 		contentType = "text/plain; charset=utf-8"
 	}
-	return buffer.Bytes(), contentType, writer.Error()
+	return buffer.Bytes(), contentType, nil
 }

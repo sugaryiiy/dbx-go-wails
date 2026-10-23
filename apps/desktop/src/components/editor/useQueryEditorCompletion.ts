@@ -1,5 +1,5 @@
 import { type RoutineCompletionTarget } from "./useQueryEditorCompletionMetadata";
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import type { CompletionContext } from "@codemirror/autocomplete";
 import type { EditorView as EditorViewType } from "@codemirror/view";
 import { type QueryCompletionItem, type BatchColumnSelectionActionItem } from "./useQueryEditorBatchSelection";
@@ -225,6 +225,9 @@ export function useQueryEditorCompletion(options: QueryEditorCompletionOptions) 
   let deferredCompletionTriggerTimer: ReturnType<typeof setTimeout> | null = null;
 
   let completionEpoch = 0;
+  // Metadata can also be invalidated by schema/session changes or an explicit
+  // refresh, independently of CodeMirror's completion request cancellation.
+  watch(completionMetadata.metadataGeneration, () => completionEpoch++, { flush: "sync" });
 
   let tableCompletionRefreshActive = false;
 
@@ -1225,6 +1228,7 @@ export function useQueryEditorCompletion(options: QueryEditorCompletionOptions) 
     const onDemandOnlyColumns = usesOnDemandOnlyCompletionColumns();
     const tableNameCompletion = isTableNameCompletionContext(completionContext);
     const connectionId = props.connectionId;
+    const isCurrentMetadata = completionMetadata.captureMetadataRequest();
     const database = scope.database;
     const databaseNames = localCompletionDatabaseNames(completionContext);
     const currentDatabaseSchemaNames = localCompletionSchemasForDatabaseDisambiguation(completionContext, databaseNames, scope);
@@ -1247,10 +1251,10 @@ export function useQueryEditorCompletion(options: QueryEditorCompletionOptions) 
       const globalOracleTableSearch = isOracleCompletionDatabase(props.databaseType) && completionContext.suggestTables && !completionContext.qualifier;
       const refreshEpoch = completionEpoch;
       queueTableCompletionRefresh(async () => {
-        if (refreshEpoch !== completionEpoch) return;
+        if (refreshEpoch !== completionEpoch || !isCurrentMetadata()) return;
         try {
           const tables = await connectionStore.refreshCompletionTables(connectionId, tableLookupTarget.database, tableLookupTarget.filter, MAX_COMPLETION_TABLES, tableLookupTarget.schema, globalOracleTableSearch, scope.schema, props.catalog);
-          if (refreshEpoch !== completionEpoch) return;
+          if (refreshEpoch !== completionEpoch || !isCurrentMetadata()) return;
           const scopedTables = tables.map((table) => ({ ...table, database: table.database ?? tableLookupTarget.database }));
           completionMetadata.cachedTables = mergeCompletionTables(completionMetadata.cachedTables, scopedTables);
           if (completionContext.suggestJoinConditions && completionContext.referencedTables.length > 0) {
@@ -1265,6 +1269,7 @@ export function useQueryEditorCompletion(options: QueryEditorCompletionOptions) 
       const completionObjectScope = routineCompletionScopeForContext(completionContext, scope);
       void listCompletionObjectsForContext(completionContext, scope)
         .then((objects) => {
+          if (!isCurrentMetadata()) return;
           const cachedObjects = completionObjectsForScope(completionObjectScope);
           const merged = mergeCompletionObjects(cachedObjects, objects);
           const changed = completionObjectsDiffer(cachedObjects, merged);
@@ -1288,6 +1293,7 @@ export function useQueryEditorCompletion(options: QueryEditorCompletionOptions) 
       const insertDatabase = (supportsDatabaseSchemaQualifierCompletion() ? completionContext.insertDatabase : undefined) ?? database;
       void refreshCompletionColumnsForEditor(connectionId, insertDatabase, insertTable, completionContext.insertSchema ?? scope.schema)
         .then((columns) => {
+          if (!isCurrentMetadata()) return;
           const insertSchema = completionContext.insertSchema ?? scope.schema;
           cachedColumnsByTable.set(completionCacheKey({ name: insertTable, database: completionContext.insertDatabase, schema: insertSchema }, scope), columns);
         })
@@ -1300,6 +1306,7 @@ export function useQueryEditorCompletion(options: QueryEditorCompletionOptions) 
       if (target) {
         void refreshCompletionColumnsForEditor(connectionId, target.database, qualifiedColumnTarget.name, target.schema, target.catalog)
           .then((columns) => {
+            if (!isCurrentMetadata()) return;
             if (columns.length > 0) cachedColumnsByTable.set(qualifiedColumnCacheKey, columns);
           })
           .catch(() => {});
@@ -1316,6 +1323,7 @@ export function useQueryEditorCompletion(options: QueryEditorCompletionOptions) 
         if (!target) continue;
         void refreshCompletionColumnsForEditor(connectionId, target.database, refTable.name, target.schema, target.catalog, refTable)
           .then((columns) => {
+            if (!isCurrentMetadata()) return;
             if (columns.length > 0) cachedColumnsByTable.set(cacheKey, columns);
           })
           .catch(() => {});

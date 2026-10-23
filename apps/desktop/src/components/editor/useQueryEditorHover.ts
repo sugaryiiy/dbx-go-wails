@@ -59,6 +59,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
   }
 
   async function resolveCteColumnHoverColumn(semanticModel: SqlSemanticModel, columnName: string, qualifier?: string): Promise<SqlCompletionColumn | null> {
+    const isCurrent = completionMetadata.captureMetadataRequest();
     try {
       const hit = findCteColumnResolution(semanticModel, columnName, qualifier);
       if (!hit) return null;
@@ -70,6 +71,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
         origins.map(async (origin) => {
           const reference = referencedTableLikeFromSemanticSource(origin.source);
           await ensureColumnsForTable(reference, reference);
+          if (!isCurrent()) return null;
           const columns = cachedColumnsByTable.get(completionCacheKey(reference));
           return columns?.find((candidate) => candidate.name.toLowerCase() === origin.column.toLowerCase()) ?? null;
         }),
@@ -83,7 +85,10 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
   async function resolveSqlHoverTooltip(currentView: EditorViewType, pos: number) {
     if (!props.connectionId || props.database == null || contextMenuOpen.value) return null;
 
-    const sql = currentView.state.doc.toString();
+    const document = currentView.state.doc;
+    const metadataIsCurrent = completionMetadata.captureMetadataRequest();
+    const isCurrent = () => metadataIsCurrent() && currentView.state.doc === document && !contextMenuOpen.value;
+    const sql = document.toString();
     const range = identifierRangeAt(sql, pos);
     if (!range) return null;
 
@@ -109,6 +114,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
     // the generic table/column fallback (which cannot see inside a CTE body).
     if (semanticModel) {
       const cteColumn = await resolveCteColumnHoverColumn(semanticModel, name, qualifier);
+      if (!isCurrent()) return null;
       if (cteColumn) {
         return {
           pos: range.from,
@@ -182,6 +188,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
 
       if (!table && !usesLocalOnlyCompletionMetadata() && !lookup.preferGlobalFirst) {
         const remoteHoverTables = await searchRemote(hoverScope.schema, false);
+        if (!isCurrent()) return null;
         hoverTables = mergeCompletionTables(hoverTables, remoteHoverTables);
         completionMetadata.cachedTables = mergeCompletionTables(completionMetadata.cachedTables, remoteHoverTables);
         table = matchHoverTable(hoverTables);
@@ -189,6 +196,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
 
       if (!table && !usesLocalOnlyCompletionMetadata() && lookup.preferGlobalFirst) {
         const remoteHoverTables = await searchRemote(undefined, true);
+        if (!isCurrent()) return null;
         hoverTables = mergeCompletionTables(hoverTables, remoteHoverTables);
         completionMetadata.cachedTables = mergeCompletionTables(completionMetadata.cachedTables, remoteHoverTables);
         table = matchHoverTable(hoverTables);
@@ -201,6 +209,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
         table = matchHoverTable(hoverTables);
         if (!table && !usesLocalOnlyCompletionMetadata()) {
           const remoteHoverTables = await searchRemote(undefined, true);
+          if (!isCurrent()) return null;
           hoverTables = mergeCompletionTables(hoverTables, remoteHoverTables);
           completionMetadata.cachedTables = mergeCompletionTables(completionMetadata.cachedTables, remoteHoverTables);
           table = matchHoverTable(hoverTables);
@@ -227,6 +236,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
         // views. Hover only removes PostgreSQL's appended access-control tail.
         try {
           const { ddl } = await loadObjectDdl(objectMetadataRequest);
+          if (!isCurrent()) return null;
           const rawDdl = ddlForHoverPreview(applyDdlStoragePreference(ddl, props.databaseType, settingsStore.editorSettings.excludeDdlStorage));
           if (rawDdl && rawDdl.trim()) {
             // A view's display DDL wraps the raw (often single-line) view source
@@ -236,10 +246,12 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
             // the aligned column layout from reformatHoverDdl.
             const isViewObject = objectMetadataRequest.objectType === "VIEW" || objectMetadataRequest.objectType === "MATERIALIZED_VIEW";
             const formatted = isViewObject ? await formatSqlForDisplay(rawDdl, formatDialect, settingsStore.editorSettings.sqlFormatter) : reformatHoverDdl(rawDdl, quoteQualifiedName(hoverQualifiedName));
+            if (!isCurrent()) return null;
             const unqualified = applyDdlDatabaseQualifier(formatted, formatDialect, props.databaseType, settingsStore.editorSettings.generateSqlIncludeDatabaseName, hoverDatabase, props.catalog);
             sqlContent = settingsStore.editorSettings.generateSqlQuoteIdentifiers ? unqualified : omitDdlIdentifierQuotes(unqualified, formatDialect);
           }
         } catch (error) {
+          if (!isCurrent()) return null;
           console.warn(`[DBX] Failed to load table DDL for ${hoverDatabase}.${hoverSchema}.${table.name}:`, error);
         }
 
@@ -254,17 +266,21 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
               loadObjectMetadataFacet(objectMetadataRequest, "columns", () => api.getColumns(props.connectionId!, hoverDatabase, hoverSchema, table.name, hoverScope.catalog)),
               loadObjectMetadataFacet(objectMetadataRequest, "indexes", () => api.listIndexes(props.connectionId!, hoverDatabase, hoverSchema, table.name, hoverScope.catalog)).catch(() => ({ value: [] as IndexInfo[], cacheStatus: "remote" as const })),
             ]);
+            if (!isCurrent()) return null;
             fullColumns = columnsResult.value;
             fullIndexes = indexesResult.value;
           } catch (error) {
+            if (!isCurrent()) return null;
             metadataLoadFailed = true;
             console.warn(`[DBX] Failed to load table metadata for ${hoverDatabase}.${hoverSchema}.${table.name}:`, error);
           }
           if (!metadataLoadFailed) {
             try {
               const commentResult = await loadObjectMetadataFacet(objectMetadataRequest, "comment", () => api.getTableComment(props.connectionId!, hoverDatabase, hoverSchema, table.name, hoverScope.catalog));
+              if (!isCurrent()) return null;
               if (commentResult.value) tableComment = commentResult.value;
             } catch (error) {
+              if (!isCurrent()) return null;
               console.warn(`[DBX] Failed to load table comment for ${hoverDatabase}.${hoverSchema}.${table.name}:`, error);
             }
           }
@@ -278,7 +294,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
         // Re-check after async metadata load — the context menu may have opened
         // while the DDL request was in flight, and we must not display a hover
         // tooltip on top of an open context menu.
-        if (contextMenuOpen.value) return null;
+        if (!isCurrent()) return null;
         return {
           pos: range.from,
           end: range.to,
@@ -299,6 +315,7 @@ export function useQueryEditorHover(options: QueryEditorHoverOptions) {
           })) ?? [];
         if (columns.length === 0) {
           await ensureColumnsForTable(refTable);
+          if (!isCurrent()) return null;
           columns.push(...(cachedColumnsByTable.get(completionCacheKey(refTable)) ?? []));
         }
         const column = columns.find((col) => col.name.toLowerCase() === name.toLowerCase());

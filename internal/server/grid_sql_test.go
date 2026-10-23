@@ -70,7 +70,10 @@ func TestGridSaveRejectsUnsafeTargets(t *testing.T) {
 		name   string
 		mutate func(*gridOptions)
 	}{
-		{"no primary key", func(o *gridOptions) { o.Table.PrimaryKeys = nil }},
+		{"no mapped keyless predicate", func(o *gridOptions) {
+			o.Table.PrimaryKeys = nil
+			o.SourceColumns = &[]*string{nil, nil, nil, nil, nil}
+		}},
 		{"missing primary key", func(o *gridOptions) { o.Table.PrimaryKeys = []string{"missing"} }},
 		{"primary key absent from projection", func(o *gridOptions) {
 			o.Columns = []string{"code"}
@@ -177,6 +180,7 @@ func TestGridMalformedRequestAndValidationEnvelope(t *testing.T) {
 	opts := jsonMap(t, gridFixture())
 	opts["dirtyRows"] = []any{[]any{0, []any{[]any{1, "new"}}}}
 	opts["tableMeta"].(map[string]any)["primaryKeys"] = []any{}
+	opts["sourceColumns"] = []any{nil, nil, nil, nil, nil}
 	result := value(t, call(s, "POST", "/api/query/prepare-data-grid-save", map[string]any{"options": opts}, cookie, "")).(map[string]any)
 	if result["validationError"] == nil || len(result["statements"].([]any)) != 0 {
 		t.Fatal(result)

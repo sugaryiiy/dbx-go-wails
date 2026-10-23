@@ -6,7 +6,7 @@ import { reactive, shallowRef } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useQueryEditorCompletionMetadata } from "../useQueryEditorCompletionMetadata";
 import type { QueryEditorProps } from "../queryEditorTypes";
-import type { SqlCompletionColumn, SqlCompletionTable } from "@/lib/sql/sqlCompletion";
+import type { SqlCompletionColumn, SqlCompletionForeignKey, SqlCompletionTable } from "@/lib/sql/sqlCompletion";
 
 vi.mock("@/stores/connectionStore", () => ({ COMPLETION_METADATA_CONCURRENCY: 4 }));
 vi.mock("@/lib/backend/api", () => ({}));
@@ -25,6 +25,8 @@ function createHarness(overrides: Partial<QueryEditorProps> = {}) {
     getConfig: vi.fn(() => undefined),
     lookupLocalCompletionColumns: vi.fn((): SqlCompletionColumn[] => []),
     listCompletionColumns: vi.fn(async (): Promise<SqlCompletionColumn[]> => []),
+    listCompletionColumnsByPrefix: vi.fn(async (): Promise<SqlCompletionColumn[]> => []),
+    listCompletionForeignKeys: vi.fn(async (): Promise<SqlCompletionForeignKey[]> => []),
     lookupLocalCompletionTables: vi.fn((): SqlCompletionTable[] => []),
     listCompletionTables: vi.fn(async (): Promise<SqlCompletionTable[]> => []),
   };
@@ -42,6 +44,113 @@ function createHarness(overrides: Partial<QueryEditorProps> = {}) {
 }
 
 describe("QueryEditor completion metadata ownership", () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((complete, fail) => {
+      resolve = complete;
+      reject = fail;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it.each([
+    ["connectionId", "other-connection"],
+    ["database", "other-database"],
+    ["schema", "archive"],
+    ["catalog", "other-catalog"],
+    ["tabId", "other-tab"],
+    ["clientSessionId", "other-session"],
+    ["completionContextVersion", 2],
+    ["databaseType", "mysql"],
+  ] as const)("rejects late columns after the %s metadata context changes", async (field, value) => {
+    const { metadata, store, props } = createHarness();
+    const response = deferred<SqlCompletionColumn[]>();
+    store.listCompletionColumns.mockReturnValueOnce(response.promise).mockResolvedValueOnce([{ name: "new_id", table: "users" }]);
+    const pending = metadata.ensureColumnsForTable({ name: "users" });
+    // Invalidation must also cover an A -> B -> A round trip before the old
+    // request completes, even though the final context string is unchanged.
+    const previous = props[field];
+    Object.assign(props, { [field]: value });
+    Object.assign(props, { [field]: previous });
+    response.resolve(columns);
+    await expect(pending).rejects.toThrow("Stale editor completion metadata context");
+    expect(metadata.cachedColumnsByTable.size).toBe(0);
+    expect(metadata.loadedColumnsByTable.size).toBe(0);
+    await metadata.ensureColumnsForTable({ name: "users" });
+    expect(store.listCompletionColumns).toHaveBeenCalledTimes(2);
+    expect(metadata.cachedColumnsByTable.get("public.users")?.[0]?.name).toBe("new_id");
+  });
+
+  it("does not fall back to a full-column request when a stale prefix request fails", async () => {
+    const { metadata, store, props } = createHarness();
+    const response = deferred<SqlCompletionColumn[]>();
+    store.listCompletionColumnsByPrefix.mockReturnValueOnce(response.promise);
+    const pending = metadata.listCompletionColumnsForEditor("connection", "demo", "users", "public", undefined, undefined, "us");
+    props.database = "other";
+    response.reject(new Error("prefix failed"));
+    await expect(pending).rejects.toThrow("Stale editor completion metadata context");
+    expect(store.listCompletionColumns).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("ignores late foreign-key results (failed=%s) after explicit refresh", async (failed) => {
+    const { metadata, store } = createHarness();
+    const response = deferred<SqlCompletionForeignKey[]>();
+    store.listCompletionForeignKeys.mockReturnValueOnce(response.promise);
+    const pending = metadata.ensureForeignKeysForTables([{ name: "users" }]);
+    metadata.refreshCompletionCache();
+    if (failed) response.reject(new Error("old request failed"));
+    else response.resolve([]);
+    await pending;
+    expect(metadata.cachedForeignKeysByTable.size).toBe(0);
+    await metadata.ensureForeignKeysForTables([{ name: "users" }]);
+    expect(store.listCompletionForeignKeys).toHaveBeenCalledTimes(2);
+  });
+
+  it("discards remote tables arriving after the latency budget and a context change", async () => {
+    vi.useFakeTimers();
+    const { metadata, store, props } = createHarness();
+    store.lookupLocalCompletionTables.mockReturnValue([{ name: "local" }]);
+    const response = deferred<SqlCompletionTable[]>();
+    store.listCompletionTables.mockReturnValueOnce(response.promise);
+    const pending = metadata.listCompletionTablesWithLatencyBudget("connection", "demo", "", 100);
+    await vi.advanceTimersByTimeAsync(40);
+    expect(await pending).toHaveLength(1);
+    props.connectionId = "other";
+    response.resolve([{ name: "old_remote" }]);
+    await Promise.resolve();
+    expect(metadata.cachedTables).toEqual([]);
+  });
+
+  it("discards late exact-table lookups after a catalog change", async () => {
+    const { metadata, store, props } = createHarness();
+    const response = deferred<SqlCompletionTable[]>();
+    store.listCompletionTables.mockReturnValueOnce(response.promise);
+    const pending = metadata.findExactSemanticDiagnosticTable({ name: "users" });
+    props.catalog = "other";
+    response.resolve([{ name: "users", schema: "public" }]);
+    expect(await pending).toBeNull();
+    expect(metadata.cachedTables).toEqual([]);
+  });
+
+  it("restarts insert hints on refresh and keeps the newer request pending when the old one settles", async () => {
+    const { metadata, store } = createHarness();
+    const oldResponse = deferred<SqlCompletionColumn[]>();
+    const newResponse = deferred<SqlCompletionColumn[]>();
+    store.listCompletionColumns.mockReturnValueOnce(oldResponse.promise).mockReturnValueOnce(newResponse.promise);
+    metadata.requestInsertValueHintTableColumns("users");
+    metadata.refreshCompletionCache();
+    metadata.requestInsertValueHintTableColumns("users");
+    oldResponse.resolve(columns);
+    for (let turn = 0; turn < 8; turn++) await Promise.resolve();
+    metadata.requestInsertValueHintTableColumns("users");
+    expect(store.listCompletionColumns).toHaveBeenCalledTimes(2);
+    expect(metadata.getInsertValueHintTableColumns("users")).toBeUndefined();
+    newResponse.resolve([{ name: "new_id", table: "users" }]);
+    for (let turn = 0; turn < 8; turn++) await Promise.resolve();
+    expect(metadata.getInsertValueHintTableColumns("users")).toEqual(["new_id"]);
+  });
+
   it.each(["getEditorSqlCompletionContext", "getEditorSemanticModel"] as const)("keys %s by document, editor state, position and dialect", (method) => {
     const { metadata, props } = createHarness();
     const state = EditorState.create({ doc: props.modelValue });

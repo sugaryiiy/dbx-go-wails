@@ -81,10 +81,17 @@ type gridOptions struct {
 	InsertMode         string         `json:"insertMode"`
 }
 type gridPreparation struct {
-	ValidationError string   `json:"validationError,omitempty"`
-	Statements      []string `json:"statements"`
-	Rollback        []string `json:"rollbackStatements"`
-	Schema          string   `json:"executionSchema,omitempty"`
+	ValidationError string          `json:"validationError,omitempty"`
+	Statements      []string        `json:"statements"`
+	Rollback        []string        `json:"rollbackStatements"`
+	Schema          string          `json:"executionSchema,omitempty"`
+	KeylessGuards   []gridSaveGuard `json:"keylessGuards,omitempty"`
+	MaxAffectedRows []*int          `json:"maxAffectedRowsPerStatement,omitempty"`
+}
+type gridSaveGuard struct {
+	SQL            string `json:"sql"`
+	MaxMatchedRows int    `json:"maxMatchedRows"`
+	Message        string `json:"message"`
 }
 type gridBuilder struct {
 	options  gridOptions
@@ -298,7 +305,7 @@ func (b *gridBuilder) literal(value any, col gridColumn) (string, error) {
 		return strconv.FormatFloat(v, 'g', -1, 64), nil
 	case string:
 		typ := strings.ToLower(col.Type)
-		if strings.Contains(typ, "blob") || strings.Contains(typ, "binary") || typ == "bytea" {
+		if strings.Contains(typ, "blob") || strings.Contains(typ, "binary") || typ == "bytea" || b.options.Kind == "mysql" && (typ == "bit" || strings.HasPrefix(typ, "bit(")) {
 			if !strings.HasPrefix(v, "0x") {
 				return "", errors.New("Binary values must use 0x hexadecimal notation")
 			}
@@ -349,6 +356,12 @@ func (b *gridBuilder) predicate(name string, value any, keyless bool) (string, e
 	if err != nil {
 		return "", err
 	}
+	if keyless && b.options.Kind == "mysql" && strings.EqualFold(strings.TrimSpace(col.Type), "json") {
+		// MySQL normalizes JSON on assignment. Compare parsed JSON so a new
+		// compact value can still identify the row in compensating SQL. Root
+		// extraction is also available in MariaDB, unlike CAST(... AS JSON).
+		return "JSON_EXTRACT(" + ident + ", '$') = JSON_EXTRACT(" + literal + ", '$')", nil
+	}
 	if keyless && b.options.Kind == "mysql" && gridTextType(col.Type) {
 		ident = "BINARY " + ident
 	}
@@ -362,19 +375,26 @@ func (b *gridBuilder) predicate(name string, value any, keyless bool) (string, e
 	return ident + " = " + literal, nil
 }
 func (b *gridBuilder) where(row []any) (string, error) {
-	if len(b.keys) == 0 {
-		return "", errors.New("Updating or deleting a row without a primary key has not been migrated; add a primary key before editing")
+	keyless := len(b.keys) == 0
+	names := b.keys
+	if keyless {
+		// The result contains the original values, including the old value of
+		// each edited cell. Use all mapped columns when no key is available.
+		names = b.columns
 	}
 	parts := []string{}
-	for _, name := range b.keys {
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
 		idx, ok := b.indexes[name]
 		if !ok {
 			return "", fmt.Errorf("Result is missing primary key column %q", name)
 		}
-		if row[idx] == nil {
+		if !keyless && row[idx] == nil {
 			return "", fmt.Errorf("Primary key column %q has no value", name)
 		}
-		part, err := b.predicate(name, row[idx], false)
+		part, err := b.predicate(name, row[idx], keyless)
 		if err != nil {
 			return "", err
 		}
@@ -437,6 +457,29 @@ func (b *gridBuilder) prepare() (gridPreparation, error) {
 	reverse := []string{}
 	reversible := true
 	touched := map[int]bool{}
+	guarded := map[string]bool{}
+	appendStatement := func(statement string, keylessMutation bool) {
+		out.Statements = append(out.Statements, statement)
+		var limit *int
+		if keylessMutation && len(b.keys) == 0 {
+			one := 1
+			limit = &one
+		}
+		out.MaxAffectedRows = append(out.MaxAffectedRows, limit)
+	}
+	guardPredicate := func(predicate string) {
+		if len(b.keys) != 0 || guarded[predicate] {
+			return
+		}
+		guarded[predicate] = true
+		// Count the exact predicate sent by the mutation: the loaded page
+		// alone cannot tell whether another matching row exists in the table.
+		out.KeylessGuards = append(out.KeylessGuards, gridSaveGuard{
+			SQL:            "SELECT COUNT(*) AS dbx_keyless_row_matches FROM " + b.table + " WHERE (" + predicate + ")",
+			MaxMatchedRows: 1,
+			Message:        "Cannot safely update or delete this row: the table has no primary key and more than one row matches the original values. Add a primary key or unique index before editing.",
+		})
+	}
 
 	for _, dirty := range b.options.DirtyRows {
 		if dirty.Index < 0 || dirty.Index >= len(b.options.Rows) || touched[dirty.Index] {
@@ -485,7 +528,8 @@ func (b *gridBuilder) prepare() (gridPreparation, error) {
 		if len(sets) == 0 {
 			continue
 		}
-		out.Statements = append(out.Statements, "UPDATE "+b.table+" SET "+strings.Join(sets, ", ")+" WHERE "+predicate+";")
+		guardPredicate(predicate)
+		appendStatement("UPDATE "+b.table+" SET "+strings.Join(sets, ", ")+" WHERE "+predicate+";", true)
 		undoPredicate, err := b.where(after)
 		if err != nil {
 			return out, err
@@ -509,7 +553,8 @@ func (b *gridBuilder) prepare() (gridPreparation, error) {
 		if err != nil {
 			return out, err
 		}
-		out.Statements = append(out.Statements, "DELETE FROM "+b.table+" WHERE "+predicate+";")
+		guardPredicate(predicate)
+		appendStatement("DELETE FROM "+b.table+" WHERE "+predicate+";", true)
 		if b.completeRow() {
 			undo, err := b.insert(row, true, false)
 			if err != nil {
@@ -525,7 +570,7 @@ func (b *gridBuilder) prepare() (gridPreparation, error) {
 		if err != nil {
 			return out, err
 		}
-		out.Statements = append(out.Statements, statement)
+		appendStatement(statement, false)
 		// Without known primary keys an auto-generated or default-filled row cannot
 		// be identified safely for a later compensating DELETE.
 		if len(b.keys) == 0 {
@@ -567,9 +612,6 @@ func (b *gridBuilder) prepare() (gridPreparation, error) {
 	return out, nil
 }
 func (b *gridBuilder) copyUpdates() ([]string, error) {
-	if len(b.keys) == 0 {
-		return nil, errors.New("Copy UPDATE requires primary keys")
-	}
 	results := []string{}
 	for _, row := range b.options.Rows {
 		predicate, err := b.where(row)

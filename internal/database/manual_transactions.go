@@ -58,7 +58,9 @@ func (m *Manager) handleManualTransaction(ctx context.Context, path string, p ma
 		returnValue, err := m.execute(ctx, "/api/query/execute-multi", request)
 		return returnValue, true, err
 	case "/api/transaction/commit", "/api/transaction/rollback":
-		session.mu.Lock()
+		if err := session.mu.LockContext(ctx); err != nil {
+			return nil, true, err
+		}
 		readOnly := session.readOnly
 		session.mu.Unlock()
 		if readOnly {

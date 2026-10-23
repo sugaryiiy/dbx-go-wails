@@ -12,14 +12,41 @@ import (
 // A tab owns its physical connection. Session state and explicit transactions
 // never leak into the shared pool, including after cancellation or disconnect.
 type querySession struct {
-	mu                               sync.Mutex
+	mu                               sessionMutex
 	conn                             *sql.Conn
 	connectionID, database, clientID string
 	inTransaction, dirty             bool
 	readOnly                         bool
 	lastUsed                         time.Time
 	closed                           bool
+	released                         bool // Clean retirement may be retried; explicit close must stop queued work.
 }
+
+// Session operations may wait behind a long-running query. Unlike sync.Mutex,
+// this gate lets a queued request leave as soon as its context is cancelled.
+type sessionMutex struct {
+	once sync.Once
+	gate chan struct{}
+}
+
+func (m *sessionMutex) LockContext(ctx context.Context) error {
+	m.once.Do(func() { m.gate = make(chan struct{}, 1) })
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case m.gate <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-m.gate
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (m *sessionMutex) Lock()   { _ = m.LockContext(context.Background()) }
+func (m *sessionMutex) Unlock() { <-m.gate }
 
 func sessionKey(id, database, client string) string { return id + "\x00" + database + "\x00" + client }
 
@@ -42,52 +69,92 @@ func (s *querySession) closeLocked() {
 func (m *Manager) acquireQuerySession(ctx context.Context, db *sql.DB, id, database, client string) (*querySession, error) {
 	key := sessionKey(id, database, client)
 	m.mu.RLock()
-	s := m.sessions[key]
+	owner := m.connections[id]
+	validPool := false
+	if owner != nil {
+		for _, pool := range owner.pools {
+			validPool = validPool || pool == db
+		}
+	}
 	m.mu.RUnlock()
-	if s != nil {
-		s.mu.Lock()
-		if !s.closed {
-			s.lastUsed = time.Now()
-			return s, nil
-		}
-		s.mu.Unlock()
-		m.mu.Lock()
-		if m.sessions[key] == s {
-			delete(m.sessions, key)
-		}
-		m.mu.Unlock()
-	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, err
-	}
-	candidate := &querySession{conn: conn, connectionID: id, database: database, clientID: client, lastUsed: time.Now()}
-	m.mu.Lock()
-	if m.closed || m.connections[id] == nil {
-		m.mu.Unlock()
-		conn.Close()
+	if !validPool {
 		return nil, errors.New("connection was closed while acquiring a query session")
 	}
-	if len(m.sessions) >= 64 {
-		m.mu.Unlock()
-		conn.Close()
-		return nil, errors.New("too many open query sessions; close unused query tabs")
-	}
-	if existing := m.sessions[key]; existing != nil {
-		m.mu.Unlock()
-		conn.Close()
-		existing.mu.Lock()
-		if existing.closed {
-			existing.mu.Unlock()
+	for {
+		m.mu.RLock()
+		if m.closed || m.connections[id] != owner || owner.maintenanceCancel != nil {
+			m.mu.RUnlock()
+			return nil, errors.New("connection was closed while acquiring a query session")
+		}
+		s := m.sessions[key]
+		m.mu.RUnlock()
+		if s == nil {
+			conn, err := db.Conn(ctx)
+			if err != nil {
+				return nil, err
+			}
+			candidate := &querySession{conn: conn, connectionID: id, database: database, clientID: client, lastUsed: time.Now()}
+			m.mu.Lock()
+			if m.closed || m.connections[id] != owner || owner.maintenanceCancel != nil {
+				m.mu.Unlock()
+				conn.Close()
+				return nil, errors.New("connection was closed while acquiring a query session")
+			}
+			if s = m.sessions[key]; s == nil {
+				if len(m.sessions) >= 64 {
+					m.mu.Unlock()
+					conn.Close()
+					return nil, errors.New("too many open query sessions; close unused query tabs")
+				}
+				candidate.mu.Lock()
+				m.sessions[key] = candidate
+				m.mu.Unlock()
+				return candidate, nil
+			}
+			m.mu.Unlock()
+			conn.Close()
+		}
+		if err := s.mu.LockContext(ctx); err != nil {
+			return nil, err
+		}
+		if s.closed {
+			retry := s.released
+			s.mu.Unlock()
+			if retry {
+				continue
+			}
 			return nil, errors.New("query session has been closed")
 		}
-		existing.lastUsed = time.Now()
-		return existing, nil
+		m.mu.RLock()
+		valid := !m.closed && m.connections[id] == owner && owner.maintenanceCancel == nil && m.sessions[key] == s
+		m.mu.RUnlock()
+		if !valid {
+			s.mu.Unlock()
+			return nil, errors.New("query session has been closed")
+		}
+		s.lastUsed = time.Now()
+		return s, nil
 	}
-	candidate.mu.Lock()
-	m.sessions[key] = candidate
+}
+
+// A completed transaction without connection-local settings has nothing left
+// to preserve. Return its connection instead of pinning every visited tab to
+// the small shared pool until the tab is closed.
+func (m *Manager) releaseCleanQuerySession(s *querySession) {
+	if !s.closed && (s.inTransaction || s.dirty || s.readOnly) {
+		return
+	}
+	m.mu.Lock()
+	key := sessionKey(s.connectionID, s.database, s.clientID)
+	if m.sessions[key] == s {
+		delete(m.sessions, key)
+	}
 	m.mu.Unlock()
-	return candidate, nil
+	if !s.closed {
+		s.released = true
+		s.closed = true
+		_ = s.conn.Close()
+	}
 }
 
 func (m *Manager) closeQuerySessions(id, database, client string) bool {

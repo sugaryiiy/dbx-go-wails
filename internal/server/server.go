@@ -45,7 +45,6 @@ type Server struct {
 	assets        fs.FS
 	passwordHash  [32]byte
 	mu            sync.Mutex
-	state         diskState
 	aead          cipher.AEAD
 	sessions      map[string]time.Time
 	failedLogins  int
@@ -57,6 +56,12 @@ type Server struct {
 	pluginRuntime *pluginRuntime
 	agentStore    *agent.Store
 	agents        *agentHTTPState
+
+	storeMu              sync.Mutex // Serializes durable updates without blocking readers or authentication.
+	stateMu              sync.RWMutex
+	state                diskState
+	cacheAccessVersion   uint64
+	cacheAccessPersisted uint64
 }
 
 func New(opts Options) (*Server, error) {
@@ -122,6 +127,9 @@ func (s *Server) Close() error {
 			if err := s.agentStore.Close(); s.closeErr == nil {
 				s.closeErr = err
 			}
+		}
+		if err := s.flushCacheAccesses(); s.closeErr == nil {
+			s.closeErr = err
 		}
 		if s.storeLock != nil {
 			_ = unlockStore(s.storeLock)
@@ -406,11 +414,11 @@ func (s *Server) redactError(message string, payload map[string]any) string {
 		})
 	}
 	redact(payload)
-	s.mu.Lock()
+	s.stateMu.RLock()
 	for _, c := range s.state.Connections {
 		redact(c)
 	}
-	s.mu.Unlock()
+	s.stateMu.RUnlock()
 	if len(message) > 2048 {
 		message = message[:2048]
 	}

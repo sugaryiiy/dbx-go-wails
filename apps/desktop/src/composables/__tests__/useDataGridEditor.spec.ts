@@ -1130,15 +1130,35 @@ describe("useDataGridEditor saveChanges reload", () => {
       keylessGuards: [keylessGuard],
     });
     mocks.executeQuery.mockResolvedValue({ columns: ["dbx_keyless_row_matches"], rows: [[1]] });
-    mocks.executeBatch.mockResolvedValue({ affected_rows: 1 });
+    mocks.executeInTransaction.mockResolvedValue({ affected_rows: 1 });
 
     const { editor } = createSaveTestEditor({ primaryKeys: [] });
     editor.dirtyRows.value.set(0, new Map([[1, "shipped"]]));
 
     await editor.saveChanges();
 
-    expect(mocks.executeBatch).toHaveBeenCalledTimes(1);
+    expect(mocks.executeInTransaction).toHaveBeenCalledWith("connection-1", "app", ["UPDATE orders_test SET status='shipped' WHERE status = 'pending'"], undefined, undefined, [1]);
+    expect(mocks.executeBatch).not.toHaveBeenCalled();
     expect(editor.saveError.value).toBeFalsy();
+  });
+
+  it("keeps keyless edits pending when a concurrent duplicate makes the atomic save fail", async () => {
+    mocks.prepareDataGridSave.mockResolvedValue({
+      statements: ["UPDATE orders_test SET status='shipped' WHERE status = 'pending'"],
+      rollbackStatements: [],
+      keylessGuards: [keylessGuard],
+      maxAffectedRowsPerStatement: [1],
+    });
+    mocks.executeQuery.mockResolvedValue({ columns: ["matches"], rows: [[1]] });
+    mocks.executeInTransaction.mockRejectedValue(new Error("Statement 1 affected 2 rows; limit is 1"));
+    const { editor } = createSaveTestEditor({ primaryKeys: [] });
+    editor.dirtyRows.value.set(0, new Map([[1, "shipped"]]));
+
+    await editor.saveChanges();
+
+    expect(editor.dirtyRows.value.get(0)?.get(1)).toBe("shipped");
+    expect(editor.saveError.value).toContain("affected 2 rows");
+    expect(mocks.executeBatch).not.toHaveBeenCalled();
   });
 
   it("refuses a keyless save when the guard cannot be counted on the server at all", async () => {
@@ -1270,6 +1290,7 @@ describe("useDataGridEditor saveChanges reload", () => {
     expect(mocks.executeInManualTransaction.mock.calls[0]?.[0]).toBe("txn-grid-2");
     expect(mocks.executeInManualTransaction.mock.calls[0]?.[1]).toBe(keylessGuard.sql);
     expect(mocks.executeInManualTransaction.mock.calls[1]?.[0]).toBe("txn-grid-2");
+    expect(mocks.executeInManualTransaction.mock.calls[1]?.[9]).toEqual([1]);
     expect(mocks.executeQuery).not.toHaveBeenCalled();
     expect(mocks.executeBatch).not.toHaveBeenCalled();
   });

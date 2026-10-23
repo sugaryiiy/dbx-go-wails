@@ -737,6 +737,7 @@ export interface DataGridSavePreparation {
   rollbackStatements: string[];
   executionSchema?: string;
   keylessGuards?: DataGridSaveGuard[];
+  maxAffectedRowsPerStatement?: Array<number | null>;
 }
 
 export interface TablePartitionStatus {

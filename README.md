@@ -54,7 +54,9 @@ separate from both Rust DBX and any concurrently running Go instance.
 - A persistent SQLite sample database for trying the workbench.
 - CSV/TSV/XLSX import with transactional parameterized writes; CSV/XLSX/JSON/text
   query export, progress and cancellation.
-- Primary-key-based data grid edits, copied INSERT/UPDATE SQL and rollback SQL.
+- Data grid edits using primary keys or original row values, copied INSERT/UPDATE
+  SQL and rollback SQL. Keyless saves check for duplicate matches on the server
+  and roll back the batch if a mutation affects more than one row.
 - Native Wails window controls, text clipboard, file dialogs and export saving,
   plus a macOS menu-bar tray and a quit/hide close flow with unsaved-work prompts.
 - Go MCP with 20 database tools, Streamable HTTP/stdio, connection permissions,

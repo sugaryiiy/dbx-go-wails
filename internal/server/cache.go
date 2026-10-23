@@ -24,7 +24,7 @@ func (s *Server) handleAppCache(w http.ResponseWriter, r *http.Request, p map[st
 		if key == "" {
 			key = str(p, "cacheKey")
 		}
-		result = appObject(s.snapshot().Settings["schema.cache"])[key]
+		result = s.schemaCacheEntry(key)
 	case route == "/api/schema/cache" && r.Method == "POST":
 		key := str(p, "cacheKey")
 		if key == "" || len(key) > 4096 {
@@ -81,17 +81,7 @@ func (s *Server) handleAppCache(w http.ResponseWriter, r *http.Request, p map[st
 			return nil
 		})
 	case route == "/api/tab-runtime-cache" && r.Method == "GET":
-		key := str(p, "key")
-		if appObject(s.snapshot().Settings["tab.cache"])[key] != nil {
-			err = s.update(func(st *diskState) error {
-				items := appObject(st.Settings["tab.cache"])
-				entry := appObject(items[key])
-				entry["lastAccessedAt"] = time.Now().UnixMilli()
-				result = entry
-				st.Settings["tab.cache"] = items
-				return nil
-			})
-		}
+		result = s.tabCacheEntry(str(p, "key"))
 	case route == "/api/tab-runtime-cache" && r.Method == "DELETE":
 		key := str(p, "key")
 		err = s.update(func(st *diskState) error {
@@ -101,12 +91,7 @@ func (s *Server) handleAppCache(w http.ResponseWriter, r *http.Request, p map[st
 			return nil
 		})
 	case route == "/api/tab-runtime-cache/metadata" && r.Method == "GET":
-		items := []map[string]any{}
-		for _, v := range appObject(s.snapshot().Settings["tab.cache"]) {
-			entry := cloneMap(appObject(v))
-			delete(entry, "payloadBase64")
-			items = append(items, entry)
-		}
+		items := s.tabCacheMetadata()
 		sort.Slice(items, func(i, j int) bool { return str(items[i], "key") < str(items[j], "key") })
 		result = items
 	case route == "/api/tab-runtime-cache/owner" && r.Method == "DELETE":

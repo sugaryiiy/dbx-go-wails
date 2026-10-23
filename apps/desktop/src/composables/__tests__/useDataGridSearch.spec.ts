@@ -1,4 +1,4 @@
-import { nextTick, ref } from "vue";
+import { effectScope, nextTick, ref, shallowRef } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useDataGridSearch } from "@/composables/useDataGridSearch";
 import { clearDataGridSearchStates, createDataGridSearchScopeKey, loadDataGridSearchState, saveDataGridSearchState } from "@/lib/dataGrid/dataGridSearchStatePersistence";
@@ -15,6 +15,130 @@ async function flushSearchDebounce() {
 }
 
 describe("useDataGridSearch", () => {
+  it("yields during a large scan and cancels the old query during the input debounce", async () => {
+    vi.useFakeTimers();
+    const scope = effectScope();
+    let reads = 0;
+    const rows = Array.from({ length: 60_000 }, () => ["old", "new"]);
+    const search = scope.run(() =>
+      useDataGridSearch({
+        columns: ["left", "right"],
+        rows,
+        getCellSearchText: (row, col) => {
+          reads++;
+          return row[col]!;
+        },
+      }),
+    )!;
+    search.searchText.value = "old";
+    await nextTick();
+    vi.advanceTimersByTime(150);
+    await nextTick();
+    expect(search.isSearching.value).toBe(true);
+    expect(reads).toBeGreaterThan(0);
+    expect(reads).toBeLessThan(120_000);
+    // A separate task can run before the complete index is published.
+    const eventLoopTask = vi.fn();
+    setTimeout(eventLoopTask, 0);
+    vi.advanceTimersByTime(0);
+    expect(eventLoopTask).toHaveBeenCalledOnce();
+    const readsBeforeCancel = reads;
+    search.searchText.value = "new";
+    await nextTick();
+    vi.advanceTimersByTime(149);
+    expect(reads).toBe(readsBeforeCancel);
+    await vi.runAllTimersAsync();
+    expect(search.isSearching.value).toBe(false);
+    expect(search.matchCount.value).toBe(60_000);
+    expect(search.matchAt(59_999)).toEqual({ kind: "cell", displayRow: 59_999, col: 1 });
+    expect(search.matchSet.value.has(60_000 * 65536)).toBe(false);
+    scope.stop();
+  });
+
+  it("cancels on row replacement, predicate-scope change and disposal", async () => {
+    vi.useFakeTimers();
+    const scope = effectScope();
+    const rows = shallowRef(Array.from({ length: 60_000 }, () => ["hit", "hit"]));
+    const column = ref(0);
+    let reads = 0;
+    const search = scope.run(() =>
+      useDataGridSearch({
+        columns: ["left", "right"],
+        rows,
+        getCellSearchText: (row, col) => {
+          reads++;
+          return row[col]!;
+        },
+        isCellSearchable: (_row, col) => col === column.value,
+        invalidationKey: column,
+      }),
+    )!;
+    search.searchText.value = "hit";
+    await flushSearchDebounce();
+    expect(search.isSearching.value).toBe(true);
+    column.value = 1;
+    await nextTick();
+    rows.value = [["hit", "none"]];
+    await nextTick();
+    await vi.runAllTimersAsync();
+    expect(search.matchCount.value).toBe(0);
+    rows.value = Array.from({ length: 60_000 }, () => ["hit", "hit"]);
+    await nextTick();
+    const readsBeforeDispose = reads;
+    scope.stop();
+    await vi.runAllTimersAsync();
+    expect(reads).toBe(readsBeforeDispose);
+  });
+
+  it("preserves restored large-result navigation without scrolling to the first match", async () => {
+    vi.useFakeTimers();
+    const scope = effectScope();
+    const onNavigate = vi.fn();
+    const columns = ["value"];
+    const signature = createDataGridSearchScopeKey(columns);
+    saveDataGridSearchState("large-restored", { scopeKey: signature, searchText: "hit", deferredSearchText: "hit", overlayVisible: true, currentMatchIndex: 50_000 });
+    const search = scope.run(() => useDataGridSearch({ columns, rows: Array.from({ length: 60_000 }, () => ["hit"]), getCellSearchText: (row, col) => row[col]!, onNavigate, persistenceKey: "large-restored", persistenceScopeKey: signature }))!;
+    search.restorePersistedState();
+    await nextTick();
+    expect(search.isSearching.value).toBe(true);
+    await vi.runAllTimersAsync();
+    expect(search.currentMatchIndex.value).toBe(50_000);
+    expect(search.currentMatch.value).toEqual({ kind: "cell", displayRow: 50_000, col: 0 });
+    expect(onNavigate).not.toHaveBeenCalled();
+    search.navigateMatch(-1);
+    expect(onNavigate).toHaveBeenLastCalledWith({ kind: "cell", displayRow: 49_999, col: 0 });
+    scope.stop();
+  });
+
+  it("drops an async restore token when typing resumes and observes edits beyond the first chunk", async () => {
+    vi.useFakeTimers();
+    const scope = effectScope();
+    const onNavigate = vi.fn();
+    const version = ref(0);
+    const rows = Array.from({ length: 60_000 }, () => ["old", "new"]);
+    const columns = ["left", "right"];
+    const signature = createDataGridSearchScopeKey(columns);
+    saveDataGridSearchState("cancel-restored", { scopeKey: signature, searchText: "old", deferredSearchText: "old", overlayVisible: true, currentMatchIndex: 50_000 });
+    const search = scope.run(() => useDataGridSearch({ columns, rows, getCellSearchText: (row, col) => row[col]!, invalidationKey: version, onNavigate, persistenceKey: "cancel-restored", persistenceScopeKey: signature }))!;
+    search.restorePersistedState();
+    await nextTick();
+    expect(search.isSearching.value).toBe(true);
+    search.searchText.value = "new";
+    await nextTick();
+    await vi.runAllTimersAsync();
+    expect(search.currentMatchIndex.value).toBe(0);
+    expect(onNavigate).toHaveBeenCalledOnce();
+    expect(onNavigate).toHaveBeenLastCalledWith({ kind: "cell", displayRow: 0, col: 1 });
+
+    rows[59_999]![1] = "edited";
+    version.value++;
+    await nextTick();
+    await vi.runAllTimersAsync();
+    expect(search.matchCount.value).toBe(59_999);
+    expect(search.matchSet.value.has(60_000 * 65536 + 1)).toBe(false);
+    scope.stop();
+  });
+
   it("supports literal case-sensitive replacement searches without column-name matches", async () => {
     vi.useFakeTimers();
     const sensitive = ref(true);

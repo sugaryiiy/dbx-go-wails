@@ -18,7 +18,7 @@ import * as api from "@/lib/backend/api";
 import { isSqlVirtualTableReference } from "@/lib/sql/semantic/diagnostics";
 import type { SqlCompletionColumn, SqlCompletionForeignKey, SqlCompletionObject, SqlCompletionReferencedTable, SqlCompletionTable } from "@/lib/sql/sqlCompletion";
 import type { DatabaseType, SqlTableReference } from "@/types/database";
-import type { ShallowRef } from "vue";
+import { computed, ref, watch, type ShallowRef } from "vue";
 import type { EditorView } from "@codemirror/view";
 import type { useConnectionStore } from "@/stores/connectionStore";
 import type { QueryEditorProps } from "./queryEditorTypes";
@@ -63,6 +63,36 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
 
   const loadedColumnsByTable = new Set<string>();
   const completionAnalysisWorker = createSqlCompletionAnalysisWorker();
+
+  // The maps use SQL reference keys (schema.table), also consumed by diagnostics.
+  // Their lifetime is one complete editor metadata context. Clear synchronously
+  // and invalidate every in-flight writer, including an A -> B -> A round trip.
+  const metadataGeneration = ref(0);
+  const metadataContext = computed(() =>
+    JSON.stringify([
+      props.tabId,
+      props.connectionId,
+      props.database,
+      props.schema,
+      props.catalog,
+      props.databaseType,
+      props.dialect,
+      props.syntaxDialect,
+      props.clientSessionId,
+      props.completionContextVersion,
+      props.connectionId ? connectionStore.getConfig(props.connectionId)?.driver_profile : undefined,
+    ]),
+  );
+
+  function captureMetadataRequest() {
+    const generation = metadataGeneration.value;
+    const context = metadataContext.value;
+    return () => generation === metadataGeneration.value && context === metadataContext.value;
+  }
+
+  function assertCurrentMetadataRequest(isCurrent: () => boolean) {
+    if (!isCurrent()) throw new Error("Stale editor completion metadata context");
+  }
 
   function sqlCompletionDialectOptions() {
     return {
@@ -220,27 +250,28 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
   }
 
   async function listCompletionColumnsForEditor(connectionId: string, database: string, table: string, schema?: string, catalog = props.catalog, reference?: Pick<SqlCompletionReferencedTable, "nameQuoted" | "schemaQuoted">, prefix?: string) {
-    const requestedVersion = props.completionContextVersion;
-    const sessionScoped = usesOracleSessionCompletionColumns(schema);
+    const isCurrent = captureMetadataRequest();
+    const requestContext = completionColumnRequestContext(reference);
     let columns: SqlCompletionColumn[];
     if (prefix && prefix.length >= 2 && (props.databaseType === "postgres" || props.databaseType === "mysql")) {
       try {
-        columns = await connectionStore.listCompletionColumnsByPrefix(connectionId, database, table, schema, prefix, catalog, completionColumnRequestContext(reference));
+        columns = await connectionStore.listCompletionColumnsByPrefix(connectionId, database, table, schema, prefix, catalog, requestContext);
       } catch {
-        columns = await connectionStore.listCompletionColumns(connectionId, database, table, schema, completionColumnRequestContext(reference), catalog);
+        assertCurrentMetadataRequest(isCurrent);
+        columns = await connectionStore.listCompletionColumns(connectionId, database, table, schema, requestContext, catalog);
       }
     } else {
-      columns = await connectionStore.listCompletionColumns(connectionId, database, table, schema, completionColumnRequestContext(reference), catalog);
+      columns = await connectionStore.listCompletionColumns(connectionId, database, table, schema, requestContext, catalog);
     }
-    if (sessionScoped && requestedVersion !== props.completionContextVersion) throw new Error("Stale Oracle completion context");
+    assertCurrentMetadataRequest(isCurrent);
     return columns;
   }
 
   async function refreshCompletionColumnsForEditor(connectionId: string, database: string, table: string, schema?: string, catalog = props.catalog, reference?: Pick<SqlCompletionReferencedTable, "nameQuoted" | "schemaQuoted">) {
-    const requestedVersion = props.completionContextVersion;
-    const sessionScoped = usesOracleSessionCompletionColumns(schema);
-    const columns = await connectionStore.refreshCompletionColumns(connectionId, database, table, schema, completionColumnRequestContext(reference), catalog);
-    if (sessionScoped && requestedVersion !== props.completionContextVersion) throw new Error("Stale Oracle completion context");
+    const isCurrent = captureMetadataRequest();
+    const requestContext = completionColumnRequestContext(reference);
+    const columns = await connectionStore.refreshCompletionColumns(connectionId, database, table, schema, requestContext, catalog);
+    assertCurrentMetadataRequest(isCurrent);
     return columns;
   }
 
@@ -311,24 +342,28 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
     pendingInsertValueHintColumnLoads.add(cacheKey);
     const connectionId = props.connectionId;
     const databaseType = props.databaseType;
+    const isCurrent = captureMetadataRequest();
     const loadColumns = async () => {
       if (databaseType === "sqlserver") {
         const querySchema = metadataSchemaForConnection(connectionStore.getConfig(connectionId), target.database, target.schema);
         const columns = await api.getSqlServerColumnMetadata(connectionId, target.database, querySchema, table);
+        if (!isCurrent()) return;
         cachedInsertValueHintColumnsByTable.set(cacheKey, insertValueHintColumnNames(databaseType, columns));
         return;
       }
       const columns = await listCompletionColumnsForEditor(connectionId, target.database, table, target.schema, target.catalog);
+      if (!isCurrent()) return;
       cachedColumnsByTable.set(cacheKey, columns);
     };
     void loadColumns()
       .then(() => {
+        if (!isCurrent()) return;
         loadedColumnsByTable.add(cacheKey.toLowerCase());
         if (view.value) requestInsertValueHintsRefresh(view.value);
       })
       .catch(() => {})
       .finally(() => {
-        pendingInsertValueHintColumnLoads.delete(cacheKey);
+        if (isCurrent()) pendingInsertValueHintColumnLoads.delete(cacheKey);
       });
   }
 
@@ -399,6 +434,7 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
     if (!props.connectionId || props.database == null) return null;
     const target = completionMetadataTarget(table, scope);
     if (!target) return null;
+    const isCurrent = captureMetadataRequest();
     const localMatches = connectionStore.lookupLocalCompletionTables(props.connectionId, target.database, table.name, MAX_COMPLETION_TABLES, target.schema, target.catalog);
     const localExact = localMatches.find((item) => completionTablesMatch(item, table));
     if (localExact) {
@@ -409,6 +445,7 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
     const remoteMatches = await connectionStore.listCompletionTables(props.connectionId, target.database, table.name, MAX_COMPLETION_TABLES, target.schema, false, scope?.schema ?? props.schema, target.catalog, {
       verifySchemaMetadata: !!target.schema,
     });
+    if (!isCurrent()) return null;
     cachedTables = mergeCompletionTables(cachedTables, remoteMatches);
     return remoteMatches.find((item) => completionTablesMatch(item, table)) ?? null;
   }
@@ -420,13 +457,17 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
     if (!props.connectionId || props.database == null) return false;
     const target = completionMetadataTarget(table, scope);
     if (!target) return false;
+    const isCurrent = captureMetadataRequest();
+    const connectionId = props.connectionId;
     const localColumns = connectionStore.lookupLocalCompletionColumns(props.connectionId, target.database, table.name, target.schema, target.catalog, completionColumnRequestContext(reference));
     if (localColumns.length > 0) {
       cachedColumnsByTable.set(cacheKey, localColumns);
       loadedColumnsByTable.add(cacheKey.toLowerCase());
       return true;
     }
-    let columns = await listCompletionColumnsForEditor(props.connectionId, target.database, table.name, target.schema, target.catalog, reference);
+    let columns = await listCompletionColumnsForEditor(connectionId, target.database, table.name, target.schema, target.catalog, reference);
+
+    if (!isCurrent()) return false;
 
     // A schema-aware connection can legitimately return an empty result when
     // the editor has no selected schema. Resolve the physical table from the
@@ -454,7 +495,8 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
         if (candidate.name.toLowerCase() === table.name.toLowerCase()) addSchema(candidate.schema);
       });
       if (schemaCandidates.length === 0 && !usesLocalOnlyCompletionMetadata()) {
-        const remoteTables = await connectionStore.listCompletionTables(props.connectionId, target.database, table.name, MAX_COMPLETION_TABLES, undefined, false, undefined, target.catalog);
+        const remoteTables = await connectionStore.listCompletionTables(connectionId, target.database, table.name, MAX_COMPLETION_TABLES, undefined, false, undefined, target.catalog);
+        if (!isCurrent()) return false;
         remoteTables.forEach((candidate) => {
           if (candidate.name.toLowerCase() === table.name.toLowerCase()) addSchema(candidate.schema);
         });
@@ -463,7 +505,8 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
       for (const schema of schemaCandidates) {
         const schemaTarget = completionMetadataTarget({ ...table, schema }, scope);
         if (!schemaTarget) continue;
-        const retryColumns = await listCompletionColumnsForEditor(props.connectionId, schemaTarget.database, table.name, schemaTarget.schema, schemaTarget.catalog, reference);
+        const retryColumns = await listCompletionColumnsForEditor(connectionId, schemaTarget.database, table.name, schemaTarget.schema, schemaTarget.catalog, reference);
+        if (!isCurrent()) return false;
         if (retryColumns.length > 0) {
           columns = retryColumns;
           break;
@@ -495,16 +538,20 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
     if (cachedForeignKeysByTable.has(cacheKey) || !props.connectionId || props.database == null) return;
     const target = completionMetadataTarget(table);
     if (!target) return;
+    const isCurrent = captureMetadataRequest();
     try {
       const foreignKeys = await connectionStore.listCompletionForeignKeys(props.connectionId, target.database, table.name, target.schema);
+      if (!isCurrent()) return;
       cachedForeignKeysByTable.set(cacheKey, foreignKeys);
     } catch (e) {
+      if (!isCurrent()) return;
       console.warn(`[DBX] Failed to load foreign keys for ${cacheKey}:`, e);
       cachedForeignKeysByTable.set(cacheKey, []);
     }
   }
 
   async function ensureForeignKeysForTables(tables: Array<{ name: string; database?: string | null; schema?: string | null }>) {
+    const isCurrent = captureMetadataRequest();
     const seen = new Set<string>();
     const uniqueTables = tables.filter((table) => {
       const key = completionCacheKey(table).toLowerCase();
@@ -513,6 +560,7 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
       return true;
     });
     for (let index = 0; index < uniqueTables.length; index += COMPLETION_METADATA_CONCURRENCY) {
+      if (!isCurrent()) return;
       await Promise.all(uniqueTables.slice(index, index + COMPLETION_METADATA_CONCURRENCY).map((table) => ensureForeignKeysForTable(table)));
     }
   }
@@ -544,8 +592,10 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
   }
 
   function listCompletionTablesWithLatencyBudget(connectionId: string, database: string, filter: string, limit: number, schema?: string, globalSearch = false, catalog = props.catalog, currentSchema = props.schema): Promise<SqlCompletionTable[]> {
+    const isCurrent = captureMetadataRequest();
     const local = connectionStore.lookupLocalCompletionTables(connectionId, database, filter, limit, globalSearch ? undefined : schema, catalog).map((table) => ({ ...table, catalog: table.catalog ?? catalog, database: table.database ?? database }));
     const remote = connectionStore.listCompletionTables(connectionId, database, filter, limit, schema, globalSearch, currentSchema, catalog).then((tables) => {
+      if (!isCurrent()) return [];
       const scopedTables = tables.map((table) => ({ ...table, catalog: table.catalog ?? catalog, database: table.database ?? database }));
       cachedTables = mergeCompletionTables(cachedTables, scopedTables);
       return scopedTables;
@@ -603,7 +653,9 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
   }
 
   function refreshCompletionCache() {
+    metadataGeneration.value++;
     cancelEditorSqlCompletionAnalysis();
+    pendingInsertValueHintColumnLoads.clear();
     cachedTables = [];
     cachedCompletionObjectsByScope.clear();
     cachedColumnsByTable.clear();
@@ -613,7 +665,11 @@ export function useQueryEditorCompletionMetadata(options: QueryEditorCompletionM
     cachedForeignKeysByTable.clear();
   }
 
+  watch(metadataContext, refreshCompletionCache, { flush: "sync" });
+
   return {
+    metadataGeneration,
+    captureMetadataRequest,
     sqlCompletionDialectOptions,
     getEditorSqlCompletionContext,
     getEditorSqlCompletionAnalysis,

@@ -1631,13 +1631,14 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
       dirtyRows: new Map(stmtOptions.dirtyRows.map(([index, changes]) => [index, new Map(changes)])),
       deletedRows: new Set(stmtOptions.deletedRows),
     });
-    const prepared: Awaited<ReturnType<typeof api.prepareDataGridSave>> = { statements: [], rollbackStatements: [], keylessGuards: [] };
+    const prepared: Awaited<ReturnType<typeof api.prepareDataGridSave>> = { statements: [], rollbackStatements: [], keylessGuards: [], maxAffectedRowsPerStatement: [] };
     for (const group of groups) {
       const part = await api.prepareDataGridSave(group, saveDriverProfile());
       if (part.validationError) return part;
       prepared.statements.push(...part.statements);
       prepared.rollbackStatements.unshift(...part.rollbackStatements);
       prepared.keylessGuards!.push(...(part.keylessGuards ?? []));
+      prepared.maxAffectedRowsPerStatement!.push(...(part.maxAffectedRowsPerStatement ?? part.statements.map(() => (part.keylessGuards?.length ? 1 : null))));
       if (prepared.executionSchema && part.executionSchema && prepared.executionSchema !== part.executionSchema) throw new Error("Joined source tables require incompatible execution schemas.");
       prepared.executionSchema ??= part.executionSchema;
     }
@@ -2026,6 +2027,8 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
       return;
     }
     const rollbackStmts = preparedSave?.rollbackStatements ?? [];
+    const affectedRowLimits = preparedSave?.maxAffectedRowsPerStatement ?? (preparedSave?.keylessGuards?.length ? stmts.map(() => 1) : undefined);
+    const guardedSave = affectedRowLimits?.some((limit) => limit != null) === true;
     let txnSessionId = manualTransactionSessionId.value;
     if (options.ensureManualTransactionSession?.value && hasBackendSaveTarget.value) {
       try {
@@ -2105,7 +2108,9 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
     if (txnSessionId && hasBackendSaveTarget.value) {
       options.onManualTransactionMutation?.();
       try {
-        const results = await api.executeInManualTransaction(txnSessionId, stmts.join(";\n"), database.value ?? "", preparedSave?.executionSchema);
+        const results = guardedSave
+          ? await api.executeInManualTransaction(txnSessionId, stmts.join(";\n"), database.value ?? "", preparedSave?.executionSchema, undefined, undefined, undefined, undefined, undefined, affectedRowLimits)
+          : await api.executeInManualTransaction(txnSessionId, stmts.join(";\n"), database.value ?? "", preparedSave?.executionSchema);
         apiResult = {
           affected_rows: results.reduce((total, result) => total + (result.affected_rows ?? 0), 0),
         };
@@ -2114,9 +2119,9 @@ export function useDataGridEditor(options: UseDataGridEditorOptions) {
         await finishInterruptedSaveChanges(snapshot);
         return;
       }
-    } else if (useTransaction.value && stmts.length > 1 && hasBackendSaveTarget.value) {
+    } else if ((guardedSave || (useTransaction.value && stmts.length > 1)) && hasBackendSaveTarget.value) {
       try {
-        apiResult = await api.executeInTransaction(connectionId.value!, database.value ?? "", stmts, preparedSave?.executionSchema);
+        apiResult = guardedSave ? await api.executeInTransaction(connectionId.value!, database.value ?? "", stmts, preparedSave?.executionSchema, undefined, affectedRowLimits) : await api.executeInTransaction(connectionId.value!, database.value ?? "", stmts, preparedSave?.executionSchema);
       } catch (e: any) {
         saveError.value = await recordFailedDataGridHistory(stmts, rollbackStmts, start, snapshot, e);
         await finishInterruptedSaveChanges(snapshot);
