@@ -116,7 +116,10 @@ func serviceRuntime() string {
 
 func exitImmediately(t *testing.T) int {
 	t.Helper()
-	command := exec.Command("sleep", "0.2")
+	// Re-exec the test binary itself as the short-lived process. It must not
+	// shell out to the Unix-only "sleep" program: the Windows CI runners have
+	// no such binary and the helper tests failed there (run 39923101314).
+	command := exec.Command(os.Args[0], "-test.run=^TestNoSuchProcess$")
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
