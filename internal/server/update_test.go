@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sugaryiiy/magpiedb/internal/updater"
 )
 
 func loadUpdateFixture(t *testing.T, name string, target any) {
@@ -21,87 +23,18 @@ func loadUpdateFixture(t *testing.T, name string, target any) {
 	}
 }
 
-func fixtureLatest(t *testing.T) *githubRelease {
+func fixtureLatest(t *testing.T) *updater.Release {
 	t.Helper()
-	var release githubRelease
+	var release updater.Release
 	loadUpdateFixture(t, "update_release_latest.json", &release)
 	return &release
 }
 
-func fixtureList(t *testing.T) []githubRelease {
+func fixtureList(t *testing.T) []updater.Release {
 	t.Helper()
-	var releases []githubRelease
+	var releases []updater.Release
 	loadUpdateFixture(t, "update_releases_list.json", &releases)
 	return releases
-}
-
-func TestSelectChannelCandidate(t *testing.T) {
-	latest := fixtureLatest(t)
-	list := fixtureList(t)
-	tests := []struct {
-		name    string
-		channel string
-		latest  *githubRelease
-		list    []githubRelease
-		wantTag string
-	}{
-		{name: "stable uses latest endpoint result", channel: "stable", latest: latest, list: list, wantTag: "v0.6.33"},
-		{name: "stable without any stable release", channel: "stable", latest: nil, list: list, wantTag: ""},
-		{name: "preview takes newest prerelease", channel: "preview", latest: nil, list: list, wantTag: "v0.6.34-preview.20261024"},
-		{name: "preview prefers a newer stable over an older prerelease", channel: "preview", latest: &githubRelease{TagName: "v0.7.0"}, list: list, wantTag: "v0.7.0"},
-		{name: "preview falls back to stable when no prerelease exists", channel: "preview", latest: latest, list: nil, wantTag: "v0.6.33"},
-		{name: "unknown channel behaves like stable", channel: "nightly", latest: latest, list: list, wantTag: "v0.6.33"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := selectChannelCandidate(normalizeUpdateChannel(test.channel), test.latest, test.list)
-			gotTag := ""
-			if got != nil {
-				gotTag = got.TagName
-			}
-			if gotTag != test.wantTag {
-				t.Fatalf("candidate = %q, want %q", gotTag, test.wantTag)
-			}
-		})
-	}
-}
-
-func TestSelectUpdateAsset(t *testing.T) {
-	list := fixtureList(t)
-	newerPreview := &list[0]
-	currentPreview := &list[1]
-	tests := []struct {
-		name       string
-		release    *githubRelease
-		goos       string
-		goarch     string
-		wantName   string
-		wantDigest string
-	}{
-		{name: "darwin arm64 asset with digest", release: newerPreview, goos: "darwin", goarch: "arm64", wantName: "MagpieDB-0.6.34-preview.20261024-macOS-arm64.dmg", wantDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
-		{name: "windows amd64 asset", release: newerPreview, goos: "windows", goarch: "amd64", wantName: "MagpieDB-0.6.34-preview.20261024-Windows-x64.zip", wantDigest: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
-		{name: "linux amd64 asset", release: newerPreview, goos: "linux", goarch: "amd64", wantName: "MagpieDB-0.6.34-preview.20261024-Linux-x64.tar.gz", wantDigest: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
-		{name: "legacy bare exe name never matches", release: currentPreview, goos: "windows", goarch: "amd64", wantName: ""},
-		{name: "unsupported platform", release: newerPreview, goos: "darwin", goarch: "amd64", wantName: ""},
-		{name: "nil release", release: nil, goos: "linux", goarch: "amd64", wantName: ""},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			asset := selectUpdateAsset(test.release, test.goos, test.goarch)
-			if test.wantName == "" {
-				if asset != nil {
-					t.Fatalf("asset = %q, want nil", asset.Name)
-				}
-				return
-			}
-			if asset == nil {
-				t.Fatalf("asset = nil, want %q", test.wantName)
-			}
-			if asset.Name != test.wantName || asset.Digest != test.wantDigest {
-				t.Fatalf("asset = {%q %q}, want {%q %q}", asset.Name, asset.Digest, test.wantName, test.wantDigest)
-			}
-		})
-	}
 }
 
 func TestBuildUpdateInfo(t *testing.T) {
@@ -113,11 +46,11 @@ func TestBuildUpdateInfo(t *testing.T) {
 	if err := os.WriteFile(exe, []byte("binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	legacyOnly := &githubRelease{TagName: "v0.6.34", Name: "Legacy assets", HTMLURL: "https://example.com/release", Assets: []githubAssetEntry{{Name: "magpiedb.exe", Digest: "sha256:4a3720a89b9756ee4643482ab71ae17a41e30eee967c2c13a6787cd689729659"}}}
+	legacyOnly := &updater.Release{TagName: "v0.6.34", Name: "Legacy assets", HTMLURL: "https://example.com/release", Assets: []updater.Asset{{Name: "magpiedb.exe", Digest: "sha256:4a3720a89b9756ee4643482ab71ae17a41e30eee967c2c13a6787cd689729659"}}}
 	tests := []struct {
 		name       string
 		current    string
-		candidate  *githubRelease
+		candidate  *updater.Release
 		desktop    bool
 		executable string
 		wantAvail  bool

@@ -16,6 +16,7 @@ import (
 
 	"github.com/sugaryiiy/magpiedb/internal/database"
 	"github.com/sugaryiiy/magpiedb/internal/desktopfiles"
+	"github.com/sugaryiiy/magpiedb/internal/updater"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -30,6 +31,8 @@ type App struct {
 	saveDialog    func(runtime.SaveDialogOptions) (string, error)
 	fileOnce      sync.Once
 	fileGrants    *desktopfiles.Grants
+	updateOnce    sync.Once
+	updates       *updater.Service
 }
 
 func desktopAPI(next http.Handler) http.Handler {

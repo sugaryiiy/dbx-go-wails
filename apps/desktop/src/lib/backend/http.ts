@@ -5554,17 +5554,23 @@ export async function getSystemProxyUrl(): Promise<string | null> {
   return null;
 }
 
-export async function downloadUpdate(_source: UpdateDownloadSource, _latestVersion: string, _attemptId: string, _releaseNotes?: string): Promise<DownloadedUpdate> {
+export async function downloadUpdate(source: UpdateDownloadSource, latestVersion: string, attemptId: string, releaseNotes?: string): Promise<DownloadedUpdate> {
+  if (isWailsRuntime()) return wailsApp().DownloadUpdate(source, latestVersion, attemptId, releaseNotes);
   throw new Error("In-app update downloads are only available in the desktop app.");
 }
 
-export async function cancelUpdateDownload(): Promise<void> {}
+export async function cancelUpdateDownload(): Promise<void> {
+  if (isWailsRuntime()) return wailsApp().CancelUpdateDownload();
+}
 
 export async function getDownloadedUpdate(): Promise<DownloadedUpdate | null> {
+  if (isWailsRuntime()) return wailsApp().GetDownloadedUpdate();
   return null;
 }
 
-export async function discardDownloadedUpdate(_cacheId: string): Promise<void> {}
+export async function discardDownloadedUpdate(cacheId: string): Promise<void> {
+  if (isWailsRuntime()) return wailsApp().DiscardDownloadedUpdate(cacheId);
+}
 
 export async function installDownloadedUpdate(_cacheId: string, _expectedVersion: string): Promise<void> {
   throw new Error("In-app update installation is only available in the desktop app.");

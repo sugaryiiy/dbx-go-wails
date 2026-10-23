@@ -40,6 +40,10 @@ export interface WailsApp {
   IsSQLiteDatabaseFile(path: string): Promise<boolean>;
   BackupSQLiteDatabase(id: string, path: string): Promise<void>;
   RestoreSQLiteDatabase(id: string, path: string): Promise<void>;
+  DownloadUpdate(source: string, version: string, attemptId: string, releaseNotes?: string): Promise<import("./backendTypes").DownloadedUpdate>;
+  CancelUpdateDownload(): Promise<void>;
+  GetDownloadedUpdate(): Promise<import("./backendTypes").DownloadedUpdate | null>;
+  DiscardDownloadedUpdate(cacheId: string): Promise<void>;
 }
 
 type WailsGlobal = { go?: { main?: { App?: WailsApp } } };
