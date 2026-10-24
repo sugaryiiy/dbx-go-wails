@@ -452,6 +452,33 @@ func (b *gridBuilder) insert(row []any, restore bool, excludePK bool) (string, e
 	}
 	return "INSERT INTO " + b.table + " (" + strings.Join(columns, ", ") + ") VALUES (" + strings.Join(values, ", ") + ");", nil
 }
+// keylessLocator returns the physical row-locator column for a dialect that
+// exposes one, or "" when a keyless mutation cannot address a single
+// physical row. Only PostgreSQL qualifies: ctid names exactly one tuple.
+// SQLite is deliberately excluded (a WITHOUT ROWID table has no rowid to
+// select, and its guard flow is covered by tests), as is MySQL, which
+// exposes no row locator at all.
+func (b *gridBuilder) keylessLocator() string {
+	if len(b.keys) != 0 || b.options.Kind != "postgres" || !b.completeRow() {
+		return ""
+	}
+	return "ctid"
+}
+
+// targetSingleRow rewrites a complete all-values predicate so the mutation
+// lands on exactly one of the rows it matches. When several stored rows are
+// identical in every column, they are interchangeable: updating or deleting
+// any one of them produces the same visible outcome, so refusing the save
+// (the guard's answer) only strands the user. Targeting one physical row
+// keeps the change to a single row, which MaxAffectedRows already enforces.
+func (b *gridBuilder) targetSingleRow(predicate string) string {
+	locator := b.keylessLocator()
+	if locator == "" {
+		return predicate
+	}
+	return locator + " IN (SELECT " + locator + " FROM " + b.table + " WHERE (" + predicate + ") LIMIT 1)"
+}
+
 func (b *gridBuilder) prepare() (gridPreparation, error) {
 	out := gridPreparation{Statements: []string{}, Rollback: []string{}, Schema: b.options.Table.Schema}
 	reverse := []string{}
@@ -528,8 +555,10 @@ func (b *gridBuilder) prepare() (gridPreparation, error) {
 		if len(sets) == 0 {
 			continue
 		}
-		guardPredicate(predicate)
-		appendStatement("UPDATE "+b.table+" SET "+strings.Join(sets, ", ")+" WHERE "+predicate+";", true)
+		if b.keylessLocator() == "" {
+			guardPredicate(predicate)
+		}
+		appendStatement("UPDATE "+b.table+" SET "+strings.Join(sets, ", ")+" WHERE "+b.targetSingleRow(predicate)+";", true)
 		undoPredicate, err := b.where(after)
 		if err != nil {
 			return out, err
@@ -541,7 +570,7 @@ func (b *gridBuilder) prepare() (gridPreparation, error) {
 			}
 			undoPredicate += " AND " + part
 		}
-		reverse = append(reverse, "UPDATE "+b.table+" SET "+strings.Join(undoSets, ", ")+" WHERE "+undoPredicate+";")
+		reverse = append(reverse, "UPDATE "+b.table+" SET "+strings.Join(undoSets, ", ")+" WHERE "+b.targetSingleRow(undoPredicate)+";")
 	}
 	for _, index := range b.options.DeletedRows {
 		if index < 0 || index >= len(b.options.Rows) || touched[index] {
@@ -553,8 +582,10 @@ func (b *gridBuilder) prepare() (gridPreparation, error) {
 		if err != nil {
 			return out, err
 		}
-		guardPredicate(predicate)
-		appendStatement("DELETE FROM "+b.table+" WHERE "+predicate+";", true)
+		if b.keylessLocator() == "" {
+			guardPredicate(predicate)
+		}
+		appendStatement("DELETE FROM "+b.table+" WHERE "+b.targetSingleRow(predicate)+";", true)
 		if b.completeRow() {
 			undo, err := b.insert(row, true, false)
 			if err != nil {

@@ -178,6 +178,108 @@ func TestGridKeylessPostgresJSONPredicates(t *testing.T) {
 	}
 }
 
+func TestGridKeylessPostgresDuplicateRowsTargetSingleRow(t *testing.T) {
+	// A report table without a primary key whose stored rows can be exact
+	// duplicates of each other. PostgreSQL can still address one physical
+	// row through ctid, so the save must not be refused: the UPDATE and the
+	// DELETE each target a single matching tuple.
+	row := []any{float64(31), "501202124", nil, float64(280), "0.9750"}
+	opts := gridOptions{
+		Kind: "postgres",
+		Table: gridTable{
+			Schema: "public",
+			Name:   "rpt_dg_rate_pack",
+			Columns: []gridColumn{
+				{Name: "org_id", Type: "bigint"},
+				{Name: "prod_code", Type: "character varying"},
+				{Name: "xilie", Type: "character varying", Nullable: true},
+				{Name: "specs", Type: "integer"},
+				{Name: "rate", Type: "numeric"},
+			},
+		},
+		Columns:     []string{"org_id", "prod_code", "xilie", "specs", "rate"},
+		Rows:        [][]any{row, row},
+		DirtyRows:   []gridDirtyRow{{Index: 0, Changes: []gridChange{{Index: 4, Value: "0.9800"}}}},
+		DeletedRows: []int{1},
+	}
+	builder, err := newGridBuilder(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := builder.prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.KeylessGuards) != 0 {
+		t.Fatalf("ctid-targeted mutations need no count guard: %#v", prepared.KeylessGuards)
+	}
+	if len(prepared.Statements) != 2 {
+		t.Fatalf("expected update + delete: %#v", prepared.Statements)
+	}
+	for _, statement := range prepared.Statements {
+		if !strings.Contains(statement, `WHERE ctid IN (SELECT ctid FROM "public"."rpt_dg_rate_pack" WHERE (`) || !strings.Contains(statement, "LIMIT 1);") {
+			t.Fatalf("mutation must target exactly one physical row: %s", statement)
+		}
+		if !strings.Contains(statement, `"prod_code" = E'501202124'`) || !strings.Contains(statement, `"xilie" IS NULL`) {
+			t.Fatalf("mutation must keep the all-values predicate inside the locator subquery: %s", statement)
+		}
+	}
+	for i, limit := range prepared.MaxAffectedRows {
+		if limit == nil || *limit != 1 {
+			t.Fatalf("statement %d must stay capped at one affected row: %#v", i, prepared.MaxAffectedRows)
+		}
+	}
+	// The compensating UPDATE for the edited row is wrapped the same way;
+	// the compensating statement for the deleted row is a plain re-INSERT.
+	var sawWrappedUndo, sawInsertUndo bool
+	for _, rollback := range prepared.Rollback {
+		if strings.HasPrefix(rollback, "UPDATE") && strings.Contains(rollback, "ctid IN (SELECT ctid") {
+			sawWrappedUndo = true
+		}
+		if strings.HasPrefix(rollback, "INSERT INTO") {
+			sawInsertUndo = true
+		}
+	}
+	if !sawWrappedUndo || !sawInsertUndo {
+		t.Fatalf("rollback must mirror the single-row targeting: %#v", prepared.Rollback)
+	}
+}
+
+func TestGridKeylessPostgresIncompleteRowKeepsGuard(t *testing.T) {
+	// When the result does not carry every table column, two stored rows
+	// that look identical on screen can still differ in the unloaded
+	// columns; picking one physically would be a guess, so the count guard
+	// (and its refusal) stays.
+	opts := gridOptions{
+		Kind: "postgres",
+		Table: gridTable{
+			Name: "events",
+			Columns: []gridColumn{
+				{Name: "payload", Type: "jsonb"},
+				{Name: "note", Type: "text", Nullable: true},
+				{Name: "internal_flag", Type: "boolean"},
+			},
+		},
+		Columns:   []string{"payload", "note"},
+		Rows:      [][]any{{`{"a":1}`, nil}},
+		DirtyRows: []gridDirtyRow{{Index: 0, Changes: []gridChange{{Index: 1, Value: "new"}}}},
+	}
+	builder, err := newGridBuilder(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := builder.prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.KeylessGuards) != 1 {
+		t.Fatalf("incomplete keyless rows must keep the count guard: %#v", prepared)
+	}
+	if strings.Contains(prepared.Statements[0], "ctid") {
+		t.Fatalf("incomplete keyless rows must not be locator-targeted: %s", prepared.Statements[0])
+	}
+}
+
 func TestGridKeylessMySQLJSONEditCanBeCompensated(t *testing.T) {
 	opts := gridOptions{Kind: "mysql", Table: gridTable{Name: "events", Columns: []gridColumn{{Name: "payload", Type: "JSON"}}}, Columns: []string{"payload"}, Rows: [][]any{{`{"a": 1}`}}, DirtyRows: []gridDirtyRow{{Index: 0, Changes: []gridChange{{Index: 0, Value: `{"a":2}`}}}}}
 	builder, err := newGridBuilder(opts)
